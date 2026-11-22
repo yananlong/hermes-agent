@@ -1,13 +1,16 @@
 /**
- * Dashboard xterm font stack. 'JetBrains Mono' is bundled via @font-face in
+ * Dashboard xterm font stack. 'Source Code Pro' is bundled via @font-face in
  * index.css with `font-display: swap`, so it is usually still downloading
  * when a terminal first opens.
  */
 export const TERMINAL_FONT_FAMILY =
-  "'JetBrains Mono', 'Cascadia Mono', 'Fira Code', 'MesloLGS NF', 'Source Code Pro', Menlo, Consolas, 'DejaVu Sans Mono', monospace";
+  "'Source Code Pro', 'JetBrains Mono', 'Cascadia Mono', 'Fira Code', 'MesloLGS NF', Menlo, Consolas, 'DejaVu Sans Mono', monospace";
+
+/** Default embedded-terminal font size (px). */
+export const DEFAULT_TERMINAL_FONT_SIZE = 15;
 
 const BUNDLED_FACES = ["400", "700", "italic 400"].map(
-  (descriptor) => `${descriptor} 1em 'JetBrains Mono'`,
+  (descriptor) => `${descriptor} 1em 'Source Code Pro'`,
 );
 
 type TerminalFontSet = Pick<FontFaceSet, "check" | "load">;

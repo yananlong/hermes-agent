@@ -13,6 +13,7 @@ import { useProfileScope } from "@/contexts/useProfileScope";
 import { api } from "@/lib/api";
 import { maybeReloadForLoopbackWsAuthFailure } from "@/lib/dashboard-auth-reload";
 import {
+  DEFAULT_TERMINAL_FONT_SIZE,
   refitWhenTerminalFontLoads,
   TERMINAL_FONT_FAMILY,
 } from "@/lib/terminal-font-refit";
@@ -356,7 +357,7 @@ export function HermesConsoleModal({ open, onClose }: HermesConsoleModalProps) {
       allowProposedApi: true,
       cursorBlink: true,
       fontFamily: TERMINAL_FONT_FAMILY,
-      fontSize: 13,
+      fontSize: DEFAULT_TERMINAL_FONT_SIZE,
       lineHeight: 1.25,
       letterSpacing: 0,
       macOptionIsMeta: true,

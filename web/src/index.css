@@ -31,7 +31,39 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* JetBrains Mono — bundled for the embedded TUI (/chat tab).          */
+/* Source Code Pro — bundled for the embedded TUI (/chat tab).         */
+/* This is the terminal's default family: it ships with the webapp so   */
+/* the embedded terminal renders identically even on systems where the  */
+/* user doesn't have it installed locally; xterm.js picks it up via     */
+/* ChatPage's `fontFamily` option.                                     */
+/* Adobe Source Code Pro (SIL OFL 1.1); see public/licenses/            */
+/* SourceCodePro-OFL.txt.                                              */
+/* ------------------------------------------------------------------ */
+
+@font-face {
+  font-family: 'Source Code Pro';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts-terminal/SourceCodePro-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Source Code Pro';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts-terminal/SourceCodePro-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Source Code Pro';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts-terminal/SourceCodePro-Italic.woff2') format('woff2');
+}
+
+/* ------------------------------------------------------------------ */
+/* JetBrains Mono — bundled fallback for the embedded TUI (/chat tab).  */
 /* Gives the terminal a proper monospace font even on systems where    */
 /* the user doesn't have one installed locally; xterm.js picks it up   */
 /* via ChatPage's `fontFamily` option.                                 */

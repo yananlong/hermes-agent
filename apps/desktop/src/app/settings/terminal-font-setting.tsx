@@ -101,7 +101,7 @@ export function TerminalFontSetting() {
             return
           }
 
-          setHermesConfigCache(next)
+          setHermesConfigCache(previous => (previous ? setNested(previous, 'terminal.font_family', value) : next))
         })
         .catch(error => {
           if (saveVersionRef.current !== version) {
