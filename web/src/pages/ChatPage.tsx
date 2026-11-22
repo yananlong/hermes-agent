@@ -37,6 +37,7 @@ import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
 import { readStoredWorkspace } from "@/lib/chat-workspaces";
 import { useProfileWorkspace } from "@/hooks/useProfileWorkspace";
+import { listByotSessions, parseByotControlMessage, type ByotSession } from "@/lib/byot";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { readChatPanelCollapsed, toggleChatPanelCollapsed } from "@/lib/chat-panel-collapsed";
 import { copyTextToClipboard } from "@/lib/clipboard";
@@ -160,6 +161,10 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     setHasActivated((prev) => latchChatActivation(prev, isActive));
   }, [isActive]);
   const [searchParams, setSearchParams] = useSearchParams();
+  // BYOT (bring your own terminal): `?byot=<id>` attaches the Chat tab to an
+  // external terminal bridged via `hermes byot` (`/api/byot/host`) instead of
+  // spawning the embedded PTY — the connect effect dials `/api/pty?byot=<id>`.
+  const byotParam = searchParams.get("byot");
   // Lazy-init: the missing-token check happens at construction so the effect
   // body doesn't have to setState (React 19's set-state-in-effect rule).
   // In gated (OAuth) mode the server intentionally omits the session token —
@@ -215,6 +220,10 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // affordance; clicking it bumps `reconnectNonce`, which is a dependency of
   // the connect effect, so a fresh PTY spawns in place.
   const [reconnectNonce, setReconnectNonce] = useState(0);
+  // BYOT: external terminals currently bridged to the gateway (polled), and
+  // the one this tab is attached to (from the server's control frame).
+  const [byotSessions, setByotSessions] = useState<ByotSession[]>([]);
+  const [attachedByot, setAttachedByot] = useState<ByotSession | null>(null);
   useEffect(() => {
     ptyStateRef.current = ptyState;
   }, [ptyState]);
@@ -254,6 +263,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     const next = new URLSearchParams(searchParams);
 
     next.delete("resume");
+    next.delete("byot");
+    setAttachedByot(null);
     forceFreshPtyRef.current = true;
     reconnectAttemptRef.current = 0;
     clearReconnectTimer();
@@ -267,6 +278,46 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     setPtyState("connecting");
     setReconnectNonce((n) => n + 1);
   }, [clearReconnectTimer, searchParams, setSearchParams]);
+  // BYOT: poll the gateway for external terminals bridged via `hermes byot`
+  // so the ended/closed overlays can offer them as attach targets. Polling is
+  // cheap and keeps the list fresh while a bridge connects/disconnects.
+  useEffect(() => {
+    if (!isActive) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const sessions = await listByotSessions();
+        if (!cancelled) setByotSessions(sessions);
+      } catch {
+        /* gateway predates /api/byot/sessions — the picker just stays empty */
+      }
+    };
+    void load();
+    const timer = setInterval(load, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isActive, byotParam, ptyState]);
+  // Attach the Chat tab to a bridged external terminal (`?byot=<id>`); the
+  // connect effect (keyed on byotParam via channel) redials /api/pty with it.
+  const attachByot = useCallback(
+    (id: string) => {
+      const next = new URLSearchParams(searchParams);
+      next.set("byot", id);
+      next.delete("resume");
+      setSearchParams(next, { replace: true });
+      setAttachedByot(null);
+      reconnectAttemptRef.current = 0;
+      clearReconnectTimer();
+      setBanner(null);
+      setBannerAction(null);
+      setReconnectGaveUp(false);
+      setPtyState("connecting");
+      setReconnectNonce((n) => n + 1);
+    },
+    [clearReconnectTimer, searchParams, setSearchParams],
+  );
   // Clear mobile-input tracking refs when the tab is hidden so stale state
   // from a previous /chat visit doesn't cause the mobile-replacement logic
   // to misfire on the next activation (#106403: repeated last character).
@@ -336,8 +387,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const appearanceRef = useEmbeddedTerminalAppearance(scopedProfile, termRef, hostRef, syncMetricsRef, true);
   const [workspaceCwd, setWorkspaceCwd] = useProfileWorkspace(scopedProfile);
   const channel = useMemo(
-    () => generateChannelId(`${resumeParam ?? ""}\0${scopedProfile}`),
-    [resumeParam, scopedProfile],
+    () => generateChannelId(`${resumeParam ?? ""}\0${byotParam ?? ""}\0${scopedProfile}`),
+    [resumeParam, byotParam, scopedProfile],
   );
   const learnHandoff = useLearnHandoff(isActive, channel);
   const titleScope = `${channel}\0${reconnectNonce}`;
@@ -1177,20 +1228,26 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     void (async () => {
       if (unmounting) return;
       const params: Record<string, string> = { channel };
-      if (resumeParam) params.resume = resumeParam;
-      if (forceFresh) params.fresh = "1";
-      // Picked workspace: only meaningful for a fresh chat (a resumed session
-      // keeps its own cwd); the server validates the directory exists.
-      const pickedWorkspace = resumeParam ? "" : readStoredWorkspace(scopedProfile);
-      if (pickedWorkspace) params.cwd = pickedWorkspace;
-      // Keep-alive identity: reattach to this tab's living PTY across
-      // refresh/transient drops. A forced-fresh start rotates the token so
-      // the previous keep-alive PTY is not reattached (registry reaps it).
-      params.attach = await ptyAttachToken(forceFresh);
-      // Profile-scoped chat: the PTY child gets HERMES_HOME pointed at the
-      // selected profile, so the conversation runs with that profile's model,
-      // skills, memory, and sessions (see web_server._resolve_chat_argv).
-      if (scopedProfile) params.profile = scopedProfile;
+      if (byotParam) {
+        // BYOT: attach to the external terminal instead of spawning a PTY —
+        // no resume/workspace/attach semantics apply to the embedded child.
+        params.byot = byotParam;
+      } else {
+        if (resumeParam) params.resume = resumeParam;
+        if (forceFresh) params.fresh = "1";
+        // Picked workspace: only meaningful for a fresh chat (a resumed session
+        // keeps its own cwd); the server validates the directory exists.
+        const pickedWorkspace = resumeParam ? "" : readStoredWorkspace(scopedProfile);
+        if (pickedWorkspace) params.cwd = pickedWorkspace;
+        // Keep-alive identity: reattach to this tab's living PTY across
+        // refresh/transient drops. A forced-fresh start rotates the token so
+        // the previous keep-alive PTY is not reattached (registry reaps it).
+        params.attach = await ptyAttachToken(forceFresh);
+        // Profile-scoped chat: the PTY child gets HERMES_HOME pointed at the
+        // selected profile, so the conversation runs with that profile's model,
+        // skills, memory, and sessions (see web_server._resolve_chat_argv).
+        if (scopedProfile) params.profile = scopedProfile;
+      }
 
       ticketTimer = setTimeout(() => {
         ticketTimer = null;
@@ -1307,6 +1364,13 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         if (resumeId) {
           effectiveResume = resumeId;
           beginResumeReplay();
+          return;
+        }
+        // BYOT: the server announces which external terminal this socket
+        // attached to; remember it for the header/picker, don't render it.
+        const byot = parseByotControlMessage(ev.data);
+        if (byot) {
+          setAttachedByot(byot);
           return;
         }
       }
@@ -1575,6 +1639,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     clearReconnectTimer,
     learnHandoff,
     resumeParam,
+    byotParam,
     scopedProfile,
     reconnectNonce,
   ]);
@@ -1950,7 +2015,48 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
                     Open logs
                   </Button>
                 )}
+                {byotParam && (
+                  <Button
+                    outlined
+                    onClick={startFreshDashboardChat}
+                    aria-label="Detach external terminal and use the embedded one"
+                  >
+                    Use embedded terminal
+                  </Button>
+                )}
               </div>
+              {/* BYOT: external terminals bridged via `hermes byot` can be
+                  attached instead of the embedded terminal. */}
+              {(byotSessions.length > 0 || byotParam) && (
+                <div className="flex max-w-[min(32rem,calc(100vw-3rem))] flex-col items-center gap-2 border border-current/20 bg-black/40 px-3 py-2">
+                  <div className="text-xs tracking-wide text-white/60">
+                    {byotParam
+                      ? `Attached to external terminal ${attachedByot?.name ?? byotParam}`
+                      : "Use an external terminal (run `hermes byot` in iTerm & co.):"}
+                  </div>
+                  {byotSessions.length > 0 && (
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {byotSessions.map((s) => (
+                        <Button
+                          key={s.id}
+                          size="sm"
+                          outlined
+                          onClick={() => attachByot(s.id)}
+                          aria-label={`Attach external terminal ${s.name}`}
+                          title={`${s.shell ?? "terminal"} — ${s.cwd ?? ""}`}
+                        >
+                          {s.name}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                  {byotSessions.length === 0 && !byotParam && (
+                    <div className="text-xs text-white/40">
+                      No external terminal connected.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

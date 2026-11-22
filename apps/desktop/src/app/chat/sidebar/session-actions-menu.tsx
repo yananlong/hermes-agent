@@ -1,3 +1,4 @@
+import { LOCAL_CONNECTION_ID } from '@hermes/shared'
 import { useStore } from '@nanostores/react'
 import type * as React from 'react'
 import { useEffect, useRef, useState } from 'react'
@@ -29,6 +30,7 @@ import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { ArchiveOff } from '@/lib/icons'
 import { isSubmitEnter } from '@/lib/ime'
+import { browserLaunchProfileOrDefault, isBrowserHostedDesktop } from '@/lib/platform'
 import { PROFILE_SWATCHES } from '@/lib/profile-color'
 import { exportSession } from '@/lib/session-export'
 import { activeGateway } from '@/store/gateway'
@@ -48,6 +50,7 @@ import {
   $sessions,
   $unreadFinishedSessionIds,
   applySessionTitle,
+  getSessionOwnerHints,
   markSessionRead,
   ownerLookupSessionRows,
   sessionMatchesStoredId,
@@ -55,16 +58,13 @@ import {
 } from '@/store/session'
 import { $sessionColorOverrides, setSessionColorOverride } from '@/store/session-color'
 import { ambientRequestFor } from '@/store/session-gone-latch'
-import {
-  $sessionStates,
-  $sessionTiles,
-  closeAllOpenSessionTiles,
-  requestForOwnedSession
-} from '@/store/session-states'
+import { $sessionStates, $sessionTiles, closeAllOpenSessionTiles, requestForOwnedSession } from '@/store/session-states'
 import { ackStoredSessionId } from '@/store/session-unread'
 import { canOpenSessionInTerminal, canOpenSessionWindow, openSessionInTerminal } from '@/store/windows'
 
 import type { SessionTitleResponse } from '../../types'
+
+import { SessionTerminalHandoffDialog } from './session-terminal-handoff-dialog'
 
 // Rename a session, preferring the gateway's session.title RPC over REST.
 //
@@ -263,6 +263,56 @@ function MoveToProjectItems({ kit, sessionId, profile }: { kit: MenuKit; session
   )
 }
 
+function terminalHandoffContext(sessionId: string, profile: string | undefined, connectionMode?: string) {
+  const browserHosted = isBrowserHostedDesktop()
+  const session = $sessions.get().find(candidate => sessionMatchesStoredId(candidate, sessionId))
+
+  const owners = [session?.connection_id, ...getSessionOwnerHints(sessionId).map(owner => owner.connectionId)]
+    .map(owner => owner?.trim())
+    .filter((owner): owner is string => Boolean(owner))
+
+  const onServingHost = owners.length ? owners.every(owner => owner === LOCAL_CONNECTION_ID) : connectionMode !== 'remote'
+
+  return {
+    available: browserHosted && onServingHost,
+    profile: profile?.trim() || session?.profile?.trim() || (browserHosted ? browserLaunchProfileOrDefault() : '')
+  }
+}
+
+function terminalHandoffMenuItems(
+  available: boolean,
+  sessionId: string,
+  profile: string,
+  label: string,
+  onSelect: () => void
+): ActionItemSpec[] {
+  if (!available) {
+    return []
+  }
+
+  return [{ disabled: !sessionId || !profile, icon: 'terminal', label, onSelect }]
+}
+
+function renderTerminalHandoffDialog({
+  available,
+  open,
+  onOpenChange,
+  profile,
+  sessionId
+}: {
+  available: boolean
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  profile: string
+  sessionId: string
+}): React.ReactNode {
+  if (!available) {
+    return null
+  }
+
+  return <SessionTerminalHandoffDialog onOpenChange={onOpenChange} open={open} profile={profile} sessionId={sessionId} />
+}
+
 function useSessionActions({
   sessionId,
   title,
@@ -284,6 +334,7 @@ function useSessionActions({
   const { t } = useI18n()
   const r = t.sidebar.row
   const [renameOpen, setRenameOpen] = useState(false)
+  const [terminalHandoffOpen, setTerminalHandoffOpen] = useState(false)
   // The rename item opens a Dialog. When a menu closes, Radix restores focus to
   // its trigger — for a sidebar row that trigger is the row's own <button>, so
   // focus lands there instead of the dialog's input: Space then activates the
@@ -295,7 +346,10 @@ function useSessionActions({
   const [deleteOpen, setDeleteOpen] = useState(false)
   const tiles = useStore($sessionTiles)
   const selectedStoredSessionId = useStore($selectedStoredSessionId)
-  const isRemote = useStore($connection)?.mode === 'remote'
+  const connection = useStore($connection)
+  const isRemote = connection?.mode === 'remote'
+  const terminalHandoff = terminalHandoffContext(sessionId, profile, connection?.mode)
+
   // The row's finished-unread dot is cleared by opening the session (main or
   // tile) — this menu item is the explicit escape hatch for the rest.
   const isUnread = useStore($unreadFinishedSessionIds).includes(sessionId)
@@ -362,7 +416,14 @@ function useSessionActions({
             }
           })
         ]
-      : [])
+      : []),
+    ...terminalHandoffMenuItems(terminalHandoff.available, sessionId, terminalHandoff.profile, r.useTerminalHandoff, () => {
+      triggerHaptic('selection')
+      // Keep Radix from restoring focus to the session-row trigger
+      // while the resume dialog is taking focus.
+      suppressCloseFocusRef.current = true
+      setTerminalHandoffOpen(true)
+    })
   ]
 
   // IDENTITY — name/mark/reference the session. Rename is omitted (not
@@ -645,7 +706,15 @@ function useSessionActions({
     />
   )
 
-  return { deleteDialog, onCloseAutoFocus, renameDialog, renderItems }
+  const terminalHandoffDialog = renderTerminalHandoffDialog({
+    available: terminalHandoff.available,
+    open: terminalHandoffOpen,
+    onOpenChange: setTerminalHandoffOpen,
+    profile: terminalHandoff.profile,
+    sessionId
+  })
+
+  return { deleteDialog, onCloseAutoFocus, renameDialog, renderItems, terminalHandoffDialog }
 }
 
 interface DeleteSessionDialogProps {
@@ -695,7 +764,9 @@ export function SessionActionsMenu({
   ...actions
 }: SessionActionsMenuProps) {
   const { t } = useI18n()
-  const { deleteDialog, onCloseAutoFocus, renameDialog, renderItems } = useSessionActions(actions)
+
+  const { deleteDialog, onCloseAutoFocus, renameDialog, renderItems, terminalHandoffDialog } =
+    useSessionActions(actions)
 
   return (
     <>
@@ -713,6 +784,7 @@ export function SessionActionsMenu({
       </ActionsMenu>
       {renameDialog}
       {deleteDialog}
+      {terminalHandoffDialog}
     </>
   )
 }
@@ -723,7 +795,9 @@ interface SessionContextMenuProps extends SessionActions {
 
 export function SessionContextMenu({ children, ...actions }: SessionContextMenuProps) {
   const { t } = useI18n()
-  const { deleteDialog, onCloseAutoFocus, renameDialog, renderItems } = useSessionActions(actions)
+
+  const { deleteDialog, onCloseAutoFocus, renameDialog, renderItems, terminalHandoffDialog } =
+    useSessionActions(actions)
 
   return (
     <>
@@ -737,6 +811,7 @@ export function SessionContextMenu({ children, ...actions }: SessionContextMenuP
       </ActionsContextMenu>
       {renameDialog}
       {deleteDialog}
+      {terminalHandoffDialog}
     </>
   )
 }

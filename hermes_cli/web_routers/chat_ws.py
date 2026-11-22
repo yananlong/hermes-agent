@@ -128,8 +128,8 @@ _CONSOLE_OUTPUT_LIMIT = 50000
 def _execute_console_line(
     engine: Any, line: str, *, confirmed: bool, profile: Optional[str], scope: Optional[InterruptScope] = None,
 ) -> Any:
-    # _profile_scope holds a process-wide lock; keep it inside the worker
-    # thread and never hold it across awaits.
+    # _profile_scope swaps process-global skill module paths; keep it inside
+    # the worker thread and never hold it across awaits.
     with _profile_scope(profile), bind_interrupt_scope(scope):
         return engine.execute(line, confirmed=confirmed)
 
@@ -482,6 +482,16 @@ async def pty_ws(ws: WebSocket) -> None:
     peer, mode, cred = gate
     await ws.accept()
     _log.info("pty accepted peer=%s mode=%s cred=%s", peer, mode, cred)
+
+    byot_id = (ws.query_params.get("byot") or "").strip()
+    if byot_id:
+        # BYOT (bring your own terminal): proxy this socket to an external
+        # terminal registered via /api/byot/host (``hermes byot`` in iTerm &co.)
+        # instead of spawning the embedded PTY. Handled before the POSIX-bridge
+        # check so it also works on native Windows.
+        from hermes_cli.web_routers.byot import handle_byot_viewer
+        await handle_byot_viewer(ws, byot_id)
+        return
 
     # Native Windows can't import the POSIX PTY bridge: say so and close cleanly.
     if not _PTY_BRIDGE_AVAILABLE:
