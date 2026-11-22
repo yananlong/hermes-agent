@@ -6,7 +6,14 @@ import { refreshProjectTree } from '@/store/projects'
 
 import { SessionActionsMenu, SessionContextMenu } from './session-actions-menu'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  sessionOwnerMocks.get.mockReturnValue([])
+  browserTransportMocks.browserApi.mockClear()
+  browserTransportMocks.browserBootstrap.mockClear()
+  delete window.document.documentElement.dataset.hermesDesktopHost
+  delete (HTMLElement.prototype as { scrollIntoView?: () => void }).scrollIntoView
+})
 
 // Exercises the real SessionActionsMenu end-to-end (no DropdownMenu mock) so
 // a broken asChild composition on the kebab trigger fails here — the menu
@@ -30,6 +37,9 @@ vi.mock('@/i18n', () => ({
         cancel: 'Cancel',
         close: 'Close',
         confirm: 'Confirm',
+        copy: 'Copy',
+        copyFailed: 'Copy failed',
+        copied: 'Copied',
         delete: 'Delete',
         done: 'Done',
         loading: 'Loading…',
@@ -56,6 +66,22 @@ vi.mock('@/i18n', () => ({
           deleted: 'Session deleted',
           export: 'Export',
           hideTabBar: 'Hide tab bar',
+          useTerminalHandoff: 'Use a terminal on this host…',
+          terminalHandoffTitle: 'Resume this chat in a terminal on the Hermes host',
+          terminalHandoffInstructions: 'Connect to the same Hermes host, then paste this command.',
+          terminalHandoffOwnerWarning: 'Exit the browser TUI and wait for it to end first.',
+          terminalHandoffShellLabel: 'Shell on the Hermes host',
+          terminalHandoffLoginShell: 'SSH login shell',
+          terminalHandoffZsh: 'zsh (this launch only)',
+          terminalHandoffBash: 'bash (this launch only)',
+          terminalHandoffShellNote: 'zsh or bash must already be installed on the Hermes host.',
+          terminalHandoffIdentityNote:
+            'Use the same Unix account and profile configuration as the Webapp. The command sets the Webapp’s Hermes home for this run so it opens the same session database.',
+          terminalHandoffPathNote: 'The command uses hermes from the remote shell PATH.',
+          terminalHandoffLoading: 'Loading Hermes host settings…',
+          terminalHandoffLoadFailed: 'Could not load Hermes host settings.',
+          terminalHandoffHomeUnsupported: 'This Hermes home path cannot be quoted safely.',
+          terminalHandoffCopy: 'Copy resume command',
           markRead: 'Mark as read',
           pin: 'Pin',
           rename: 'Rename',
@@ -73,6 +99,16 @@ vi.mock('@/i18n', () => ({
     }
   })
 }))
+const clipboardMocks = vi.hoisted(() => ({ writeClipboardText: vi.fn(() => Promise.resolve()) }))
+
+const browserTransportMocks = vi.hoisted(() => ({
+  browserApi: vi.fn(() => Promise.resolve({ hermes_home: '/home/apps/.hermes', shells: { bash: true, zsh: true } })),
+  browserBootstrap: vi.fn(() => ({ authRequired: true, basePath: '', privateSession: false, token: '' }))
+}))
+
+const sessionOwnerMocks = vi.hoisted(() => ({ get: vi.fn(() => []) }))
+vi.mock('@/lib/clipboard', () => clipboardMocks)
+vi.mock('@/lib/browser-transport', () => browserTransportMocks)
 vi.mock('@/lib/haptics', () => ({ triggerHaptic: vi.fn() }))
 vi.mock('@/lib/profile-color', () => ({ PROFILE_SWATCHES: [] }))
 vi.mock('@/lib/session-export', () => ({ exportSession: vi.fn() }))
@@ -93,6 +129,7 @@ vi.mock('@/store/session', () => ({
   $selectedStoredSessionId: atom<null | string>(null),
   $sessions: atom<unknown[]>([]),
   $unreadFinishedSessionIds: atom<string[]>([]),
+  getSessionOwnerHints: sessionOwnerMocks.get,
   markSessionRead: vi.fn(),
   sessionMatchesStoredId: vi.fn(() => false),
   sessionPinId: vi.fn((s: { id: string }) => s.id),
@@ -143,6 +180,69 @@ describe('SessionActionsMenu', () => {
     expect(await screen.findByRole('menu')).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: /rename/i })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: /archive/i })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: 'Use a terminal on this host…' })).toBeNull()
+  })
+
+  it('uses only the login shell when an older host cannot report shell availability', async () => {
+    window.document.documentElement.dataset.hermesDesktopHost = 'browser'
+    clipboardMocks.writeClipboardText.mockClear()
+    browserTransportMocks.browserApi.mockRejectedValueOnce(new Error('404: Not Found'))
+    const sessionId = '20260814_101010_abc123'
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn()
+    })
+
+    render(
+      <SessionActionsMenu profile="work" sessionId={sessionId} title="My session">
+        <button aria-label="Session actions" type="button">
+          ⋮
+        </button>
+      </SessionActionsMenu>
+    )
+
+    const trigger = screen.getByRole('button', { name: 'Session actions' })
+    fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+    fireEvent.pointerUp(trigger, { button: 0, pointerType: 'mouse' })
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Use a terminal on this host…' }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.contains(window.document.activeElement)).toBe(true)
+    expect(dialog.textContent).toContain('Exit the browser TUI and wait for it to end first.')
+    expect(dialog.textContent).toContain('Use the same Unix account and profile configuration as the Webapp.')
+    const loginCommand = `env HERMES_HOME='/home/apps/.hermes' hermes --profile work --tui --resume ${sessionId}`
+    await waitFor(() => {
+      expect(dialog.querySelector('code')?.textContent).toBe(loginCommand)
+    })
+    expect(browserTransportMocks.browserApi).toHaveBeenNthCalledWith(2, expect.anything(), {
+      method: 'GET',
+      path: '/api/status'
+    })
+
+    const shellSelect = within(dialog).getByRole('combobox', { name: 'Shell on the Hermes host' })
+    fireEvent.keyDown(shellSelect, { key: 'ArrowDown' })
+    expect(screen.queryByRole('option', { name: 'zsh (this launch only)' })).toBeNull()
+    expect(screen.queryByRole('option', { name: 'bash (this launch only)' })).toBeNull()
+    fireEvent.keyDown(shellSelect, { key: 'Escape' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Copy resume command' }))
+    await waitFor(() => {
+      expect(clipboardMocks.writeClipboardText).toHaveBeenCalledWith(loginCommand)
+    })
+  })
+
+  it('hides the browser-host handoff for a session owned by another connection', async () => {
+    window.document.documentElement.dataset.hermesDesktopHost = 'browser'
+    sessionOwnerMocks.get.mockReturnValue([{ connectionId: 'ssh-other', profile: 'work' }])
+    renderMenu()
+
+    const trigger = screen.getByRole('button', { name: 'Session actions' })
+    fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+    fireEvent.pointerUp(trigger, { button: 0, pointerType: 'mouse' })
+    fireEvent.click(trigger)
+
+    expect(await screen.findByRole('menu')).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: 'Use a terminal on this host…' })).toBeNull()
   })
 
   it('opens the rename dialog focused on its input, not the row trigger', async () => {
