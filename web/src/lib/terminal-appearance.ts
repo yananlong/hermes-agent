@@ -1,3 +1,5 @@
+import { DEFAULT_TERMINAL_FONT_SIZE } from "./terminal-font-refit";
+
 /**
  * Terminal appearance helpers shared by the chat composer's xterm host:
  * theme colors and the layout-width-driven font tiers. Extracted from
@@ -48,7 +50,7 @@ export function terminalFontSizeForWidth(layoutWidthPx: number): number {
   if (layoutWidthPx < 520) return 10;
   if (layoutWidthPx < 720) return 11;
   if (layoutWidthPx < 1024) return 12;
-  return 14;
+  return DEFAULT_TERMINAL_FONT_SIZE;
 }
 
 export function terminalLineHeightForWidth(layoutWidthPx: number): number {

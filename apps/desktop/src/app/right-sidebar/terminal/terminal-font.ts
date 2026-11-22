@@ -1,6 +1,9 @@
 import { atom } from 'nanostores'
 
 export const DEFAULT_TERMINAL_FONT_FAMILY = "'JetBrains Mono', 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace"
+export const DEFAULT_TERMINAL_FONT_SIZE = 11
+export const MIN_TERMINAL_FONT_SIZE = 8
+export const MAX_TERMINAL_FONT_SIZE = 32
 
 export const TERMINAL_FONT_SUGGESTIONS = [
   'MesloLGS NF',
@@ -17,6 +20,7 @@ export const TERMINAL_FONT_SUGGESTIONS = [
 
 /** The profile-backed value as written in config.yaml. Empty means bundled default. */
 export const $terminalFontFamily = atom('')
+export const $terminalFontSize = atom(DEFAULT_TERMINAL_FONT_SIZE)
 
 export function normalizeTerminalFontFamily(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -43,6 +47,20 @@ export function setTerminalFontFamilyFromConfig(value: unknown): void {
   $terminalFontFamily.set(normalizeTerminalFontFamily(value))
 }
 
+/** Keep persisted values within xterm's readable desktop range. */
+export function normalizeTerminalFontSize(value: unknown): number {
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= MIN_TERMINAL_FONT_SIZE &&
+    value <= MAX_TERMINAL_FONT_SIZE
+    ? value
+    : DEFAULT_TERMINAL_FONT_SIZE
+}
+
+export function setTerminalFontSizeFromConfig(value: unknown): void {
+  $terminalFontSize.set(normalizeTerminalFontSize(value))
+}
+
 type FontFaceLoader = Pick<FontFaceSet, 'load'>
 
 function browserFontSet(): FontFaceLoader | undefined {
@@ -52,6 +70,7 @@ function browserFontSet(): FontFaceLoader | undefined {
 /** Warm every face xterm uses before WebGL builds its glyph texture atlas. */
 export async function warmTerminalFontFamily(
   fontFamily: string,
+  fontSize = DEFAULT_TERMINAL_FONT_SIZE,
   fontSet: FontFaceLoader | undefined = browserFontSet()
 ): Promise<void> {
   if (!fontSet?.load) {
@@ -60,7 +79,7 @@ export async function warmTerminalFontFamily(
 
   await Promise.allSettled(
     ['400', '700', 'italic 400'].map(descriptor =>
-      Promise.resolve().then(() => fontSet.load(`${descriptor} 11px ${fontFamily}`))
+      Promise.resolve().then(() => fontSet.load(`${descriptor} ${fontSize}px ${fontFamily}`))
     )
   )
 }
@@ -73,31 +92,35 @@ export async function warmTerminalFontFamily(
 export async function prepareTerminalFontFamily(
   getLatest: () => string,
   isCurrent: () => boolean,
-  warm: (fontFamily: string) => Promise<void> = warmTerminalFontFamily
+  warm: (fontFamily: string, fontSize: number) => Promise<void> = warmTerminalFontFamily,
+  getLatestFontSize: () => number = () => DEFAULT_TERMINAL_FONT_SIZE
 ): Promise<string | null> {
   let candidate = getLatest()
+  let candidateSize = getLatestFontSize()
 
   while (isCurrent()) {
-    await warm(candidate)
+    await warm(candidate, candidateSize)
 
     if (!isCurrent()) {
       return null
     }
 
     const latest = getLatest()
+    const latestSize = getLatestFontSize()
 
-    if (latest === candidate) {
+    if (latest === candidate && latestSize === candidateSize) {
       return candidate
     }
 
     candidate = latest
+    candidateSize = latestSize
   }
 
   return null
 }
 
 export interface TerminalFontTarget {
-  options: { fontFamily?: string }
+  options: { fontFamily?: string; fontSize?: number }
   rows: number
   refresh: (start: number, end: number) => void
 }
@@ -106,27 +129,30 @@ interface ApplyTerminalFontOptions {
   clearTextureAtlas: () => void
   fit: () => void
   fontFamily: string
+  fontSize: number
   isCurrent: () => boolean
   term: TerminalFontTarget
-  warm?: (fontFamily: string) => Promise<void>
+  warm?: (fontFamily: string, fontSize: number) => Promise<void>
 }
 
 /** Apply a live font change without recreating the xterm instance or its PTY. */
-export async function applyTerminalFontFamily({
+export async function applyTerminalFont({
   clearTextureAtlas,
   fit,
   fontFamily,
+  fontSize,
   isCurrent,
   term,
   warm = warmTerminalFontFamily
 }: ApplyTerminalFontOptions): Promise<boolean> {
-  await warm(fontFamily)
+  await warm(fontFamily, fontSize)
 
   if (!isCurrent()) {
     return false
   }
 
   term.options.fontFamily = fontFamily
+  term.options.fontSize = fontSize
   fit()
 
   try {
