@@ -12,10 +12,13 @@ import os
 import time
 import threading as _threading
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 from agent.command_token_source import build_command_token_provider, materialize_probe_api_key
-from hermes_cli.providers import custom_provider_aliases, custom_provider_slug, get_label
+from hermes_cli.providers import custom_provider_aliases, custom_provider_slug, get_label, resolve_provider_full
 from utils import base_url_host_matches, same_base_url_origin
+
+if TYPE_CHECKING:
+    from hermes_cli.model_switch import _Switch
 
 # Log-record parity with the origin module.
 logger = logging.getLogger("hermes_cli.model_switch")
@@ -24,6 +27,20 @@ logger = logging.getLogger("hermes_cli.model_switch")
 # rows that are already a curated list (Nous = curated + Portal picks, OpenRouter = curated ∩ live),
 # where the cap only cut the bottom "Free tier" block and the Portal's appended recommendations.
 _UNCAPPED_PICKER_PROVIDERS: frozenset[str] = frozenset({"opencode-zen", "opencode-go", "nous", "openrouter"})
+
+
+def _switch_provider_label(st: _Switch) -> str:
+    from hermes_cli.model_switch_codex import openai_provider_def
+    if openai_provider_def(st) is not None:
+        return "OpenAI Codex CLI"
+    label = get_label(st.target_provider)
+    if st.target_provider == "custom" and st.current_base_url:
+        label = "Custom endpoint"
+    if st.target_provider.startswith("custom:"):
+        custom_pdef = resolve_provider_full(st.target_provider, st.user_providers, st.custom_providers)
+        if custom_pdef is not None:
+            label = custom_pdef.name
+    return label
 
 
 def _save_discovered_models_to_config(

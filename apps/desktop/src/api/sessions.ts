@@ -388,6 +388,40 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
 
 const runSessionMutation = createSessionMutationClient()
 
+type SessionMutationGatewayRequest = <T>(method: string, params?: Record<string, unknown>) => Promise<T>
+
+/** Move a stored linked Codex session without resuming it on the renderer's socket first.
+ * The mutation-snapshot endpoint supplies fresh CAS fences; the canonical owner then takes
+ * Codex's native writer lock and either commits the same thread's cwd or returns a typed busy
+ * refusal. There is deliberately no legacy/unfenced fallback for this cold-session path. */
+export function moveStoredLinkedSessionWorkspace<T>(
+  sessionId: string,
+  cwd: string,
+  requestGateway: SessionMutationGatewayRequest,
+  owner?: ProfileScope
+): Promise<T> {
+  const ownerScope = owner ?? getApiRequestProfile()
+  const sessionScope = sessionScoped(ownerScope)
+  const scope = { ...connectionScoped(), ...sessionScope }
+  const query = scope.profile ? `?profile=${encodeURIComponent(scope.profile)}` : ''
+  const path = `/api/sessions/${encodeURIComponent(sessionId)}`
+  const key = JSON.stringify([scope, sessionId, { operation: 'workspace', cwd }])
+
+  return runSessionMutation(
+    key,
+    () => hermesApi<SessionMutationSnapshot>({ ...scope, path: `${path}/mutation-snapshot${query}` }),
+    identity => requestGateway<T>('session.mutate', {
+      session_id: sessionId,
+      request_id: identity.request_id,
+      expected_revision: identity.expected_revision,
+      expected_generation: identity.expected_generation,
+      operation: 'workspace',
+      ...(sessionScope.profile ? { profile: sessionScope.profile } : {}),
+      payload: { cwd }
+    })
+  )
+}
+
 class MissingMutationSnapshotRoute extends Error {}
 
 /** Run one fenced session edit. The fencing protocol is a backend capability: an older

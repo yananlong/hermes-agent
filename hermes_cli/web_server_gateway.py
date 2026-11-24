@@ -788,8 +788,46 @@ def _split_text_for_speak_stream(text: str, cap: int) -> list:
 _SESSION_LIST_HEAVY_FIELDS = ("system_prompt", "model_config")
 
 
+#: ``(model_config flag, native id key, row marker)`` for each linked foreign agent.
+_LINKED_CAPABILITY_FLAGS = (
+    ("codex_linked_thread", "codex_thread_id", "codex_linked"),
+    ("claude_linked_thread", "claude_session_id", "claude_linked"),
+    ("mistral_linked_thread", "mistral_session_id", "mistral_linked"),
+)
+
+
+def stamp_linked_capability_markers(session: dict[str, Any]) -> dict[str, Any]:
+    """Add the linked-pointer markers (and nothing else) to one session row, in place.
+
+    A linked native thread (Codex/Claude/Mistral) can be opened while its Hermes runtime is cold, so
+    a client asks the row "is this a pointer?" before it spawns a terminal for it. Only the boolean
+    marker travels: the native thread id stays in ``model_config``, which the session-list
+    projection drops entirely.
+
+    Shared by the list (``_strip_session_list_rows``) and the single-session detail endpoint, so a
+    client that cannot see the row in a paged list still gets the same answer for one id.
+
+    Unreadable/absent configuration stamps NOTHING: this projection must not turn a damaged row into
+    a crash, and the turn path itself refuses an unreadable linked row (fail closed there instead).
+    """
+    config = session.get("model_config")
+    if isinstance(config, str):
+        try:
+            config = json.loads(config)
+        except (TypeError, ValueError):
+            config = {}
+    for flag, native_id_key, marker in _LINKED_CAPABILITY_FLAGS:
+        if (isinstance(config, dict) and config.get(flag) is True
+                and isinstance(config.get(native_id_key), str) and config[native_id_key]):
+            session[marker] = True
+        else:
+            session.pop(marker, None)
+    return session
+
+
 def _strip_session_list_rows(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for s in sessions:
+        stamp_linked_capability_markers(s)
         for key in _SESSION_LIST_HEAVY_FIELDS:
             s.pop(key, None)
     return sessions

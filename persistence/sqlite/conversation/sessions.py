@@ -30,7 +30,7 @@ from .._holder import StoreHolder
 from .._schema import TITLE_SOURCE_USER
 from .._schema_ddl import _RESET_CHILD_SQL, _sql_json_extract
 from .._state.common import _shape_preview
-from ._store import stored_reads
+from ._store import codex_display, codex_link, foreign_link, stored_reads
 from ._store.compression import _compression_tip_on, reopen_if_explicitly_closed
 from ._store.core import is_kanban_owned_session, retag_kanban_worker_sessions
 from ._store.gateway import list_gateway_sessions
@@ -425,6 +425,53 @@ class SQLiteSessionRepository:
         holder = self._store.holder()
         with refusals(holder):
             return _removed(delete_empty_sessions(holder, media_root=media_root))
+
+    def link_codex_session(self, spec: NewSession, title: str, thread_id: str) -> tuple[SessionId, bool]:
+        holder = self._store.holder()
+        with refusals(holder, spec.session_id):
+            return codex_link.link_codex_session(holder, spec, title, thread_id)
+
+    def link_foreign_session(self, spec: NewSession, title: str, *, flag: str, id_key: str,
+                             native_id: str, fallback_title: str) -> tuple[SessionId, bool]:
+        holder = self._store.holder()
+        with refusals(holder, spec.session_id):
+            return foreign_link.link_foreign_session(
+                holder, spec, title, flag=flag, id_key=id_key, native_id=native_id,
+                fallback_title=fallback_title)
+
+    def save_linked_codex_display_overlay(
+        self, session_id: SessionId, thread_id: str, turn_id: str, *,
+        final_text: str | None, held: bool, platform: str,
+    ) -> bool:
+        holder = self._store.holder()
+        with refusals(holder, session_id):
+            return codex_display.save_linked_codex_display_overlay(
+                holder, session_id, thread_id, turn_id, final_text=final_text, held=held, platform=platform)
+
+    def load_linked_codex_display_overlays(
+        self, session_id: SessionId, thread_id: str, turn_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        holder = self._store.holder()
+        with refusals(holder, session_id):
+            return codex_display.load_linked_codex_display_overlays(holder, session_id, thread_id, turn_ids)
+
+    def claim_linked_codex_workspace_change(self, session_id: SessionId, intent: dict[str, Any]) -> bool:
+        holder = self._store.holder()
+        with refusals(holder, session_id):
+            return codex_link.claim_linked_codex_workspace_change(holder, session_id, intent)
+
+    def finish_linked_codex_workspace_change(
+        self, session_id: SessionId, intent: dict[str, Any], cwd: str,
+        git_branch: str | None = None, git_repo_root: str | None = None,
+    ) -> int | None:
+        holder = self._store.holder()
+        with refusals(holder, session_id):
+            return codex_link.finish_linked_codex_workspace_change(holder, session_id, intent, cwd, git_branch, git_repo_root)
+
+    def clear_linked_codex_workspace_change(self, session_id: SessionId, intent: dict[str, Any]) -> bool:
+        holder = self._store.holder()
+        with refusals(holder, session_id):
+            return codex_link.clear_linked_codex_workspace_change(holder, session_id, intent)
 
     def create_exclusive(
         self,

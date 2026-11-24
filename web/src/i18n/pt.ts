@@ -174,6 +174,11 @@ export const pt: Translations = {
     selectedSessionsSkippedActive: "{deleted} eliminadas; {count} mantidas porque há um turno em curso",
     failedToDeleteSelected: "Falha ao eliminar as sessões selecionadas",
     resumeInChat: "Retomar no Chat",
+    linkedReadonlyBadge: "linked · read-only",
+    linkedReadonlyWarning:
+      "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript; new turns cannot be appended to the native session from the web dashboard.",
+    linkedResumeDisabled:
+      "Linked sessions are read-only in the web dashboard; open the conversation in the native app to continue it.",
     newChat: "Novo chat",
     workspace: "área de trabalho",
     workspaceDefault: "Padrão",

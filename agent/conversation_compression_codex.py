@@ -59,6 +59,7 @@ def _compress_context_via_codex_app_server(
         COMPACTION_STATUS, _CompressionActivityHeartbeat, _emit_compaction_done, _existing_system_prompt,
         _reset_read_dedup_caches, _swallow,
     )
+    from agent.codex_runtime import _is_linked_codex_thread, _stored_codex_thread_id
 
     def _record(commit_status: str, failure_class: Optional[str], method: str = "none") -> None:
         _emit_bypassed_attempt_telemetry(
@@ -82,6 +83,16 @@ def _compress_context_via_codex_app_server(
             skip_reason = f"failure cooldown active for {_cooldown_remaining:.0f}s"
             skip_status, skip_class = "blocked", "blocked:cooldown"
     codex_session = getattr(agent, "_codex_session", None)
+    if skip_reason is None and codex_session is None and force:
+        from agent.codex_runtime import _close_codex_session, _ensure_codex_session, _start_codex_thread
+        if _is_linked_codex_thread(agent):
+            try:
+                _ensure_codex_session(agent, messages)
+                _start_codex_thread(agent)
+            except BaseException:
+                _close_codex_session(agent)
+                raise
+            codex_session = agent._codex_session
     if skip_reason is None and codex_session is None:
         skip_reason, skip_status, skip_class = "no active codex thread", "skipped", "codex_no_thread"
     if skip_reason is not None:
@@ -95,6 +106,7 @@ def _compress_context_via_codex_app_server(
     with contextlib.suppress(Exception):
         agent._emit_status(COMPACTION_STATUS)
     _activity_heartbeat = _CompressionActivityHeartbeat(agent, emit_client_status=True).start()
+    linked = _is_linked_codex_thread(agent)
     try:
         result = codex_session.compact_thread()
     except BaseException as exc:
@@ -102,7 +114,13 @@ def _compress_context_via_codex_app_server(
         # Same class shape as the Hermes route's raising exits; the caller still gets the original error.
         _record("aborted", f"exception:{type(exc).__name__}")
         raise
-    failed = bool(getattr(result, "interrupted", False) or getattr(result, "error", None))
+    finally:
+        if linked:
+            from agent.codex_runtime import _close_codex_session
+            _close_codex_session(agent)
+    linked_invalid = linked and (not getattr(result, "compacted", False)
+                                 or getattr(result, "thread_id", None) != _stored_codex_thread_id(agent))
+    failed = bool(getattr(result, "interrupted", False) or getattr(result, "error", None) or linked_invalid)
     _activity_heartbeat.stop("context compression failed" if failed else "context compression completed")
     if getattr(result, "should_retire", False):
         with contextlib.suppress(Exception):
@@ -115,6 +133,8 @@ def _compress_context_via_codex_app_server(
         # threshold. Without a brake the next turn retries immediately.
         _record_codex_compaction_failure(agent, str(getattr(result, "error", None) or "compaction interrupted"))
         _record("failed", "codex_compaction_failed")
+        if linked:
+            raise RuntimeError(str(getattr(result, "error", None) or "Codex did not confirm compaction of the linked thread"))
         return messages, _existing_system_prompt(agent, system_message)
     with _swallow('codex compaction bookkeeping failed', exc_info=True):
         from agent.codex_runtime import _record_codex_app_server_compaction, _record_codex_app_server_usage

@@ -4,11 +4,13 @@ one-use ticket each browser socket dial mints (``/api/webapp/socket-ticket?socke
 handoffs (child window, auto-opened launch tab) for the private, loopback Webapp session."""
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import logging
 import os
 import secrets
+import shutil
 import sys
 import threading
 import time
@@ -193,6 +195,36 @@ def _ticket_principal(request: Request) -> tuple[dict, str | None]:
         if _has_valid_session_token(request):
             return dict(SESSION_TOKEN_OWNER), presented
     raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _terminal_context_payload() -> dict:
+    """Read filesystem-backed terminal details outside the async request task."""
+    from hermes_cli.config import get_process_hermes_home
+
+    # Hermes expands HERMES_HOME's environment and user-home syntax while
+    # preserving symlink aliases. Make a relative value absolute against the
+    # serving process's cwd so the SSH login can use the same root.
+    hermes_home = os.path.abspath(str(get_process_hermes_home()))
+    return {
+        "hermes_home": hermes_home,
+        "shells": {name: shutil.which(name) is not None for name in ("bash", "zsh")},
+    }
+
+
+@router.get("/api/webapp/terminal-context")
+async def terminal_context(request: Request):
+    """Return only the serving Hermes home and installed shell choices to an authenticated Webapp.
+
+    This path is needed for an explicit copy/paste CLI resume: the browser cannot infer the service's
+    environment from the visitor's SSH shell. It is deliberately not embedded in public HTML.
+    """
+    if not policy(request.app.state).host_terminal:
+        raise HTTPException(404, "Webapp terminal context is unavailable on this surface")
+    _ticket_principal(request)
+    return JSONResponse(
+        await asyncio.to_thread(_terminal_context_payload),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def mint_socket_ticket(identity: dict, socket: str, *, session_token: str | None = None,

@@ -397,6 +397,15 @@ def _cmd_list(args, *, persistence=None):
 # -- export -----------------------------------------------------------------
 
 def _cmd_export(args, *, persistence=None):
+    from persistence.core.errors import LinkedCodexExportUnavailable
+    try:
+        return _cmd_export_impl(args, persistence=persistence)
+    except LinkedCodexExportUnavailable as exc:
+        print(f"Error: {exc}")
+        return 1
+
+
+def _cmd_export_impl(args, *, persistence=None):
     from hermes_cli.session_filters import build_prune_filters
     filters = None
     if _any_filter_args(args):
@@ -534,6 +543,8 @@ def _export_flat(kind, args, collect):
 def _export_trace(store, args, filters):
     """Claude Code JSONL trace export — local file or HF upload. Redaction is ON by default (traces
     leave the machine with --upload); --no-redact opts out."""
+    from hermes_cli.session_export import assert_linked_exports_unavailable
+
     session_id = args.session_id
     if not session_id and not filters:  # "the last thing I did"
         from persistence.conversation.sessions import SessionOrder, SessionQuery, SessionWindow
@@ -549,6 +560,7 @@ def _export_trace(store, args, filters):
             print("--upload exports one session: pass --session-id (or drop filters to use the most recent).")
             return 1
         resolved = store.sessions.resolve_id(session_id)
+        assert_linked_exports_unavailable(store, [resolved])
         store.close()
         print(upload_session_trace(resolved, cwd="", redact=redact_trace, private=not getattr(args, "public", False)))
         return
@@ -560,6 +572,8 @@ def _export_trace(store, args, filters):
         if args.dry_run:
             return _print_dry_run_preview(candidates, filters)
         ids = [row.session_id for row in candidates]
+
+    assert_linked_exports_unavailable(store, ids)
 
     def _render_trace(sid):
         meta = store.sessions.get(sid)
@@ -633,6 +647,8 @@ def _export_markdown(store, args, filters, redact):
     candidates = store.maintenance.list_prune_candidates(**bounds, criteria=criteria)
     if args.dry_run:
         return _print_dry_run_preview(candidates, filters)
+    from hermes_cli.session_export import assert_linked_exports_unavailable
+    assert_linked_exports_unavailable(store, [row.session_id for row in candidates])
     exported = 0
     for row in candidates:
         try:
@@ -653,6 +669,8 @@ def _export_markdown_single(store, args, export_one, output_dir, lineage_is_logi
         list(store.sessions.delete_targets(resolved_session_id)) if args.delete_after_verified
         else [resolved_session_id]
     )
+    from hermes_cli.session_export import assert_linked_exports_unavailable
+    assert_linked_exports_unavailable(store, delete_target_ids)
     exported_items = []
     for target_id in delete_target_ids:
         try:

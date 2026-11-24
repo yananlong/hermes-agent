@@ -31,9 +31,9 @@ import { introEs } from './intro-es'
 
 export const esOverrides = {
   gatewayGroupOpen: {
-    opening: "Abriendo el chat de grupo…",
-    lookupFailed: "No se pudo encontrar este grupo en la pasarela. Inténtalo de nuevo.",
-    missing: "Este chat de grupo ya no existe."
+    opening: 'Abriendo el chat de grupo…',
+    lookupFailed: 'No se pudo encontrar este grupo en la pasarela. Inténtalo de nuevo.',
+    missing: 'Este chat de grupo ya no existe.'
   },
   sharedMetrics: esSharedMetrics,
   firstRun: esFirstRun,
@@ -312,6 +312,28 @@ export const esOverrides = {
     }
   },
   sessionImport: {
+    hostCapabilityChecking: 'Comprobando qué puede ejecutar este host…',
+    hostCapabilityUnknown:
+      'Este gateway es anterior a la comprobación de capacidades del host, así que las sesiones vinculadas siguen siendo de solo lectura aquí.',
+    hostCapabilityError: 'No se pudo comprobar qué puede ejecutar este host.',
+    hostCapabilityAvailable: (label: string) => `${label} está disponible aquí`,
+    hostCapabilityStore: (label: string, host: string) =>
+      `No hay un almacén de sesiones de ${label} legible en ${host}.`,
+    hostCapabilityCli: (label: string, host: string) => `${label} no está instalado en ${host}.`,
+    hostCapabilityBuild: (label: string) => `Este gateway aún no puede continuar hilos de ${label}.`,
+    hostCapabilityReadOnly: (label: string) =>
+      `El envío es de solo lectura en esta compilación: aún no puede añadir turnos a hilos de ${label}.`,
+    hostCapabilityWritable: (label: string) =>
+      `Los mensajes nuevos se añaden a este hilo de ${label} en el host y son visibles para ${label} allí.`,
+    codexThreads: 'Abrir un hilo de Codex',
+    codexThreadsHelp: 'Continúa la misma conversación de Codex en Hermes.',
+    codexHandoff: 'Cierra el hilo en otros clientes antes de continuar aquí.',
+    codexCallbacksWarning:
+      'Esta sesión vinculada no puede restaurar las herramientas definidas por el cliente Codex original, incluidos los callbacks de delegación de Hermes. Las llamadas a esas herramientas se rechazarán o fallarán de forma segura.',
+    codexLink: 'Abrir hilo vinculado',
+    codexLinking: 'Abriendo hilo…',
+    codexLinkError: 'No se pudo abrir este hilo de Codex.',
+    codexNoThreads: 'No se encontraron hilos de Codex',
     title: 'Continuar desde otra app',
     subtitle: 'Trae una conversación a Hermes y retómala donde la dejaste.',
     action: 'Importar sesión',
@@ -2402,12 +2424,15 @@ export const esOverrides = {
         enabledTitle: 'Navegación con perfil real activada',
         enabledMessage: 'Las sesiones nuevas navegarán con una instantánea de tu perfil predeterminado del navegador.',
         disabledTitle: 'Navegación con perfil real desactivada',
-        disabledMessage: 'Se eliminará la instantánea del perfil y se cerrará su sesión en el navegador integrado; las sesiones nuevas usan un navegador limpio.',
+        disabledMessage:
+          'Se eliminará la instantánea del perfil y se cerrará su sesión en el navegador integrado; las sesiones nuevas usan un navegador limpio.',
         failedSave: 'No se pudo guardar el ajuste del perfil real',
         reimportSignins: 'Volver a importar inicios de sesión',
         signinsImportedTitle: 'Inicios de sesión del navegador integrado',
-        signinsImported: count => `Se inició sesión en el navegador integrado con ${count} cookie${count === 1 ? '' : 's'} de tu perfil del navegador.`,
-        signinsRemote: 'Este backend se ejecuta en otro equipo, así que su perfil del navegador no se importa al navegador integrado.',
+        signinsImported: count =>
+          `Se inició sesión en el navegador integrado con ${count} cookie${count === 1 ? '' : 's'} de tu perfil del navegador.`,
+        signinsRemote:
+          'Este backend se ejecuta en otro equipo, así que su perfil del navegador no se importa al navegador integrado.',
         signinsFailed: 'No se pudieron importar los inicios de sesión al navegador integrado',
         prompt: {
           title: 'Mantén la sesión iniciada en tus sitios',
@@ -3005,7 +3030,8 @@ export const esOverrides = {
     relayLink: {
       title: 'Team Gateway',
       badge: 'Sin token de bot',
-      intro: (platform: string) => `${platform} llega a este agente a través del bot compartido de Hermes. Vincula tu cuenta de ${platform} y escribe al bot para hablar con tu agente.`,
+      intro: (platform: string) =>
+        `${platform} llega a este agente a través del bot compartido de Hermes. Vincula tu cuenta de ${platform} y escribe al bot para hablar con tu agente.`,
       link: (platform: string) => `Vincular ${platform}`,
       linkAnother: (platform: string) => `Vincular otra cuenta de ${platform}`,
       linkedAccounts: 'Cuentas vinculadas',
@@ -3023,10 +3049,12 @@ export const esOverrides = {
       refused: (platform: string) => `${platform} rechazó la vinculación. Pide un código nuevo e inténtalo otra vez.`,
       qrAlt: (platform: string) => `Código QR del bot compartido de ${platform}`,
       managed: 'Gestionado por Team Gateway',
-      managedNote: (platform: string) => `Team Gateway gestiona la mensajería en esta instancia, así que el gateway desactiva la conexión directa de ${platform} en cada inicio. Para usarla junto al relay, define GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true en el entorno del gateway (una conexión directa impide que la instancia escale a cero y puede entregar mensajes dos veces).`,
+      managedNote: (platform: string) =>
+        `Team Gateway gestiona la mensajería en esta instancia, así que el gateway desactiva la conexión directa de ${platform} en cada inicio. Para usarla junto al relay, define GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true en el entorno del gateway (una conexión directa impide que la instancia escale a cero y puede entregar mensajes dos veces).`,
       managedIntro: 'Las cuentas de este agente se vinculan desde Nous Portal.',
       openPortal: 'Vincular cuentas en Nous Portal',
-      noNewAccount: (platform: string) => `El código ya no está activo y no apareció ninguna cuenta nueva. Si tu cuenta de ${platform} no aparece, obtén un código nuevo e inténtalo otra vez.`
+      noNewAccount: (platform: string) =>
+        `El código ya no está activo y no apareció ninguna cuenta nueva. Si tu cuenta de ${platform} no aparece, obtén un código nuevo e inténtalo otra vez.`
     },
     telegramQr: {
       title: 'Elige cómo conectar tu bot de Telegram',
@@ -5249,6 +5277,34 @@ export const esOverrides = {
       outputAlt: 'Salida de herramienta',
       rawResponse: 'Respuesta sin procesar',
       copyActivity: 'Copiar actividad',
+      codexSubagentActivity: {
+        openTrace: 'Abrir la traza del subagente',
+        traceTitle: 'Traza del subagente de Codex',
+        traceDescription:
+          'Mensajes de solo lectura, resúmenes de razonamiento y actividad de herramientas de este subagente.',
+        traceUnavailable: 'Traza del subagente no disponible',
+        loading: 'Cargando traza…',
+        loadFailed: 'No se pudo cargar esta traza.',
+        retry: 'Reintentar',
+        close: 'Volver a la conversación',
+        backToParent: 'Volver a la traza principal',
+        empty: 'No se devolvieron entradas de la traza.',
+        waiting: 'Esperando la traza del subagente…',
+        updating: 'Actualizando la traza en vivo…',
+        assistantRole: 'Codex',
+        userRole: 'Solicitud',
+        systemRole: 'Sistema',
+        reasoningSummary: 'Resumen del razonamiento',
+        arguments: 'Argumentos',
+        result: 'Resultado',
+        unknownKind: 'Actividad',
+        kinds: {
+          started: 'Iniciado',
+          interacted: 'En actividad',
+          interrupted: 'Interrumpido',
+          completed: 'Completado'
+        }
+      },
       recoveredOne: 'Recuperado después de 1 paso fallido',
       recoveredMany: count => `Recuperado después de ${count} pasos fallidos`,
       failedOne: '1 paso falló',

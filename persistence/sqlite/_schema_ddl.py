@@ -194,6 +194,17 @@ CREATE TABLE IF NOT EXISTS sessions (
     FOREIGN KEY (system_prompt_hash) REFERENCES system_prompts(hash)
 );
 
+CREATE TABLE IF NOT EXISTS codex_linked_display_overlays (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    overlay_json TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (session_id, thread_id, turn_id)
+);
+CREATE INDEX IF NOT EXISTS idx_codex_linked_display_overlays_recent
+    ON codex_linked_display_overlays(session_id, thread_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL REFERENCES sessions(id),

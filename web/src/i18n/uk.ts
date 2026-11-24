@@ -174,6 +174,11 @@ export const uk: Translations = {
     selectedSessionsSkippedActive: "Видалено: {deleted}; залишено: {count}, бо хід ще виконується",
     failedToDeleteSelected: "Не вдалося видалити вибрані сесії",
     resumeInChat: "Продовжити в чаті",
+    linkedReadonlyBadge: "linked · read-only",
+    linkedReadonlyWarning:
+      "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript; new turns cannot be appended to the native session from the web dashboard.",
+    linkedResumeDisabled:
+      "Linked sessions are read-only in the web dashboard; open the conversation in the native app to continue it.",
     newChat: "Новий чат",
     workspace: "робоча папка",
     workspaceDefault: "За замовчуванням",

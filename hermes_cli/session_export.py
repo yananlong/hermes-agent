@@ -279,6 +279,16 @@ def to_legacy_export_dict(export: SessionExport | SessionLineageExport, *, sessi
     }
 
 
+def assert_linked_exports_unavailable(store: Any, session_ids: Iterable[str]) -> None:
+    """Refuse a batch before any output is written if it includes a native pointer."""
+    from persistence.conversation.sessions import is_linked_codex_config
+    from persistence.core.errors import LinkedCodexExportUnavailable
+    for session_id in session_ids:
+        row = store.sessions.get(session_id) if session_id else None
+        if row and is_linked_codex_config(row.model_config):
+            raise LinkedCodexExportUnavailable(row.session_id)
+
+
 def assert_exports_safe(store: Any, session_ids: Iterable[str], max_messages: Optional[int] = None) -> None:
     """``assert_export_safe`` for each id on *store* with the limit resolved once (``None`` reads
     ``sessions.max_export_messages``); 0 disables the guard without a read. The first session over the limit

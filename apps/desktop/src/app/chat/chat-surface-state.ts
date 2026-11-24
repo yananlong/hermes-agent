@@ -6,6 +6,10 @@ import type { DragKind } from './hooks/use-file-drop-zone'
 import { composerStaysMounted } from './thread-loading'
 
 interface ShowChatBarOptions {
+  /** True when the surface's session is a linked foreign (Codex / Claude /
+   *  Mistral) pointer row: the transcript is read-only, so there is nothing
+   *  to compose into. */
+  linkedReadOnly: boolean
   loadingSession: boolean
   resumeExhausted: boolean
   routedSessionId: null | string
@@ -20,6 +24,7 @@ interface ShowChatBarOptions {
 // (periodic list/status refresh, hydrate through an empty frame) must not
 // unmount it again — see composerStaysMounted (#117375).
 export function useShowChatBar({
+  linkedReadOnly,
   loadingSession,
   resumeExhausted,
   routedSessionId,
@@ -34,7 +39,7 @@ export function useShowChatBar({
   }
 
   return composerStaysMounted({
-    hideComposer: resumeExhausted || isWatchWindow(),
+    hideComposer: linkedReadOnly || resumeExhausted || isWatchWindow(),
     loadingSession,
     routedSessionId,
     settledRoutedSessionId: settledRoutedSessionRef.current

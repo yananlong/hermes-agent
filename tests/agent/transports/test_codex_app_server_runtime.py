@@ -112,7 +112,6 @@ class TestCodexAppServerClose:
         """
         import os
         import stat
-        import sys
         import time
 
         import psutil
@@ -387,4 +386,198 @@ class TestSpawnEnvSecretStripping:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-codex-needs-this")
         env = self._capture_spawn_env(monkeypatch)
         assert env.get("OPENAI_API_KEY") == "sk-codex-needs-this"
+
+    def test_routed_profile_uses_its_credentials_and_codex_home(self, monkeypatch, tmp_path):
+        """A routed profile's Codex child must not inherit launch-profile secrets/settings."""
+        import os
+        import subprocess
+        import threading
+        from agent.transports import codex_app_server as cas
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        captured = {}
+
+        class FakePopen:
+            def __init__(self, cmd, *args, **kwargs):
+                captured["env"] = kwargs.get("env", {}).copy()
+                self.stdin = self.stdout = self.stderr = None
+                self.pid = 1
+                self.returncode = None
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        launch_home = tmp_path / "launch-profile"
+        target_home = tmp_path / "target-profile"
+        os_home = tmp_path / "os-home"
+        launch_home.mkdir()
+        target_home.mkdir()
+        os_home.mkdir()
+        (launch_home / ".env").write_text(
+            "OPENAI_API_KEY=launch-dotenv-key\nGH_TOKEN=launch-github-token\n"
+        )
+        (target_home / ".env").write_text(
+            f"OPENAI_API_KEY=target-profile-key\nCODEX_HOME={target_home / 'codex'}\n"
+        )
+
+        monkeypatch.setattr(subprocess, "Popen", FakePopen)
+        monkeypatch.setattr(threading.Thread, "start", lambda _self: None)
+        monkeypatch.setenv("HOME", str(os_home))
+        monkeypatch.setenv("HERMES_HOME", str(launch_home))
+        # Simulate a supervisor-injected launch value that is not named by the launch .env file.
+        monkeypatch.setenv("CODEX_HOME", str(launch_home / "supervisor-codex"))
+        monkeypatch.setenv("OPENAI_API_KEY", "launch-supervisor-key")
+        monkeypatch.setenv("GH_TOKEN", "launch-supervisor-token")
+
+        home_token = set_hermes_home_override(str(target_home))
+        try:
+            client = cas.CodexAppServerClient(codex_bin="codex")
+            client._closed = True
+        finally:
+            reset_hermes_home_override(home_token)
+
+        env = captured["env"]
+        assert env["OPENAI_API_KEY"] == "target-profile-key"
+        assert "GH_TOKEN" not in env
+        assert env["CODEX_HOME"] == str(target_home / "codex")
+        assert env["HOME"] == str(os_home)
+
+    def test_routed_profile_without_codex_home_fails_closed(self, monkeypatch, tmp_path):
+        """A routed secondary cannot read the launch user's shared Codex history."""
+        import os
+        import subprocess
+        from agent.transports import codex_app_server as cas
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        launch_home = tmp_path / "launch-profile"
+        target_home = tmp_path / "target-profile"
+        os_home = tmp_path / "os-home"
+        launch_home.mkdir()
+        target_home.mkdir()
+        os_home.mkdir()
+        (launch_home / ".env").write_text("CODEX_HOME=launch-dotenv-codex\n")
+        (target_home / ".env").write_text("OPENAI_API_KEY=target-profile-key\n")
+
+        def unexpected_spawn(*_args, **_kwargs):
+            pytest.fail("Codex app-server must not spawn without a routed profile CODEX_HOME")
+
+        monkeypatch.setattr(subprocess, "Popen", unexpected_spawn)
+        monkeypatch.setenv("HOME", str(os_home))
+        monkeypatch.setenv("HERMES_HOME", str(launch_home))
+        monkeypatch.setenv("CODEX_HOME", str(launch_home / "supervisor-codex"))
+        monkeypatch.setenv("OPENAI_API_KEY", "launch-supervisor-key")
+
+        home_token = set_hermes_home_override(str(target_home))
+        try:
+            with pytest.raises(ValueError, match="configure its own CODEX_HOME"):
+                cas.CodexAppServerClient(codex_bin="codex")
+        finally:
+            reset_hermes_home_override(home_token)
+
+    def test_launch_profile_without_codex_home_keeps_shared_default(self, monkeypatch, tmp_path):
+        """Only the profile that launched Hermes retains the legacy shared home by default."""
+        import os
+        import subprocess
+        import threading
+        from agent.transports import codex_app_server as cas
+
+        captured = {}
+
+        class FakePopen:
+            def __init__(self, cmd, *args, **kwargs):
+                captured["env"] = kwargs.get("env", {}).copy()
+                self.stdin = self.stdout = self.stderr = None
+                self.pid = 1
+                self.returncode = None
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        launch_home = tmp_path / "launch-profile"
+        os_home = tmp_path / "os-home"
+        launch_home.mkdir()
+        os_home.mkdir()
+        monkeypatch.setattr(subprocess, "Popen", FakePopen)
+        monkeypatch.setattr(threading.Thread, "start", lambda _self: None)
+        monkeypatch.setenv("HOME", str(os_home))
+        monkeypatch.setenv("HERMES_HOME", str(launch_home))
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+
+        client = cas.CodexAppServerClient(codex_bin="codex")
+        client._closed = True
+
+        assert captured["env"]["CODEX_HOME"] == str(os_home / ".codex")
+        assert captured["env"]["HOME"] == str(os_home)
+
+    def test_read_only_client_uses_explicit_codex_home_and_strips_all_credentials(self, monkeypatch, tmp_path):
+        import subprocess
+        import threading
+        from agent.transports import codex_app_server as cas
+
+        captured = {}
+
+        class FakePopen:
+            def __init__(self, cmd, *args, **kwargs):
+                captured["cmd"] = list(cmd)
+                captured["env"] = kwargs.get("env", {}).copy()
+                self.stdin = self.stdout = self.stderr = None
+                self.pid = 1
+                self.returncode = None
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        monkeypatch.setattr(subprocess, "Popen", FakePopen)
+        monkeypatch.setattr(threading.Thread, "start", lambda _self: None)
+        client = cas.CodexAppServerClient(
+            codex_bin="codex",
+            codex_home=str(tmp_path / "profile-codex"),
+            base_env={
+                "HOME": str(tmp_path), "HERMES_HOME": str(tmp_path / "profile"),
+                "CODEX_HOME": str(tmp_path / "launch-codex"),
+                "OPENAI_API_KEY": "provider-secret", "GH_TOKEN": "github-secret",
+                "HERMES_KANBAN_TASK": "task-secret", "HERMES_KANBAN_DB": str(tmp_path / "board.db"),
+            },
+            inherit_credentials=False, read_only=True,
+        )
+        client._closed = True
+
+        env = captured["env"]
+        assert env["CODEX_HOME"] == str(tmp_path / "profile-codex")
+        assert env["HERMES_HOME"] == str(tmp_path / "profile")
+        assert not {"OPENAI_API_KEY", "GH_TOKEN", "HERMES_KANBAN_TASK", "HERMES_KANBAN_DB"} & env.keys()
+        assert captured["cmd"] == ["codex", "app-server"]
+
+    def test_read_only_client_rejects_credential_overlay(self):
+        from agent.transports.codex_app_server import CodexAppServerClient
+
+        with pytest.raises(ValueError, match="cannot inherit or overlay credentials"):
+            CodexAppServerClient(read_only=True, inherit_credentials=False, env={"OPENAI_API_KEY": "secret"})
 

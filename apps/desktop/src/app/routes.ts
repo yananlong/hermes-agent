@@ -13,6 +13,9 @@ export const NEW_CHAT_ROUTE = '/'
 export const SETTINGS_ROUTE = '/settings'
 export const COMMAND_CENTER_ROUTE = '/command-center'
 export const SESSION_IMPORT_ROUTE = '/session-import'
+export const SESSION_IMPORT_CODEX_ROUTE = `${SESSION_IMPORT_ROUTE}?view=codex`
+export const SESSION_IMPORT_CLAUDE_ROUTE = `${SESSION_IMPORT_ROUTE}?view=claude`
+export const SESSION_IMPORT_MISTRAL_ROUTE = `${SESSION_IMPORT_ROUTE}?view=mistral`
 export const CAPABILITIES_ROUTE = '/capabilities'
 export const MESSAGING_ROUTE = '/messaging'
 export const WEBHOOKS_ROUTE = '/webhooks'

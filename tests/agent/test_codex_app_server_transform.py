@@ -51,3 +51,39 @@ def test_codex_reply_is_rewritten_before_it_is_returned_or_stored():
     assert [m["content"] for m in result["messages"] if m["role"] == "assistant"] == [REWRITE]
     # External memory keeps the reply the user got, not the text the plugin removed.
     assert agent._sync_external_memory_for_turn.call_args.kwargs["final_response"] == REWRITE
+
+
+def test_linked_overlay_keeps_live_surface_filter_and_held_visibility_after_reload(monkeypatch):
+    from agent.codex_runtime import _persist_linked_codex_display, _transform_codex_reply
+
+    calls = []
+    monkeypatch.setattr("agent.turn_finalizer._invoke_hook_safely",
+                        lambda _name, _logger, **payload: calls.append(payload) or
+                        (["local-only safe reply"] if payload["platform"] == "local" else []))
+    agent = SimpleNamespace(
+        _hold_stream=True, _held_transforms=(), _llm_output_transform=None,
+        session_id="linked-session", model="codex-model", platform="local",
+    )
+    turn = SimpleNamespace(
+        final_text="raw native answer", interrupted=False,
+        projected_messages=[
+            {"role": "assistant", "content": "private interim commentary"},
+            {"role": "assistant", "content": "raw native answer"},
+        ],
+    )
+    reply = _transform_codex_reply(agent, turn, "native-turn-id")
+    assert reply["final_response"] == "local-only safe reply"
+    assert calls[0]["platform"] == "local"
+    assert turn.projected_messages[0]["display_kind"] == "hidden"
+    assert turn.projected_messages[1]["content"] == "local-only safe reply"
+
+    saved = []
+    agent._session_db = object()
+    agent.persistence = SimpleNamespace(read_only=False)
+    monkeypatch.setattr("hermes_cli.codex_linked_history.persist_linked_turn_display",
+                        lambda _db, **kwargs: saved.append(kwargs) or True)
+    _persist_linked_codex_display(agent,
+                                  SimpleNamespace(thread_id="native-thread", turn_id="native-turn-id"), reply)
+    assert saved == [{"session_id": "linked-session", "thread_id": "native-thread",
+                      "turn_id": "native-turn-id", "final_text": "local-only safe reply",
+                      "held": True, "platform": "local"}]

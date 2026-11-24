@@ -57,6 +57,9 @@ def cold_review_parent(runner, source, session_key, session_id):
     from gateway.session_policy import policy_for_source, policy_scope, policy_turn_toolsets
     from gateway.session_worker_construct import session_prefill, session_routing
     from run_agent import AIAgent
+    store = getattr(runner, "persistence", None)
+    from gateway.session_linked_codex import linked_session_cwd
+    linked_cwd = linked_session_cwd(store, session_id)
     policy = policy_for_source(runner, source)
     authority = active_authority(runner) if policy else None
     user_config = policy.config(authority, secrets=False) if policy else _load_gateway_config()
@@ -86,7 +89,8 @@ def cold_review_parent(runner, source, session_key, session_id):
             provider_sort=pr.get("sort"), provider_require_parameters=pr.get("require_parameters", False),
             provider_data_collection=pr.get("data_collection"),
             session_id=session_id, platform=platform_key, gateway_session_key=session_key,
-            persistence=getattr(runner, "persistence", None),
+            persistence=store,
+            **({"cwd": linked_cwd} if linked_cwd is not None else {}),
             # The session's backup providers, as its next turn would carry them: the reviewer inherits the chain.
             fallback_model=None if api_runtime_locked() else runner._refresh_fallback_model(),
             # The reviewer reads the transcript excerpt; this agent never runs a turn of its own.

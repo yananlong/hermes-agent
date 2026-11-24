@@ -172,6 +172,11 @@ export const zh: Translations = {
     selectedSessionsSkippedActive: "已删除 {deleted} 个；{count} 个因仍有回合运行中而保留",
     failedToDeleteSelected: "删除所选会话失败",
     resumeInChat: "在对话中继续",
+    linkedReadonlyBadge: "linked · read-only",
+    linkedReadonlyWarning:
+      "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript; new turns cannot be appended to the native session from the web dashboard.",
+    linkedResumeDisabled:
+      "Linked sessions are read-only in the web dashboard; open the conversation in the native app to continue it.",
     newChat: "新对话",
     workspace: "工作区",
     workspaceDefault: "默认",

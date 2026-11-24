@@ -732,10 +732,13 @@ class CLISessionMixin:
         _db = getattr(self, "_session_db", None)
         _sid = getattr(self, "session_id", None)
         if _db and _sid:
-            from persistence.core.errors import ExportTooLarge
+            from persistence.core.errors import ExportTooLarge, LinkedCodexExportUnavailable
             try:
                 session_data = load_save_snapshot(_db, _sid, fmt, persistence=getattr(_db, "persistence", None))
             except ExportTooLarge as e:
+                print(f"(._.) {e}")
+                return
+            except LinkedCodexExportUnavailable as e:
                 print(f"(._.) {e}")
                 return
             except Exception:

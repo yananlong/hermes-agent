@@ -287,8 +287,12 @@ def _compress_session_history(
     if before_messages is None or history_version is None:
         with session["history_lock"]:
             before_messages, history_version = list(session.get("history", [])), int(session.get("history_version", 0))
-    if len(before_messages) < MIN_MESSAGES:
+    # Linked sessions may have an empty local mirror despite a long native history.
+    linked = _session_is_codex_linked(session)
+    if len(before_messages) < MIN_MESSAGES and not linked:
         return 0, _get_usage(agent)
+    if linked and (focus_topic or "").strip():
+        raise ValueError("Linked Codex threads support /compress without arguments")
     request = parse_compress_args(focus_topic or "")
     if request.aggressive:
         raise ValueError(AGGRESSIVE_UNSUPPORTED)

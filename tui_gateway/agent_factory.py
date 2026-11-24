@@ -115,6 +115,9 @@ def _row_follows_profile(row: dict | None) -> bool:
     the legacy fallback for rows written before the marker existed."""
     if not row:
         return False
+    from persistence.conversation.sessions import is_linked_codex_config
+    if is_linked_codex_config(row.get("model_config")):
+        return False
     model_config = _parse_model_config(row.get("model_config"), quiet=True)
     return bool(model_config.get("follow_profile_config") or str(row.get("title") or "").strip() == "Bot Chat")
 

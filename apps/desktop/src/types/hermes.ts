@@ -558,6 +558,14 @@ export interface SessionCreateResponse {
 
 export interface SessionInfo {
   archived?: boolean
+  /** True for a linked Claude Code session (read-only pointer row); mirrors
+   *  {@link codex_linked} — permits the cold-session workspace picker and the
+   *  read-only chat treatment. Undefined against backends predating the flag. */
+  claude_linked?: boolean
+  /** True for a linked Mistral Vibe session (read-only pointer row); same treatment. */
+  mistral_linked?: boolean
+  /** True for a linked Codex thread; permits the cold-session workspace picker. */
+  codex_linked?: boolean
   cwd?: null | string
   /** Git branch checked out in {@link cwd} when the session started/resumed.
    *  The sidebar groups main-checkout sessions by this so feature-branch work

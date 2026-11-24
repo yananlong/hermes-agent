@@ -87,6 +87,8 @@ def admit_session_input(holder, *, epoch: int, principal_id: str, session_id: st
                 check_replaced_input(conn, replaces.admission_id,
                                      replacement_binding(principal_id, session_id, request_id))
             return _row(old), False
+        from ._native_codex_compaction import require_native_codex_compaction_clear
+        require_native_codex_compaction_clear(conn, (session_id,))
         queued = conn.execute('''SELECT COUNT(*) FROM session_admissions WHERE target_session_id=?
             AND status='queued' ''', (session_id,)).fetchone()[0]
         # Main's cap holds in both states: a FIFO paused behind an unknown turn runs every accepted
@@ -158,6 +160,8 @@ def claim_session_input(holder, *, epoch: int, session_id: str, gate=None, head=
     while queued."""
     def write(conn):
         _epoch(conn, epoch)
+        from ._native_codex_compaction import require_native_codex_compaction_clear
+        require_native_codex_compaction_clear(conn, (session_id,))
         raise_gate(gate)
         session = _session(conn, session_id)
         blocked = conn.execute("SELECT status FROM session_admissions WHERE target_session_id=? AND status IN ('started','unknown')", (session_id,)).fetchall()

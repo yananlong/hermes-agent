@@ -98,6 +98,19 @@ import { ptyAttachToken } from "@/lib/pty-attach-token";
 import { refitWhenTerminalFontLoads } from "@/lib/terminal-font-refit";
 import { useEmbeddedTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { generateChannelId } from "@/lib/chat-channel-id";
+import {
+  agentDisplayName,
+  capabilityHost,
+  isHostWritable,
+  storeBlockedReason,
+} from "@/lib/foreign-capability";
+import { useForeignCapability } from "@/lib/use-foreign-capability";
+import {
+  linkedForeignAgent,
+  linkedResumeBlocked as linkedResumeBlockedFor,
+  type LinkedForeignAgent,
+  type LinkedResumeCheck,
+} from "@/lib/linked-session";
 import { sendCopyLastCommand } from "@/lib/chat-copy-last";
 import { isUserInitiatedTerminalInput } from "@/lib/learn-handoff";
 import { useLearnHandoff } from "@/lib/use-learn-handoff";
@@ -363,6 +376,73 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const externalChannel = useMemo(() => generateChannelId(byotParam ?? ""), [byotParam]);
   const channel = byotParam ? externalChannel : embeddedChannel;
   const learnHandoff = useLearnHandoff(isActive, channel);
+  // Linked foreign sessions (Codex / Claude / Mistral pointer rows) must never
+  // be spawned into a PTY here: the native tool owns their transcript, so a
+  // `?resume=<linked id>` target has nothing for a terminal to attach to. The
+  // check is a SINGLE-SESSION lookup (`GET /api/sessions/{id}`, which now
+  // stamps the same `*_linked` markers as the list), not the paged list — a
+  // linked row outside the first page, or any list error, used to read as an
+  // ordinary session and could still be resumed into a PTY.
+  //
+  // The answer is TRI-STATE and fails CLOSED: `verified` is only true when the
+  // gateway answered for this exact id. A 404 is definitive (no such stored
+  // row, so it cannot be a pointer → the ordinary resume path stays
+  // available); any other failure means we cannot prove the row is not a
+  // pointer, so no terminal is spawned for it.
+  const [linkedResumeCheck, setLinkedResumeCheck] = useState<LinkedResumeCheck | null>(null);
+  useEffect(() => {
+    // No resume target: nothing to check. The stale check stays keyed to its
+    // old id, so a later resume target reads as "pending" until its own
+    // lookup lands (see linkedResumeCheckPending below).
+    if (!resumeParam) return;
+    let cancelled = false;
+    api
+      .getSessionDetail(resumeParam, scopedProfile)
+      .then((row) => {
+        if (cancelled) return;
+        setLinkedResumeCheck({ id: resumeParam, agent: linkedForeignAgent(row), verified: true });
+      })
+      .catch((err: unknown) => {
+        const status = (err as { status?: number } | null)?.status ?? 0;
+        if (!cancelled) {
+          setLinkedResumeCheck({ id: resumeParam, agent: null, verified: status === 404 });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeParam, scopedProfile]);
+  const linkedResumeUnverified = Boolean(
+    resumeParam && linkedResumeCheck?.id === resumeParam && !linkedResumeCheck.verified,
+  );
+  // One definition of the gate (web/src/lib/linked-session.ts): it fails CLOSED on a pending or
+  // failed lookup, so no PTY is ever spawned on a row we could not prove is an ordinary session.
+  const linkedResumeBlocked = linkedResumeBlockedFor(linkedResumeCheck, resumeParam);
+  // True while the linked-flag lookup for the current resume target is still
+  // in flight — the PTY effect waits for it so a linked row is never spawned
+  // before its flag arrives.
+  const linkedResumeCheckPending = Boolean(
+    resumeParam && linkedResumeCheck?.id !== resumeParam,
+  );
+  // The linked row itself lives on the gateway host, so the dashboard asks THAT
+  // host what it can serve (`session.foreign.status`) instead of assuming. An
+  // older gateway answers -32601 → undefined, and every line below keeps the
+  // read-only copy it had before this capability existed.
+  const linkedAgent =
+    linkedResumeBlocked && linkedResumeCheck?.agent ? linkedResumeCheck.agent : null;
+  const linkedResumeUnverifiedNote =
+    linkedResumeUnverified && !linkedAgent ? t.sessions.linkedResumeUnverified : null;
+  const linkedCapability = useForeignCapability(Boolean(linkedAgent), scopedProfile);
+  let linkedCapabilityNote: string | null = null;
+  if (linkedAgent) {
+    const linkedAgentLabel = agentDisplayName(linkedAgent);
+    const linkedHost = capabilityHost(linkedCapability) ?? t.sessions.linkedHostUnnamed;
+    if (storeBlockedReason(linkedCapability, linkedAgent)) {
+      linkedCapabilityNote = t.sessions.linkedHostStore(linkedAgentLabel, linkedHost);
+    } else if (isHostWritable(linkedCapability, linkedAgent)) {
+      linkedCapabilityNote = t.sessions.linkedHostWritable(linkedAgentLabel);
+    }
+  }
   const titleScope = `${channel}\0${reconnectNonce}`;
   const sessionTitle =
     sessionTitleState.scope === titleScope ? sessionTitleState.title : null;
@@ -504,6 +584,13 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     // mounted, hidden ChatPage from opening `/api/pty` on every dashboard
     // page. Sticky, so switching away from /chat keeps the PTY alive.
     if (!hasActivated) return;
+
+    // Linked foreign sessions (Codex / Claude / Mistral pointer rows) are
+    // read-only here: never spawn a PTY resuming one, and while the flag
+    // lookup for the current resume target is still in flight, wait for it
+    // rather than racing a linked row into a fresh terminal. The render path
+    // shows a read-only notice instead.
+    if (linkedResumeBlocked || linkedResumeCheckPending) return;
 
     const host = hostRef.current;
     if (!host) return;
@@ -1608,6 +1695,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     byotParam,
     scopedProfile,
     reconnectNonce,
+    linkedResumeBlocked,
+    linkedResumeCheckPending,
   ]);
 
   // NS-434 follow-up: attach the visualViewport keyboard-inset listeners
@@ -1789,7 +1878,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         mobilePanelOpen={mobilePanelOpen} closeMobilePanel={closeMobilePanel} modelToolsLabel={modelToolsLabel}
         channel={channel} scopedProfile={scopedProfile} startFreshDashboardChat={startFreshDashboardChat}
         handleSessionTitleChange={handleSessionTitleChange} resumeParam={resumeParam}
-        workspaceCwd={workspaceCwd} setWorkspaceCwd={setWorkspaceCwd} />
+        workspaceCwd={workspaceCwd} setWorkspaceCwd={setWorkspaceCwd} readOnly={linkedResumeBlocked} />
 
       {visibleBanner && (
         <div
@@ -1869,6 +1958,31 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
               <div className="max-w-[min(28rem,calc(100vw-3rem))] border border-current/30 bg-black/80 px-4 py-3 text-center text-xs tracking-wide text-white/85 shadow-lg">
                 {PTY_RESUME_LOADING_MESSAGE}
               </div>
+            </div>
+          )}
+
+          {/* Linked foreign sessions (Codex / Claude / Mistral pointer rows)
+              get no PTY — a pointer row has no Hermes transcript for one to
+              attach to — and neither does a resume target the gateway could
+              not confirm (fail closed). */}
+          {linkedResumeBlocked && (
+            <div
+              role="alert"
+              className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/70 p-4"
+            >
+              <div className="max-w-[min(32rem,calc(100vw-3rem))] text-center text-sm tracking-wide text-white/85">
+                {linkedAgent ? t.sessions.linkedReadonlyWarning : linkedResumeUnverifiedNote}
+                {linkedCapabilityNote && (
+                  <span className="mt-2 block text-xs text-white/70">{linkedCapabilityNote}</span>
+                )}
+              </div>
+              <Button
+                onClick={startFreshDashboardChat}
+                prefix={<RotateCcw className="h-4 w-4" />}
+                aria-label={t.sessions.newChat}
+              >
+                {t.sessions.newChat}
+              </Button>
             </div>
           )}
 
@@ -1960,6 +2074,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
               <ChatSidebar
                 channel={channel}
                 profile={scopedProfile}
+                readOnly={linkedResumeBlocked}
                 onDashboardNewSessionRequest={startFreshDashboardChat}
                 onSessionTitleChange={handleSessionTitleChange}
               />

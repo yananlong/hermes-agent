@@ -13,6 +13,15 @@ export const jaConnectors = {
     }
   },
   sessionImport: {
+    codexThreads: 'Codexスレッドを開く',
+    codexThreadsHelp: '同じCodexの会話をHermesで続けます。',
+    codexHandoff: 'ここで続ける前に、他のクライアントでスレッドを閉じてください。',
+    codexCallbacksWarning:
+      'このリンク済みセッションでは、元のCodexクライアントが提供したクライアント定義ツール（Hermesの委任コールバックを含む）を復元できません。これらのツールへの呼び出しは拒否されるか、安全に失敗します。',
+    codexLink: 'リンクしたスレッドを開く',
+    codexLinking: 'スレッドを開いています…',
+    codexLinkError: 'このCodexスレッドを開けませんでした。',
+    codexNoThreads: 'Codexスレッドが見つかりません',
     title: '別のアプリから続ける',
     subtitle: '会話をHermesに取り込み、続きを始めましょう。',
     action: 'セッションを取り込む',

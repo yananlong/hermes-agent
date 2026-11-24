@@ -9,6 +9,7 @@ import json
 import math
 from typing import Any, Optional
 
+from persistence.conversation.sessions import is_linked_codex_config
 from persistence.core.conventions import stored_instant
 from persistence.housekeeping.maintenance import (
     IMPORT_MAX_MESSAGES_PER_SESSION,
@@ -170,6 +171,11 @@ def _normalize_import_session(raw: dict[str, Any], session_id: str, messages: li
     clean_session = dict(raw)
     clean_session["id"] = session_id
     clean_session["model_config"] = _import_json_object_or_none(clean_session.get("model_config"), "model_config")
+    if is_linked_codex_config(clean_session["model_config"]):
+        raise ValueError(
+            "linked Codex sessions cannot be imported because snapshots omit their native history. "
+            "Open the thread in Codex and use 'Link from Codex' in the destination profile."
+        )
     for field in ("parent_session_id", *IMPORT_SESSION_TEXT_FIELDS):
         clean_session[field] = _import_text_or_none(clean_session.get(field), field)
     started_at = clean_session.get("started_at")

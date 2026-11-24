@@ -487,6 +487,14 @@ def _archived_user_turns(session, sid, history, cut_index, survivor_ids) -> int:
 def _truncate_history_for_submit(rid, sid, session, params, requested_rebind_ids):
     """Rewind/regenerate cut under ``history_lock``: ``(err, survivor_fields)``; the fields
     are the client rowId-rebind payload."""
+    # A rewind/regenerate on a pointer row would rewrite a transcript the native tool owns and
+    # leave the two copies disagreeing: refuse for EVERY linked agent, not just Codex.
+    from hermes_cli.foreign_linked_store import linked_foreign_kind, linked_foreign_label
+    with _session_db(session) as db, _persistence_for(db) as store:
+        if store is None:
+            return _err(rid, 5008, "session database is unavailable"), {}
+        if kind := linked_foreign_kind(store, session.get("session_key") or sid):
+            return _err(rid, 4008, f"Editing or regenerating a linked {linked_foreign_label(kind)} thread is not supported"), {}
     history = _history_without_ephemeral_scaffolding(session.get("history", []))
     resolved = _resolve_truncation_ordinal(rid, sid, session, params, history)
     ordinal, cut_index, err = resolved[0], resolved[1], resolved[2]
@@ -848,6 +856,65 @@ def _claim_submit_turn(
     return err, fields
 
 
+def _linked_foreign_submit_refusal(rid, session: dict):
+    """Clean JSON-RPC refusal for prompt.submit on a linked foreign pointer row, else None.
+
+    A session whose row's ``model_config`` carries codex_linked_thread / claude_linked_thread /
+    mistral_linked_thread is a pointer: the native tool owns the transcript, so an admitted send is
+    the one the turn path can APPEND to that native thread (Codex app-server ``turn/start`` for
+    Codex, ``agent/linked_foreign_turn.py`` for Claude Code / Vibe). Detection reads the row's
+    linked flags directly (all three agents) and tolerates duck-typed db doubles. Checked before
+    any state changes so a refusal leaves the session untouched.
+
+    The verdict itself lives in ``hermes_cli/linked_send_admission.py`` so
+    ``session.foreign.status`` reports the same answer this path enforces: a client told
+    "read-only" cannot send, and one told "writable" is not refused here. All three agents are
+    currently admitted, so this only refuses an agent a future build loses its append path for.
+    """
+    from hermes_cli.linked_send_admission import linked_send_refusal
+    from persistence.conversation.sessions import (
+        LINKED_FOREIGN_FLAGS, is_linked_foreign_config, parse_model_config)
+    key = str(session.get("session_key") or "")
+    if not key:
+        return None
+    try:
+        with _session_db(session) as db:
+            # No readable row -> cannot be a linked pointer; the store-unavailable case is
+            # already refused loudly later by the persist path (5072), so fail open here.
+            if db is None:
+                return None
+            get_session = getattr(db, "get_session", None)
+            if callable(get_session):
+                row = get_session(key)
+                raw_config = row.get("model_config") if isinstance(row, dict) else None
+            else:
+                # Persistence handles expose the sessions repository (record with a
+                # model_config attribute) instead of SessionDB.get_session.
+                getter = getattr(getattr(db, "sessions", None), "get", None)
+                record = getter(key) if callable(getter) else None
+                raw_config = getattr(record, "model_config", None) if record is not None else None
+    except Exception:
+        logger.warning("prompt.submit: linked-row check failed for session %s", key, exc_info=True)
+        return None
+    if not is_linked_foreign_config(raw_config):
+        return None
+    config = parse_model_config(raw_config)
+    agent = next(
+        (flag.removesuffix("_linked_thread")
+         for flag in LINKED_FOREIGN_FLAGS if config.get(flag) is True),
+        "foreign",
+    )
+    refusal = linked_send_refusal(agent)
+    if refusal is None:
+        return None
+    logger.warning("prompt.submit: REFUSED send on linked %s session %s (read-only pointer row).",
+                   agent, key)
+    # ``reason`` is the desktop's error-card key for exactly this refusal (error-surface.ts
+    # maps it to a "continue it in the native app" card instead of a generic gateway error).
+    return _err(rid, 4008, refusal,
+                data={"linked_agent": agent, "reason": "linked_session_read_only"})
+
+
 # Per-turn client surfaces that carry a model-bound note (session_notifications._hud_surface_note);
 # the canonical admission path shares the same set (gateway.session_surface).
 from gateway.session_surface import SURFACES as _CLIENT_SURFACES
@@ -877,6 +944,10 @@ def _(rid, params: dict) -> dict:
     session, err = _sess_nowait(params, rid)
     if err:
         return err
+    if (linked_refusal := _linked_foreign_submit_refusal(rid, session)) is not None:
+        # An agent this build cannot append to is refused before the busy queue, db row and agent
+        # build, so nothing starts on (or beside) the native thread.
+        return linked_refusal
     from tools.bot_relay import DeliveryAuthor
 
     # Only the relay handler can build a DeliveryAuthor. A dict here is a client claiming a sender.
