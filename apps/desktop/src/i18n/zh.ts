@@ -29,9 +29,9 @@ import { zhUpdateChannel } from './zh_update_channel'
 
 export const zhOverrides = {
   gatewayGroupOpen: {
-    opening: "正在打开群聊…",
-    lookupFailed: "无法在网关上查找此群组，请重试。",
-    missing: "此群聊已不存在。"
+    opening: '正在打开群聊…',
+    lookupFailed: '无法在网关上查找此群组，请重试。',
+    missing: '此群聊已不存在。'
   },
   catalog: zhCatalog,
   externalOpenFailed: {
@@ -45,6 +45,15 @@ export const zhOverrides = {
   intro: introZh,
   connectors: zhConnectorCard,
   sessionImport: {
+    codexThreads: '打开 Codex 对话',
+    codexThreadsHelp: '在 Hermes 中继续同一个 Codex 对话。',
+    codexHandoff: '在此继续之前，请先在其他客户端中关闭此对话。',
+    codexCallbacksWarning:
+      '此关联会话无法恢复原 Codex 客户端提供的客户端定义工具，包括 Hermes 委派回调。对这些工具的调用会被拒绝或安全失败。',
+    codexLink: '打开关联对话',
+    codexLinking: '正在打开对话…',
+    codexLinkError: '无法打开此 Codex 对话。',
+    codexNoThreads: '未找到 Codex 对话',
     title: '从其他应用继续',
     subtitle: '将对话导入 Hermes，接着上次的进度继续。',
     action: '导入会话',
@@ -758,6 +767,9 @@ export const zhOverrides = {
       terminalFontPlaceholder: 'MesloLGS NF 或 CSS 字体栈',
       terminalFontPreview: '字形预览',
       terminalFontReset: '使用默认字体',
+      terminalFontSizeTitle: '终端字体大小',
+      terminalFontSizeDesc: '为用户和智能体终端设置 8 到 32 像素的文字大小。',
+      terminalFontSizeReset: '使用默认大小',
       chatFontTitle: '聊天字体',
       chatFontDesc: '为聊天及应用界面选择已安装的字体，适合 OpenDyslexic 等易读字体；留空则使用主题字体。',
       chatFontPlaceholder: 'OpenDyslexic 或 CSS 字体栈',
@@ -2529,7 +2541,8 @@ export const zhOverrides = {
     relayLink: {
       title: 'Team Gateway',
       badge: '无需机器人令牌',
-      intro: (platform: string) => `${platform} 通过共享的 Hermes 机器人连接到此智能体。关联你的 ${platform} 账号，然后给机器人发消息即可与智能体对话。`,
+      intro: (platform: string) =>
+        `${platform} 通过共享的 Hermes 机器人连接到此智能体。关联你的 ${platform} 账号，然后给机器人发消息即可与智能体对话。`,
       link: (platform: string) => `关联 ${platform}`,
       linkAnother: (platform: string) => `关联另一个 ${platform} 账号`,
       linkedAccounts: '已关联账号',
@@ -2547,10 +2560,12 @@ export const zhOverrides = {
       refused: (platform: string) => `${platform} 拒绝了关联。请获取新代码后重试。`,
       qrAlt: (platform: string) => `共享 ${platform} 机器人的二维码`,
       managed: '由 Team Gateway 管理',
-      managedNote: (platform: string) => `此实例的消息由 Team Gateway 承载，因此网关每次启动都会关闭 ${platform} 的直连。若要与中继同时使用，请在网关环境中设置 GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true（直连会使实例无法缩容到零，并可能重复投递消息）。`,
+      managedNote: (platform: string) =>
+        `此实例的消息由 Team Gateway 承载，因此网关每次启动都会关闭 ${platform} 的直连。若要与中继同时使用，请在网关环境中设置 GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true（直连会使实例无法缩容到零，并可能重复投递消息）。`,
       managedIntro: '此代理的账号在 Nous Portal 中关联。',
       openPortal: '在 Nous Portal 中关联账号',
-      noNewAccount: (platform: string) => `该代码已失效，且没有出现新账号。如果你的 ${platform} 账号不在列表中，请获取新代码后重试。`
+      noNewAccount: (platform: string) =>
+        `该代码已失效，且没有出现新账号。如果你的 ${platform} 账号不在列表中，请获取新代码后重试。`
     },
     telegramQr: {
       title: '选择连接 Telegram 机器人的方式',
@@ -3180,6 +3195,26 @@ export const zhOverrides = {
       unarchive: '取消归档',
       newWindow: '新窗口',
       openInTerminal: '在终端中打开',
+      useTerminalHandoff: '在此主机上使用终端…',
+      terminalHandoffTitle: '在 Hermes 主机的终端中恢复此聊天',
+      terminalHandoffInstructions:
+        '在你的电脑上打开 iTerm 或其他终端，使用你平常的 SSH 命令或 gcloud compute ssh 连接到同一台 Hermes 主机，然后在远程提示符中粘贴此命令。',
+      terminalHandoffOwnerWarning:
+        '先在浏览器 TUI 中按 Ctrl+D 或输入 /exit 退出此聊天，并等待它完全结束。关闭浏览器标签页只会断开连接，TUI 可能仍在占用会话。当前所有者仍在运行时，Hermes 会拒绝启动第二个 TUI。',
+      terminalHandoffShellLabel: 'Hermes 主机上的 Shell',
+      terminalHandoffLoginShell: 'SSH 登录 Shell',
+      terminalHandoffZsh: 'zsh（仅用于本次启动）',
+      terminalHandoffBash: 'bash（仅用于本次启动）',
+      terminalHandoffShellNote:
+        '请选择 Hermes 主机上已安装的 Shell。zsh 不会加载启动文件，以免显示首次运行设置提示，并会继承 SSH Shell 的 PATH。不会更改主机的登录 Shell 设置。',
+      terminalHandoffIdentityNote:
+        '请使用与 Webapp 相同的 Unix 账户和配置文件。此命令会在本次启动时设置 Webapp 使用的 Hermes 主目录，以打开同一个会话数据库。',
+      terminalHandoffPathNote: '命令要求远程 Shell 的 PATH 中包含 hermes。如有需要，请先将其安装目录添加到 PATH。',
+      terminalHandoffLoading: '正在加载 Hermes 主机设置…',
+      terminalHandoffLoadFailed: '无法加载 Hermes 主机设置。请重新登录后再次打开此对话框。',
+      terminalHandoffHomeUnsupported:
+        '此 Hermes 主目录路径无法在粘贴命令中安全引用。请让管理员使用不含引号或反斜杠的路径。',
+      terminalHandoffCopy: '复制恢复命令',
       hideTabBar: '隐藏标签栏',
       openInNewTab: '在新标签页中打开',
       openInSplit: '在分屏中打开',
@@ -4152,12 +4187,9 @@ export const zhOverrides = {
     terminalCloseAll: '关闭全部',
     terminalNewOn: '新建终端于…',
     terminalGatewayRemoved: '已移除的网关',
-    terminalGatewayRemovedBody:
-      '此终端所在的网关已被移除，无法重新打开。请关闭此标签页。',
-    terminalGatewayNoShellBody:
-      '此网关不提供 Shell 访问，此终端无法重新打开。请关闭此标签页。',
-    terminalDisconnectedBody:
-      '终端已断开。按 Enter 启动新的 shell；滚动记录会保留。',
+    terminalGatewayRemovedBody: '此终端所在的网关已被移除，无法重新打开。请关闭此标签页。',
+    terminalGatewayNoShellBody: '此网关不提供 Shell 访问，此终端无法重新打开。请关闭此标签页。',
+    terminalDisconnectedBody: '终端已断开。按 Enter 启动新的 shell；滚动记录会保留。',
     addToChat: '添加到对话'
   },
 
@@ -4539,6 +4571,33 @@ export const zhOverrides = {
       outputAlt: '工具输出',
       rawResponse: '原始响应',
       copyActivity: '复制活动',
+      codexSubagentActivity: {
+        openTrace: '打开子代理轨迹',
+        traceTitle: 'Codex 子代理轨迹',
+        traceDescription: '以只读方式查看此子代理的消息、推理摘要和工具活动。',
+        traceUnavailable: '子代理轨迹不可用',
+        loading: '正在加载轨迹…',
+        loadFailed: '无法加载此轨迹。',
+        retry: '重试',
+        close: '返回对话',
+        backToParent: '返回父级轨迹',
+        empty: '没有返回轨迹条目。',
+        waiting: '正在等待子代理轨迹…',
+        updating: '正在更新实时轨迹…',
+        assistantRole: 'Codex',
+        userRole: '请求',
+        systemRole: '系统',
+        reasoningSummary: '推理摘要',
+        arguments: '参数',
+        result: '结果',
+        unknownKind: '活动',
+        kinds: {
+          started: '已启动',
+          interacted: '运行中',
+          interrupted: '已中断',
+          completed: '已完成'
+        }
+      },
       recoveredOne: '在 1 个失败步骤后已恢复',
       recoveredMany: count => `在 ${count} 个失败步骤后已恢复`,
       failedOne: '1 个步骤失败',

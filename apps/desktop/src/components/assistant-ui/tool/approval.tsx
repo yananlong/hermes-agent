@@ -228,6 +228,59 @@ export function ApprovalQueue({
   )
 }
 
+interface ApprovalRequestDetailsProps {
+  request: ApprovalRequest
+  total: number
+  position: number
+}
+
+function ApprovalRequestDetails({ request, total, position }: ApprovalRequestDetailsProps) {
+  const { t } = useI18n()
+  const copy = t.assistant.approval
+  const hasCommand = request.command.trim().length > 0
+  // A plugin `approve` rule escalates through the same gate with a synthetic
+  // display target (`<tool> (plugin approval rule)`) while the real command /
+  // change lives in `description` — the user approves a label they cannot act
+  // on otherwise. Show the description whenever the command is missing or one
+  // of these synthetic labels; a real command keeps rendering as the command.
+  const SYNTHETIC_COMMAND_RE = /^<[^>]+> \(/
+
+  const showsDescription = !hasCommand || SYNTHETIC_COMMAND_RE.test(request.command.trim())
+
+  const details = showsDescription ? request.description.trim() : request.command.trim()
+  // The description can carry the working directory, reason, or requested
+  // grant scope. A command alone is not sufficient to assess an approval.
+  const description = request.description.trim()
+  const showDescription = !showsDescription && description.length > 0 && description !== details
+
+  return (
+    <>
+      <div className="flex items-center gap-2 px-2.5 pt-2 text-xs text-(--ui-text-secondary)">
+        <Codicon name="terminal" size="0.875rem" />
+        <span>{showsDescription ? copy.commandDetails : copy.command}</span>
+        {total > 1 && (
+          <span className="ml-auto text-[0.6875rem] tabular-nums text-(--ui-text-tertiary)">
+            {position} / {total}
+          </span>
+        )}
+      </div>
+      {details.length > 0 && (
+        <pre className="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-words px-2.5 py-2 font-mono text-xs leading-relaxed text-(--ui-text-primary)">
+          {details}
+        </pre>
+      )}
+      {showDescription && (
+        <>
+          <div className="px-2.5 pt-1 text-xs text-(--ui-text-secondary)">{copy.commandDetails}</div>
+          <pre className="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-words px-2.5 py-2 font-mono text-xs leading-relaxed text-(--ui-text-primary)">
+            {description}
+          </pre>
+        </>
+      )}
+    </>
+  )
+}
+
 interface ApprovalCardProps {
   request: ApprovalRequest
   total: number
@@ -282,17 +335,6 @@ const ApprovalCard: FC<ApprovalCardProps> = ({ request, total, position, stack }
   const allowSession = choices ? choices.includes('session') : true
   const allowAlways = choices ? choices.includes('always') : allowPermanent
   const hasMoreOptions = allowSession || allowAlways
-  const hasCommand = request.command.trim().length > 0
-  // A plugin `approve` rule escalates through the same gate with a synthetic
-  // display target (`<tool> (plugin approval rule)`) while the real command /
-  // change lives in `description` — the user approves a label they cannot act
-  // on otherwise. Show the description whenever the command is missing or one
-  // of these synthetic labels; a real command keeps rendering as the command.
-  const SYNTHETIC_COMMAND_RE = /^<[^>]+> \(/
-
-  const showsDescription = !hasCommand || SYNTHETIC_COMMAND_RE.test(request.command.trim())
-
-  const details = showsDescription ? request.description.trim() : request.command.trim()
 
   const respond = useCallback(
     async (choice: ApprovalChoice) => {
@@ -334,20 +376,7 @@ const ApprovalCard: FC<ApprovalCardProps> = ({ request, total, position, stack }
       onPointerDownCapture={rememberFocusOrigin}
       ref={cardRef}
     >
-      <div className="flex items-center gap-2 px-2.5 pt-2 text-xs text-(--ui-text-secondary)">
-        <Codicon name="terminal" size="0.875rem" />
-        <span>{showsDescription ? copy.commandDetails : copy.command}</span>
-        {total > 1 && (
-          <span className="ml-auto text-[0.6875rem] tabular-nums text-(--ui-text-tertiary)">
-            {position} / {total}
-          </span>
-        )}
-      </div>
-      {details.length > 0 && (
-        <pre className="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-words px-2.5 py-2 font-mono text-xs leading-relaxed text-(--ui-text-primary)">
-          {details}
-        </pre>
-      )}
+      <ApprovalRequestDetails position={position} request={request} total={total} />
       <div className="flex items-center justify-end gap-1.5 px-2 pb-2 pt-1" data-slot="tool-approval-actions">
         <Button data-approval-deny="" disabled={busy} onClick={() => void respond('deny')} size="sm" variant="text">
           {submitting === 'deny' ? <Loader2 className="size-3 animate-spin" /> : copy.reject}

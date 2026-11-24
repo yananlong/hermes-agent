@@ -174,6 +174,11 @@ export const ja: Translations = {
     selectedSessionsSkippedActive: "{deleted}件を削除、実行中のターンがあるため{count}件を保持しました",
     failedToDeleteSelected: "選択したセッションの削除に失敗しました",
     resumeInChat: "チャットで再開",
+    linkedReadonlyBadge: "linked · read-only",
+    linkedReadonlyWarning:
+      "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript; new turns cannot be appended to the native session from the web dashboard.",
+    linkedResumeDisabled:
+      "Linked sessions are read-only in the web dashboard; open the conversation in the native app to continue it.",
     newChat: "新しいチャット",
     workspace: "ワークスペース",
     workspaceDefault: "デフォルト",

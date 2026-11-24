@@ -177,6 +177,8 @@ def _set_model(rid, params, key, value, session):
     """Live/deferred model switch; see _apply_model_switch and _apply_pending_model_switch."""
     if not value:
         return _err(rid, 4002, "model value required")
+    if session and _session_is_codex_linked(session):
+        return _err(rid, 4002, "Change the model in Codex before opening this linked thread")
     confirmed = bool(params.get("confirm_expensive_model", False))
     if session:
         from hermes_cli.model_switch import parse_model_switch_args
@@ -248,6 +250,8 @@ def _set_fast(rid, params, key, value, session):
     from agent.fast_mode import STATIC_TIERS, service_tier_word
     if raw == "status":
         return _kv(rid, key, service_tier_word(current_tier))
+    if session and _session_is_codex_linked(session):
+        return _err(rid, 4002, "Change the service tier in Codex before opening this linked thread")
     nv = _FAST_WORDS.get(raw, ("normal" if current_tier in STATIC_TIERS else "fast") if raw in {"", "toggle"} else None)
     if nv is None:
         return _err(rid, 4002, f"unknown fast mode: {value}")
@@ -399,6 +403,8 @@ def _set_reasoning(rid, params, key, value, session):
     parsed = parse_reasoning_effort(arg)
     if parsed is None:
         return _err(rid, 4002, f"unknown reasoning value: {value}")
+    if session and _session_is_codex_linked(session):
+        return _err(rid, 4002, "Change reasoning in Codex before opening this linked thread")
     if scope == "global" or session is None:
         _write_config_key("agent.reasoning_effort", arg)
         if session is not None:

@@ -654,11 +654,12 @@ def _config_migrate(_engine: HermesConsoleEngine, args: list[str]) -> None:
 
 def _guard_exports(store, session_ids: list[str]) -> None:
     """Per-session export budget: only an individual runaway transcript trips it; 0 disables."""
-    from hermes_cli.session_export import assert_exports_safe
-    from persistence.core.errors import ExportTooLarge
+    from hermes_cli.session_export import assert_exports_safe, assert_linked_exports_unavailable
+    from persistence.core.errors import ExportTooLarge, LinkedCodexExportUnavailable
     try:
+        assert_linked_exports_unavailable(store, session_ids)
         assert_exports_safe(store, session_ids)
-    except ExportTooLarge as exc:
+    except (ExportTooLarge, LinkedCodexExportUnavailable) as exc:
         raise ConsoleCommandError(str(exc)) from exc
 
 

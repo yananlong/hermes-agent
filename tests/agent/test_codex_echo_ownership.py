@@ -51,3 +51,23 @@ def test_only_submitted_leading_echo_is_excluded(tmp_path, platform_id, projecti
         assert users == (["accepted"] + extra) * 2
     finally:
         db.close()
+
+
+def test_linked_codex_projection_stays_in_memory_without_a_transcript_mirror():
+    """A linked thread keeps its accepted/native history only in Codex's rollout."""
+    db = SimpleNamespace(get_session_model_config_value=lambda _sid, key: {
+        "codex_linked_thread": True, "codex_thread_id": "native-thread",
+    }.get(key))
+    agent = SimpleNamespace(_session_db=db, session_id="linked")
+    flushes = []
+    agent._flush_messages_to_session_db = lambda messages: flushes.append(messages)
+    messages = [{"role": "user", "content": "accepted"}]
+    turn = SimpleNamespace(projected_messages=[
+        {"role": "user", "content": "wire echo"},
+        {"role": "assistant", "content": "native reply"},
+    ], submitted_user_text="wire echo")
+
+    assert _persist_projected_messages(agent, turn, messages) is False
+    assert [(message["role"], message["content"]) for message in messages] == [
+        ("user", "accepted"), ("assistant", "native reply")]
+    assert flushes == []

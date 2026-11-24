@@ -4,6 +4,7 @@ import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 
+import { CodexCatalogWarning } from '@/components/codex-catalog-warning'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -103,7 +104,29 @@ type SpeedTier = 'fast' | 'normal' | 'ultrafast'
 // provider), so unconfigured providers come back with `authenticated:false`
 // and an empty `models` list — those need a setup step before a model exists.
 function isProviderReady(p?: ModelOptionProvider): boolean {
-  return !!p && (p.authenticated !== false || (p.models?.length ?? 0) > 0)
+  return !!p && (p.source === 'codex-app-server' || p.authenticated !== false || (p.models?.length ?? 0) > 0)
+}
+
+function ProviderGuidance({
+  needsSetup,
+  provider,
+  setupIsApiKey
+}: {
+  needsSetup: boolean
+  provider?: ModelOptionProvider
+  setupIsApiKey: boolean
+}) {
+  if (needsSetup && !setupIsApiKey && provider) {
+    return (
+      <p className="mt-2 text-xs text-muted-foreground">
+        {provider.auth_type === 'api_key'
+          ? `${provider.name} needs an API key — set it up to choose a model.`
+          : `${provider.name} signs in through your browser — Hermes runs the flow for you.`}
+      </p>
+    )
+  }
+
+  return <CodexCatalogWarning className="mt-2" provider={provider} />
 }
 
 const NO_PROVIDERS: readonly ModelOptionProvider[] = [{ name: '—', slug: '', models: [] }]
@@ -1164,13 +1187,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
               </Button>
             </div>
           )}
-          {needsSetup && !setupIsApiKey && selectedProviderRow && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              {selectedProviderRow?.auth_type === 'api_key'
-                ? `${selectedProviderRow?.name} needs an API key — set it up to choose a model.`
-                : `${selectedProviderRow?.name} signs in through your browser — Hermes runs the flow for you.`}
-            </p>
-          )}
+          <ProviderGuidance needsSetup={needsSetup} provider={selectedProviderRow} setupIsApiKey={setupIsApiKey} />
           {config && mainModel && (reasoningSupported || fastSupported || ultrafastSupported) && (
             <MainModelDefaults
               effortValue={effortValue}

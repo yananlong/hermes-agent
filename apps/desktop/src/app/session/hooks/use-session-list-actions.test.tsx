@@ -182,6 +182,35 @@ describe('workspace-only sidebar refresh', () => {
       })
     }
   )
+
+  it('publishes a linked-Codex capability that arrives on refresh', async () => {
+    setSessions([row('linked', { cwd: '/home' })])
+    listSidebarSessions.mockResolvedValue(sidebar({ sessions: [row('linked', { cwd: '/home', codex_linked: true })] }))
+    const { result } = renderHook(() => useSessionListActions({ profileScope: 'default' }))
+
+    await act(async () => {
+      await result.current.refreshSessions()
+    })
+
+    expect($sessions.get()[0]).toMatchObject({ codex_linked: true, id: 'linked' })
+  })
+
+  it.each([
+    [{ claude_linked: true }, { claude_linked: true }],
+    [{ mistral_linked: true }, { mistral_linked: true }]
+  ] as const)('publishes a %o linked-foreign capability that arrives on refresh', async (flags, expected) => {
+    setSessions([row('linked-foreign', { cwd: '/home' })])
+    listSidebarSessions.mockResolvedValue(
+      sidebar({ sessions: [row('linked-foreign', { cwd: '/home', ...flags })] })
+    )
+    const { result } = renderHook(() => useSessionListActions({ profileScope: 'default' }))
+
+    await act(async () => {
+      await result.current.refreshSessions()
+    })
+
+    expect($sessions.get()[0]).toMatchObject({ id: 'linked-foreign', ...expected })
+  })
 })
 
 // #67600: a cold-start read that fails must not render as "No sessions yet".

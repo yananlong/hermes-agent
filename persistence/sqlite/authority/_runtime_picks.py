@@ -98,8 +98,28 @@ def workspace_in_transaction(holder, conn, session_id, payload, prepared):
     conn.executemany('UPDATE sessions SET cwd=?, git_branch=?, git_repo_root=?, '
                      'git_metadata_generation=COALESCE(git_metadata_generation, 0)+1 WHERE id=?',
                      [(cwd, git['branch'] or None, git['root'] or None, sid) for sid in rows])
+    intent = prepared.get('linked_codex_workspace_intent')
+    if intent is not None:
+        from ._runtime_guards import require_idle
+        require_idle(holder, conn, list({session_id, snapshot['target']}))
+        _consume_linked_codex_workspace_intent(conn, session_id, intent)
     return {session_id, snapshot['target']}, {'cwd': cwd, 'branch': git['branch'] or None,
                                               'git_repo_root': git['root'] or None, 'execution_generation': generation}
+
+
+def _consume_linked_codex_workspace_intent(conn, session_id, intent):
+    """Consume the native resume fence in the same transaction as policy, cwd, and receipt."""
+    from ..conversation._store.sessions import _parse_model_config
+    row = conn.execute('SELECT model_config FROM sessions WHERE id=?', (session_id,)).fetchone()
+    if row is None:
+        raise AuthorityRefusal('not_found')
+    config = _parse_model_config(row[0])
+    if config.get('codex_pending_cwd') != intent:
+        raise AuthorityRefusal('revision_conflict', field='workspace',
+                                detail='the linked Codex workspace request changed before commit')
+    config.pop('codex_pending_cwd', None)
+    conn.execute('UPDATE sessions SET model_config=? WHERE id=?',
+                 (json.dumps(config, sort_keys=True) if config else None, session_id))
 
 
 def editor_mcp_in_transaction(holder, conn, session_id, payload, prepared):

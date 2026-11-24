@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from io import BytesIO
 from unittest.mock import Mock
 
 import pytest
@@ -24,6 +25,7 @@ def _bare_client() -> CodexAppServerClient:
     client._pending = {}
     client._pending_lock = threading.Lock()
     client._next_id = 1
+    client._max_response_line_bytes = None
     client._proc = Mock(stdin=None, terminate=Mock(), kill=Mock(), wait=Mock(return_value=0))
     return client
 
@@ -96,3 +98,21 @@ def test_stdout_eof_fails_in_flight_request_promptly():
     assert client._pending == {}
     client._fail_pending_requests("codex app-server client is closing")  # idempotent
     client._proc.stdout.close()
+
+
+def test_stdout_response_line_limit_rejects_before_json_decode():
+    client = _bare_client()
+    client._max_response_line_bytes = 8
+    client._proc.stdout = BytesIO(b'{"id":1,"result":"too large"}\n')
+    errors = []
+    failures = []
+    dispatched = []
+    client._append_stderr = errors.append
+    client._fail_pending_requests = failures.append
+    client._dispatch = dispatched.append
+
+    client._read_stdout()
+
+    assert dispatched == []
+    assert any("safe line limit" in error for error in errors)
+    assert failures == ["codex app-server stdout closed"]

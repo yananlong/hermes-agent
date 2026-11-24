@@ -79,6 +79,11 @@ export const SETTINGS_MANIFEST = {
       ['font', 'monospace', 'nerd font', 'glyphs', 'shell'],
       'terminalFont'
     ),
+    terminalFontSize: appearanceSetting(
+      'typography',
+      ['terminal', 'font', 'text', 'size', 'accessibility'],
+      'terminalFontSize'
+    ),
     interfaceMode: {
       subpage: 'window-layout',
       keywords: ['simple', 'advanced', 'mode', 'interface', 'chrome', 'minimal', 'focus'],

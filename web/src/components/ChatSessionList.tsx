@@ -28,6 +28,7 @@ import { useSearchParams } from "react-router";
 import { ChatWorkspacePicker } from "@/components/ChatWorkspacePicker";
 import { useI18n } from "@/i18n";
 import { api, type SessionInfo } from "@/lib/api";
+import { isLinkedForeignSession } from "@/lib/linked-session";
 import { cn, timeAgo } from "@/lib/utils";
 
 const SESSION_LIMIT = 30;
@@ -210,17 +211,26 @@ export function ChatSessionList({
       <div className="flex flex-col gap-0.5">
         {sessions.map((s) => {
           const isActive = s.id === activeSessionId;
+          // Linked foreign rows (Codex / Claude / Mistral pointer rows) are
+          // read-only in the web dashboard: not selectable here — ChatPage
+          // blocks opening them with a read-only notice.
+          const linked = isLinkedForeignSession(s);
           return (
             <ListItem
               key={s.id}
-              onClick={() => pick(s.id)}
+              onClick={() => {
+                if (!linked) pick(s.id);
+              }}
               aria-current={isActive ? "true" : undefined}
+              aria-disabled={linked || undefined}
+              title={linked ? t.sessions.linkedResumeDisabled : undefined}
               className={cn(
                 "flex-col items-start gap-0.5 rounded px-2 py-1.5",
                 "normal-case tracking-normal",
                 isActive
                   ? "bg-primary/10 text-foreground border-l-2 border-primary"
                   : "text-text-secondary hover:bg-midground/5 hover:text-foreground",
+                linked && "cursor-not-allowed opacity-70 hover:bg-transparent",
               )}
             >
               <span className="w-full truncate text-sm font-medium">
@@ -238,6 +248,12 @@ export function ChatSessionList({
                   <>
                     <span aria-hidden>·</span>
                     <span className="truncate">{s.source}</span>
+                  </>
+                )}
+                {linked && (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span>{t.sessions.linkedReadonlyBadge}</span>
                   </>
                 )}
               </span>

@@ -23,6 +23,7 @@ from agent.transports.codex_app_server import (
     CodexAppServerClient, CodexAppServerError, CodexAppServerTransportError,
 )
 from agent.transports.codex_event_projector import CodexEventProjector, ProjectionResult
+from agent.transports.codex_user_input import CodexUserInputUnavailable, request_codex_user_input
 from agent.transports.hermes_tools_mcp_server import HERMES_TOOLS_MCP_SERVER_NAME
 from session_rules.turns import _IMAGE_PART_TYPES
 
@@ -217,7 +218,10 @@ class CodexAppServerSession:
         client_factory: Optional[Callable[..., CodexAppServerClient]] = None,
         model: Optional[str] = None, model_provider: Optional[str] = None,
         developer_instructions: Optional[str] = None, resume_thread_id: Optional[str] = None,
-        history_seed: Optional[str] = None,
+        history_seed: Optional[str] = None, preserve_thread_settings: bool = False,
+        resume_cwd_override: bool = False,
+        allow_native_cwd_mismatch: bool = False,
+        user_input_callback: Optional[Callable[..., dict]] = None,
     ) -> None:
         self._cwd = cwd or os.getcwd()
         self._codex_bin = codex_bin
@@ -225,6 +229,20 @@ class CodexAppServerSession:
         # A codex thread id persisted by an earlier process for this Hermes session: the first
         # ``ensure_started`` issues ``thread/resume`` for it instead of ``thread/start``.
         self._resume_thread_id = resume_thread_id
+        # A linked external thread must never turn a failed resume into thread/start.
+        self._preserve_thread_settings = preserve_thread_settings
+        # An explicit workspace picker action may change a linked native thread's
+        # workspace. Ordinary resumes leave this false so Codex remains authoritative.
+        self._resume_cwd_override = resume_cwd_override
+        self._allow_native_cwd_mismatch = allow_native_cwd_mismatch
+        if (resume_cwd_override or allow_native_cwd_mismatch) and not preserve_thread_settings:
+            raise ValueError("A cwd override is only valid when preserving a linked Codex thread")
+        if resume_cwd_override and allow_native_cwd_mismatch:
+            raise ValueError("A linked Codex resume cannot override and accept native cwd at the same time")
+        self.effective_model: Optional[str] = None
+        self.effective_cwd: Optional[str] = None
+        if preserve_thread_settings and not resume_thread_id:
+            raise ValueError("A linked Codex session requires its original thread ID")
         # ``thread/start.model``: the Hermes-selected slug, for every provider. ``.modelProvider``: a named
         # custom provider's id in codex's own ``[model_providers.<id>]`` table; only the id travels, codex
         # reads base_url/env_key itself.
@@ -244,6 +262,7 @@ class CodexAppServerSession:
             os.environ.get("HERMES_TERMINAL_SECURITY_MODE", "auto"), "workspace-write"
         )
         self._approval_callback = approval_callback
+        self._user_input_callback = user_input_callback
         self._on_event = on_event  # Display hook (kawaii spinner ticks etc.)
         self._routing = request_routing or _ServerRequestRouting()
         self._client_factory = client_factory or CodexAppServerClient
@@ -256,6 +275,7 @@ class CodexAppServerSession:
         # In-progress fileChange items by id (item/started -> item/completed):
         # approval params don't carry the changeset, so this feeds the prompt summary.
         self._pending_file_changes: dict[str, str] = {}
+        self._pending_linked_file_changes: dict[str, str] = {}
         self._closed = False
 
     def ensure_started(self) -> str:
@@ -271,19 +291,24 @@ class CodexAppServerSession:
         # behind experimentalApi + a matching ``[permissions]`` table in ~/.codex/config.toml.
         # Hermes supplies the agent identity through its own system prompt; ``personality: "none"`` strips
         # codex's built-in "# Personality" section from the base instructions so it cannot compete (#72104).
-        params: dict[str, Any] = {"cwd": self._cwd, "personality": "none"}
-        if self._developer_instructions and self._developer_instructions.strip():
+        params: dict[str, Any] = (
+            {"cwd": self._cwd} if self._preserve_thread_settings and self._resume_cwd_override else
+            {} if self._preserve_thread_settings else {"cwd": self._cwd, "personality": "none"}
+        )
+        if not self._preserve_thread_settings and self._developer_instructions and self._developer_instructions.strip():
             params["developerInstructions"] = self._developer_instructions
-        if self._model_provider:
+        if not self._preserve_thread_settings and self._model_provider:
             params["modelProvider"] = self._model_provider
-        if self._model:
+        if not self._preserve_thread_settings and self._model:
             params["model"] = self._model
         if self._resume_thread_id:
-            wanted, self._resume_thread_id = self._resume_thread_id, None  # one attempt per stored id
+            wanted = self._resume_thread_id
+            if not self._preserve_thread_settings:
+                self._resume_thread_id = None  # legacy retry starts a new thread
             thread_id = self._resume_thread(wanted, params)
             # A resumed thread may carry a tier an earlier process selected (CLI ``/fast`` rebuilds the agent),
             # so its first turn sends Hermes' tier even when that is a clearing null.
-            self._service_tier_sent = _TIER_UNKNOWN
+            self._service_tier_sent = None if self._preserve_thread_settings else _TIER_UNKNOWN
             logger.info("codex app-server thread resumed: id=%s cwd=%s", thread_id[:8], self._cwd)
         else:
             if self._history_seed:
@@ -311,6 +336,17 @@ class CodexAppServerSession:
         thread_id = _extract_thread_id(result)
         if thread_id != wanted:
             raise CodexThreadResumeError(wanted, f"app-server answered with thread {str(thread_id)[:8]!r}")
+        if self._preserve_thread_settings:
+            cwd = result.get("cwd")
+            if (not isinstance(cwd, str) or not os.path.isabs(cwd)
+                    or (not self._allow_native_cwd_mismatch
+                        and os.path.realpath(cwd) != os.path.realpath(self._cwd))):
+                raise CodexThreadResumeError(wanted, "the resumed working directory does not match the linked session")
+            model = result.get("model")
+            if not isinstance(model, str) or not model.strip():
+                raise CodexThreadResumeError(wanted, "Codex did not report the resumed thread's model")
+            self.effective_cwd = cwd
+            self.effective_model = model
         return wanted
 
     def close(self) -> None:
@@ -517,20 +553,20 @@ class CodexAppServerSession:
 
         def on_server_request(sreq: dict) -> bool:
             nonlocal last_tool_completion_at
-            # Drain pending notifications first (bounded) so _pending_file_changes is
-            # current for the approval decision and display events still reach on_event.
+            # Drain pending notifications first so _pending_file_changes is current for the
+            # approval decision and display events still reach on_event. Codex pauses while a
+            # server request awaits its response, so this queue is finite; an arbitrary cap can
+            # strand a valid fileChange preview behind ordinary notifications and silently turn
+            # an otherwise approvable linked patch into a decline.
             turn_complete = False
-            for _ in range(8):
+            while True:
                 pending = client.take_notification(timeout=0)
                 if pending is None:
                     break
                 if not _notification_belongs_to_turn(pending, thread_id=self._thread_id, turn_id=result.turn_id):
                     logger.debug("ignoring foreign codex notification while draining server request: method=%s", pending.get("method"))
                     continue
-                proj, aborted = self._absorb_notification(result, projector, pending)
-                if proj.is_tool_iteration:
-                    last_tool_completion_at = time.monotonic()
-                turn_complete = turn_complete or aborted
+                turn_complete = on_note(pending, pending.get("method", "")) or turn_complete
             self._handle_server_request(sreq)
             # An approval round-trip is live signal — don't let it trip the quiet warning.
             last_tool_completion_at = None
@@ -552,13 +588,28 @@ class CodexAppServerSession:
                 self._set_classified_error(result, f"turn ended status={turn_status}", err_msg, err_msg)
             return True
 
-        self._drive_turn(
-            result, turn_timeout=turn_timeout, notification_poll_timeout=notification_poll_timeout,
-            timeout_label="turn", before_poll=warn_if_quiet, on_server_request=on_server_request,
-            on_note=on_note, accept_final_text_at_deadline=True,
-        )
-        with self._active_turn_lock:
-            self._active_turn_id = None
+        try:
+            self._drive_turn(
+                result, turn_timeout=turn_timeout, notification_poll_timeout=notification_poll_timeout,
+                timeout_label="turn", before_poll=warn_if_quiet, on_server_request=on_server_request,
+                on_note=on_note, accept_final_text_at_deadline=True,
+            )
+        finally:
+            # The live bridge holds bounded reasoning deltas until Codex completes an item so
+            # redaction can see contiguous text. Clear it even when transport loss or a user
+            # interrupt ends the poll loop without a native turn/completed notification.
+            finish_bridge = getattr(self._on_event, "finish", None)
+            if callable(finish_bridge):
+                try:
+                    finish_bridge(interrupted=bool(result.interrupted or result.error))
+                except Exception:  # pragma: no cover - optional display callback
+                    logger.debug("on_event finish callback raised", exc_info=True)
+            # Completed reasoning that had no later assistant/tool item is still a durable
+            # history detail, including when the turn exits without Codex's terminal notice.
+            tail = projector.project({"method": "turn/completed", "params": {}})
+            result.projected_messages.extend(tail.messages)
+            with self._active_turn_lock:
+                self._active_turn_id = None
 
     def _drive_turn(
         self, result: TurnResult, *, turn_timeout: float, notification_poll_timeout: float,
@@ -712,20 +763,41 @@ class CodexAppServerSession:
             logger.warning("Unknown codex server request: %s", method)
             client.respond_error(rid, code=-32601, message=f"Unsupported method: {method}")
             return
-        client.respond(rid, handler(self, params))
+        try:
+            response = handler(self, params)
+        except CodexUserInputUnavailable as exc:
+            client.respond_error(rid, code=-32600, message=str(exc))
+            return
+        client.respond(rid, response)
 
     def _respond_elicitation(self, params: dict) -> dict:
-        """MCP elicitation: auto-accept our own hermes-tools server (opted in by enabling the runtime;
-        exposes nothing codex's shell can't do); decline others so the user opts in via codex's own flow."""
-        action = "accept" if (params.get("serverName") or "") == HERMES_TOOLS_MCP_SERVER_NAME else "decline"
+        """Linked sessions decline elicitation; other sessions retain their hermes-tools opt-in."""
+        action = ("accept" if not self._preserve_thread_settings
+                  and (params.get("serverName") or "") == HERMES_TOOLS_MCP_SERVER_NAME else "decline")
         return {"action": action, "content": None, "_meta": None}
 
     _SERVER_REQUEST_HANDLERS: dict[str, Callable[..., dict]] = {
         "item/commandExecution/requestApproval": lambda self, p: {"decision": self._decide_exec_approval(p)},
         "item/fileChange/requestApproval": lambda self, p: {"decision": self._decide_apply_patch_approval(p)},
-        "item/permissions/requestApproval": lambda self, p: {"decision": "decline"},
+        "item/permissions/requestApproval": lambda self, p: {"permissions": {}, "scope": "turn"},
         "mcpServer/elicitation/request": _respond_elicitation,
+        "item/tool/requestUserInput": lambda self, p: request_codex_user_input(p, self._user_input_callback),
+        # Dynamic tools are callbacks owned by the client that registered them on thread/start.
+        # A resumed thread may retain such registrations, but Hermes cannot infer their original
+        # implementations from a tool name or safely substitute a Hermes tool with the same name.
+        "item/tool/call": lambda self, p: self._reject_dynamic_tool_call(p),
     }
+
+    @staticmethod
+    def _reject_dynamic_tool_call(_params: dict) -> dict:
+        """Fail a persisted client-owned tool call without executing an unknown callback."""
+        return {
+            "contentItems": [{
+                "type": "inputText",
+                "text": "This client-defined Codex tool is unavailable in Hermes. Continue with the tools available in this session.",
+            }],
+            "success": False,
+        }
 
     def _run_approval_callback(self, auto_approve: bool, prompt: Callable[[], tuple[str, str]], log_label: str) -> str:
         """Protocol routing only: auto-approve, fail-closed without a callback, else ask via ``prompt()``.
@@ -740,13 +812,31 @@ class CodexAppServerSession:
         command, description = prompt()
         try:
             choice = self._approval_callback(command, description, allow_permanent=False)
+            if self._preserve_thread_settings and choice in ("once", "session", "always"):
+                return "accept"
             return _approval_choice_to_codex_decision(choice)
         except Exception:
             logger.exception("approval_callback raised on %s", log_label)
             return "decline"
 
     def _decide_exec_approval(self, params: dict) -> str:
+        network = params.get("networkApprovalContext")
+        if self._preserve_thread_settings:
+            # The generic approval card cannot accurately render additional sandbox grants or terminal input.
+            if params.get("additionalPermissions") or params.get("kind") in ("humanCommand", "writeStdin"):
+                return "decline"
+            choices = params.get("availableDecisions")
+            if choices is not None and (not isinstance(choices, list) or "accept" not in choices):
+                return "decline"
+            # Current protocol omits the destination port, so a browser cannot show the complete request.
+            if network is not None:
+                return "decline"
+            if not isinstance(params.get("command"), str) or not params["command"].strip():
+                return "decline"
         def prompt() -> tuple[str, str]:
+            if isinstance(network, dict):
+                return (f"Network access: {network.get('protocol')}://{network.get('host')}",
+                        params.get("reason") or "Codex requests network access")
             # ``cwd`` is Optional on codex's side; fall back so the prompt is never empty.
             description = f"Codex requests exec in {params.get('cwd') or self._cwd or '<unknown>'}"
             if params.get("reason"):
@@ -756,14 +846,18 @@ class CodexAppServerSession:
         return self._run_approval_callback(self._routing.auto_approve_exec, prompt, "exec request")
 
     def _decide_apply_patch_approval(self, params: dict) -> str:
+        item_id = params.get("itemId") or ""
+        full_changes = self._pending_linked_file_changes.get(item_id) if self._preserve_thread_settings else None
+        if self._preserve_thread_settings and not full_changes:
+            return "decline"
         def prompt() -> tuple[str, str]:
             # Params carry reason + grantRoot only; the changeset comes from _track_pending_file_change.
             reason, grant_root = params.get("reason"), params.get("grantRoot")
-            change_summary = self._pending_file_changes.get(params.get("itemId") or "") or None
+            change_summary = self._pending_file_changes.get(item_id) or None
             parts = [p for p in (reason, change_summary, grant_root and f"grants write to {grant_root}") if p]
             detail = change_summary or reason
             return (
-                f"apply_patch: {detail}" if detail else "apply_patch",
+                f"apply_patch:\n{full_changes}" if full_changes else (f"apply_patch: {detail}" if detail else "apply_patch"),
                 "; ".join(parts) if parts else "Codex requests to apply a patch",
             )
 
@@ -778,8 +872,39 @@ class CodexAppServerSession:
             return
         if method == "item/completed":
             self._pending_file_changes.pop(item_id, None)
+            self._pending_linked_file_changes.pop(item_id, None)
         elif method == "item/started":
-            self._pending_file_changes[item_id] = _summarize_file_changes(item.get("changes") or [])
+            changes = item.get("changes") or []
+            if self._preserve_thread_settings:
+                details = _describe_linked_file_changes(changes)
+                if details is not None:
+                    self._pending_linked_file_changes[item_id] = details
+                else:
+                    self._pending_file_changes.pop(item_id, None)
+                    self._pending_linked_file_changes.pop(item_id, None)
+                    return
+            self._pending_file_changes[item_id] = _summarize_file_changes(changes)
+
+
+def _describe_linked_file_changes(changes: list) -> Optional[str]:
+    """Build a complete approval preview or decline when the patch cannot be shown safely."""
+    if not isinstance(changes, list) or not changes:
+        return None
+    parts, total = [], 0
+    for change in changes:
+        if not isinstance(change, dict) or not isinstance(change.get("kind"), dict):
+            return None
+        kind, path, diff = change["kind"], change.get("path"), change.get("diff")
+        operation, target = kind.get("type"), kind.get("move_path")
+        if (operation not in ("add", "update", "delete") or not isinstance(path, str) or not path
+                or not isinstance(diff, str) or not diff or (target is not None and not isinstance(target, str))):
+            return None
+        header = f"{operation}: {path}" + (f" -> {target}" if target else "")
+        total += len(header) + len(diff)
+        if total > 65_536:
+            return None
+        parts.append(f"{header}\n{diff}")
+    return "\n\n".join(parts)
 
 
 def _summarize_file_changes(raw_changes: list) -> str:

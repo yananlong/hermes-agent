@@ -1041,6 +1041,8 @@ def _(rid, params: dict) -> dict:
     base = (parts[0] if parts else "").lower()
     arg = parts[1] if len(parts) > 1 else ""
     sid = params.get("session_id", "")
+    if base in {"model", "reasoning", "fast", "personality", "codex-runtime"} and _session_is_codex_linked(session):
+        return _err(rid, 4002, "Manage this linked thread's settings in Codex before reopening it in Hermes")
     live_output = _live_slash_command_output(sid, session, base, arg)
     if live_output is not None:
         return _ok(rid, {"output": live_output or "(no output)"})

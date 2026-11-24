@@ -40,6 +40,73 @@ export * from './format'
 export * from './targets'
 export * from './types'
 
+/** Native Codex item ids are assigned by the trusted app-server projection and
+ *  are shared by live and persisted tool rows. */
+export function isCodexNativeToolCall(part: Pick<ToolPart, 'toolCallId'>): boolean {
+  return typeof part.toolCallId === 'string' && part.toolCallId.startsWith('codex_')
+}
+
+function filteredCodexPayloadValue(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed)
+
+        return parsed && typeof parsed === 'object' ? filteredCodexPayloadValue(parsed, depth + 1) : value
+      } catch {
+        return value
+      }
+    }
+
+    return value
+  }
+
+  if (depth > 12) {
+    return '[nested content omitted]'
+  }
+
+  if (value === null || typeof value !== 'object') {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => filteredCodexPayloadValue(item, depth + 1))
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, child]) =>
+      key.toLowerCase().includes('encrypted') ? [] : [[key, filteredCodexPayloadValue(child, depth + 1)]]
+    )
+  )
+}
+
+function prettyCodexPayloadValue(value: unknown): string {
+  if (typeof value === 'string') {
+    const filtered = filteredCodexPayloadValue(value)
+
+    return typeof filtered === 'string' ? filtered : JSON.stringify(filtered, null, 2)
+  }
+
+  try {
+    return JSON.stringify(filteredCodexPayloadValue(value), null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+/** Safe, complete native arguments and result for display and the Copy action. */
+export function codexNativeToolPayload(args: unknown, result: unknown): string {
+  return [
+    ['Arguments', args],
+    ['Result', result]
+  ]
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([label, value]) => `${label}:\n${prettyCodexPayloadValue(value)}`)
+    .join('\n\n')
+}
+
 // The transcript's render budget prices a turn by the same classification, so
 // it lives in `@/lib/tool-render-class` where both sides can reach it without
 // pulling this module's formatting/i18n weight into the cost path.
@@ -1237,21 +1304,20 @@ export function toolCopyPayload(part: ToolPart, view: ToolView): { label: string
     generic: translateNow('common.copy')
   }
 
+  const nativePayload = codexNativeCopyPayload(part, copy.generic)
+
+  if (nativePayload) {
+    return nativePayload
+  }
+
   const args = parseMaybeObject(part.args)
   const result = parseMaybeObject(part.result)
   const detail = view.detail.trim()
   const hasSubstantialOutput = detail.length > 16
+  const terminalPayload = terminalCopyPayload(part, args, detail, copy)
 
-  if (part.toolName === 'terminal' || part.toolName === 'execute_code') {
-    if (hasSubstantialOutput) {
-      return { label: copy.output, text: detail }
-    }
-
-    const command = firstStringField(args, ['command', 'code']) || contextValue(args)
-
-    if (command) {
-      return { label: copy.command, text: command }
-    }
+  if (terminalPayload) {
+    return terminalPayload
   }
 
   if (part.toolName === 'web_extract') {
@@ -1317,6 +1383,35 @@ export function toolCopyPayload(part: ToolPart, view: ToolView): { label: string
   }
 
   return { label: copy.generic, text: view.title }
+}
+
+function codexNativeCopyPayload(part: ToolPart, label: string): null | { label: string; text: string } {
+  if (!isCodexNativeToolCall(part)) {
+    return null
+  }
+
+  const payload = codexNativeToolPayload(part.args, part.result)
+
+  return payload ? { label, text: payload } : null
+}
+
+function terminalCopyPayload(
+  part: ToolPart,
+  args: Record<string, unknown>,
+  detail: string,
+  copy: { command: string; output: string }
+): null | { label: string; text: string } {
+  if (part.toolName !== 'terminal' && part.toolName !== 'execute_code') {
+    return null
+  }
+
+  if (detail.length > 16) {
+    return { label: copy.output, text: detail }
+  }
+
+  const command = firstStringField(args, ['command', 'code']) || contextValue(args)
+
+  return command ? { label: copy.command, text: command } : null
 }
 
 interface ToolTitleParts {

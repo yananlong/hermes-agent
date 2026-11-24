@@ -2,6 +2,15 @@ import type { TranslationOverrides } from './define-locale'
 
 export const arConnectors = {
   sessionImport: {
+    codexThreads: 'فتح محادثة Codex',
+    codexThreadsHelp: 'تابع محادثة Codex نفسها في Hermes.',
+    codexHandoff: 'أغلق المحادثة في التطبيقات الأخرى قبل المتابعة هنا.',
+    codexCallbacksWarning:
+      'لا يمكن لهذه الجلسة المرتبطة استعادة الأدوات التي يعرّفها عميل Codex الأصلي، بما في ذلك عمليات استدعاء التفويض في Hermes. سيتم رفض استدعاءات هذه الأدوات أو ستفشل بأمان.',
+    codexLink: 'فتح المحادثة المرتبطة',
+    codexLinking: 'جارٍ فتح المحادثة…',
+    codexLinkError: 'تعذر فتح محادثة Codex هذه.',
+    codexNoThreads: 'لم يتم العثور على محادثات Codex',
     title: 'المتابعة من تطبيق آخر',
     subtitle: 'انقل محادثة إلى Hermes وتابع من حيث توقفت.',
     action: 'استيراد جلسة',

@@ -8,7 +8,14 @@ vi.mock('./client', async importOriginal => ({
   ...await importOriginal<typeof ClientApi>(), hermesApi: vi.fn()
 }))
 import { hermesApi, setApiRequestConnection, setApiRequestProfile } from './client'
-import { deleteSession, renameSession, setSessionArchived, setSessionPinnedRemote, setSessionUnreadRemote } from './sessions'
+import {
+  deleteSession,
+  moveStoredLinkedSessionWorkspace,
+  renameSession,
+  setSessionArchived,
+  setSessionPinnedRemote,
+  setSessionUnreadRemote
+} from './sessions'
 
 beforeEach(() => { vi.mocked(hermesApi).mockReset(); setApiRequestConnection('owner'); setApiRequestProfile('work') })
 
@@ -73,6 +80,31 @@ it('uses owner snapshots and preserves the exact delete identity after a lost re
   expect(url.searchParams.get('expected_revision')).toBe('12')
   expect(url.searchParams.get('expected_generation')).toBe('8')
   expect(url.searchParams.get('request_id')).toBeTruthy()
+})
+
+it('moves a cold linked row through a fenced mutation on its explicit profile', async () => {
+  vi.mocked(hermesApi).mockResolvedValue({
+    exists: true, runtime_revision: 7, runtime_generation: 3
+  } as never)
+  const requestGateway = vi.fn(async () => ({ cwd: '/home' }) as never)
+  const owner = { connectionId: 'server', profile: 'work' }
+
+  await moveStoredLinkedSessionWorkspace('cold-codex-route', '/home', requestGateway, owner)
+
+  expect(hermesApi).toHaveBeenCalledWith(expect.objectContaining({
+    connectionId: 'server',
+    path: '/api/sessions/cold-codex-route/mutation-snapshot?profile=work',
+    profile: 'work'
+  }))
+  expect(requestGateway).toHaveBeenCalledWith('session.mutate', expect.objectContaining({
+    expected_generation: 3,
+    expected_revision: 7,
+    operation: 'workspace',
+    payload: { cwd: '/home' },
+    profile: 'work',
+    request_id: expect.any(String),
+    session_id: 'cold-codex-route'
+  }))
 })
 
 it('all sidebar mutations use real counters and surface conflicts without a blind write', async () => {

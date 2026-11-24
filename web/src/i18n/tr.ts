@@ -174,6 +174,11 @@ export const tr: Translations = {
     selectedSessionsSkippedActive: "{deleted} silindi; bir tur çalıştığı için {count} tutuldu",
     failedToDeleteSelected: "Seçilen oturumlar silinemedi",
     resumeInChat: "Sohbette Devam Et",
+    linkedReadonlyBadge: "linked · read-only",
+    linkedReadonlyWarning:
+      "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript; new turns cannot be appended to the native session from the web dashboard.",
+    linkedResumeDisabled:
+      "Linked sessions are read-only in the web dashboard; open the conversation in the native app to continue it.",
     newChat: "Yeni sohbet",
     workspace: "çalışma alanı",
     workspaceDefault: "Varsayılan",

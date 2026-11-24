@@ -2,7 +2,13 @@
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $terminalFontFamily, setTerminalFontFamilyFromConfig } from '@/app/right-sidebar/terminal/terminal-font'
+import {
+  $terminalFontFamily,
+  $terminalFontSize,
+  DEFAULT_TERMINAL_FONT_SIZE,
+  setTerminalFontFamilyFromConfig,
+  setTerminalFontSizeFromConfig
+} from '@/app/right-sidebar/terminal/terminal-font'
 import { getHermesConfig } from '@/hermes'
 import { persistString } from '@/lib/storage'
 import { $showReasoning, setShowReasoningFromConfig } from '@/store/reasoning-disclosure'
@@ -47,6 +53,7 @@ describe('useHermesConfig refreshHermesConfig', () => {
     setCurrentReasoningEffort('')
     setDefaultReasoningEffort('')
     setTerminalFontFamilyFromConfig('')
+    setTerminalFontSizeFromConfig(undefined)
     persistString(WORKSPACE_CWD_KEY, null)
   })
 
@@ -83,6 +90,24 @@ describe('useHermesConfig refreshHermesConfig', () => {
       await result.current.refreshHermesConfig()
     })
     expect($showToolActivity.get()).toBe(true)
+  })
+
+  it('publishes terminal.font_size during config loading without opening Appearance settings', async () => {
+    mockConfig({ terminal: { font_size: 18 } })
+    const { result } = renderHook(() => useHermesConfig({ activeSessionIdRef: { current: null } }))
+
+    await act(async () => {
+      await result.current.refreshHermesConfig()
+    })
+
+    expect($terminalFontSize.get()).toBe(18)
+
+    mockConfig({ terminal: {} })
+    await act(async () => {
+      await result.current.refreshHermesConfig()
+    })
+
+    expect($terminalFontSize.get()).toBe(DEFAULT_TERMINAL_FONT_SIZE)
   })
 
   // Regression: the composer keeps a manual model pick sticky, which skips the
@@ -176,7 +201,7 @@ describe('useHermesConfig refreshHermesConfig', () => {
     staleConfig.resolve({
       display: { show_reasoning: false },
       agent: { reasoning_effort: 'high', service_tier: 'priority' },
-      terminal: { font_family: 'MesloLGS NF' }
+      terminal: { font_family: 'MesloLGS NF', font_size: 18 }
     } as Awaited<ReturnType<typeof getHermesConfig>>)
 
     await act(async () => {
@@ -187,6 +212,7 @@ describe('useHermesConfig refreshHermesConfig', () => {
     expect($currentReasoningEffort.get()).toBe('')
     expect($currentFastMode.get()).toBe(false)
     expect($terminalFontFamily.get()).toBe('')
+    expect($terminalFontSize.get()).toBe(DEFAULT_TERMINAL_FONT_SIZE)
     expect($showReasoning.get()).toBe(true)
   })
 
@@ -232,15 +258,16 @@ describe('useHermesConfig refreshHermesConfig', () => {
       refreshC = result.current.refreshHermesConfig(true)
     })
 
-    profileC.resolve({ terminal: { font_family: 'Hack Nerd Font' } })
+    profileC.resolve({ terminal: { font_family: 'Hack Nerd Font', font_size: 15 } })
     await act(async () => {
       await refreshC
     })
-    profileB.resolve({ terminal: { font_family: 'MesloLGS NF' } })
+    profileB.resolve({ terminal: { font_family: 'MesloLGS NF', font_size: 24 } })
     await act(async () => {
       await refreshB
     })
 
     expect($terminalFontFamily.get()).toBe('Hack Nerd Font')
+    expect($terminalFontSize.get()).toBe(15)
   })
 })

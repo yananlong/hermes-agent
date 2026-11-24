@@ -1591,10 +1591,26 @@ def _turn_without_loop(agent: Any, s: _LoopState, block_message: str) -> Optiona
     """The turn's result when it never enters the generic loop, else None. A ``pre_llm_call``
     veto finalizes with no inference request (the block message closes the transcript pair);
     the opt-in codex app-server runtime runs the whole turn in its subprocess
-    (agent/transports/codex_app_server_session.py)."""
+    (agent/transports/codex_app_server_session.py); a linked foreign pointer row (Claude Code /
+    Mistral Vibe) is appended to its native thread by ``agent/linked_foreign_turn.py``."""
     if block_message:
         s.final_response, s._turn_exit_reason = block_message, PRE_LLM_BLOCK_EXIT_REASON
         return _finalize_from_state(agent, s)
+    from agent.codex_runtime import _is_linked_codex_thread, _turn_result
+    from agent.linked_foreign_turn import linked_foreign_agent, run_linked_foreign_turn
+    # A linked Claude/Mistral row is a pointer: the native CLI owns the transcript, so the ONLY
+    # admissible turn appends to that thread. Checked BEFORE the codex branch and returned
+    # unconditionally — this is the fork boundary, not a preference (see
+    # agent/linked_foreign_turn.py). The row flag is authoritative, never agent.api_mode: init
+    # resolves the row's ``*_linked_readonly`` api_mode to an ordinary wire mode, so a
+    # runtime-based test here would let the generic loop answer from a new Hermes conversation.
+    if linked_foreign_agent(agent) is not None:
+        return run_linked_foreign_turn(
+            agent, user_message=s.user_message, original_user_message=s.original_user_message,
+            messages=s.messages)
+    if _is_linked_codex_thread(agent) and agent.api_mode != "codex_app_server":
+        error = "Linked Codex sessions require the Codex app-server runtime"
+        return _turn_result((False, None), s.messages, api_calls=0, completed=False, error=error, final_response=error)
     return _codex_app_server_turn(agent, s) if agent.api_mode == "codex_app_server" else None
 
 
@@ -1606,6 +1622,9 @@ def _codex_app_server_turn(agent: Any, s: Any) -> Optional[dict[str, Any]]:
         messages=s.messages, effective_task_id=s.effective_task_id,
         should_review_memory=s._should_review_memory, turn_id=s.turn_id,
     )
+    from agent.codex_runtime import _is_linked_codex_thread
+    if _is_linked_codex_thread(agent):
+        return codex_result
     from agent.turn_recovery import activate_codex_app_server_fallback
     if not activate_codex_app_server_fallback(agent, codex_result):
         return codex_result

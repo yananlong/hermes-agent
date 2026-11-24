@@ -30,9 +30,9 @@ import { jaUpdateChannel } from './ja_update_channel'
 
 export const jaOverrides = {
   gatewayGroupOpen: {
-    opening: "グループチャットを開いています…",
-    lookupFailed: "ゲートウェイでこのグループを検索できませんでした。もう一度お試しください。",
-    missing: "このグループチャットはもう存在しません。"
+    opening: 'グループチャットを開いています…',
+    lookupFailed: 'ゲートウェイでこのグループを検索できませんでした。もう一度お試しください。',
+    missing: 'このグループチャットはもう存在しません。'
   },
   catalog: jaCatalog,
   connectors: jaConnectors.connectors,
@@ -539,6 +539,9 @@ export const jaOverrides = {
       terminalFontPlaceholder: 'MesloLGS NF または CSS フォントスタック',
       terminalFontPreview: 'グリフのプレビュー',
       terminalFontReset: '既定値を使用',
+      terminalFontSizeTitle: 'ターミナルの文字サイズ',
+      terminalFontSizeDesc: 'ユーザー用とエージェント用のターミナルの文字サイズを8〜32ピクセルで設定します。',
+      terminalFontSizeReset: '既定のサイズを使用',
       chatFontTitle: 'チャットフォント',
       chatFontDesc:
         'チャットとアプリ全体に使うインストール済みフォントを選択します。OpenDyslexic などの読みやすいフォントに便利です。空欄ならテーマのフォントを使います。',
@@ -1313,12 +1316,14 @@ export const jaOverrides = {
         enabledTitle: '実プロファイルブラウジング：オン',
         enabledMessage: '新しいセッションは既定ブラウザプロファイルのスナップショットでブラウジングします。',
         disabledTitle: '実プロファイルブラウジング：オフ',
-        disabledMessage: 'プロファイルのスナップショットは削除され、アプリ内ブラウザもそのログインから外れます。新しいセッションはクリーンなブラウザを使用します。',
+        disabledMessage:
+          'プロファイルのスナップショットは削除され、アプリ内ブラウザもそのログインから外れます。新しいセッションはクリーンなブラウザを使用します。',
         failedSave: '実プロファイル設定を保存できませんでした',
         reimportSignins: 'ログイン情報を再インポート',
         signinsImportedTitle: 'アプリ内ブラウザのログイン',
         signinsImported: count => `ブラウザプロファイルの Cookie ${count} 件でアプリ内ブラウザにログインしました。`,
-        signinsRemote: 'このバックエンドは別のマシンで動作しているため、そのブラウザプロファイルはアプリ内ブラウザにインポートされません。',
+        signinsRemote:
+          'このバックエンドは別のマシンで動作しているため、そのブラウザプロファイルはアプリ内ブラウザにインポートされません。',
         signinsFailed: 'アプリ内ブラウザにログイン情報をインポートできませんでした',
         prompt: {
           title: 'サイトにログインしたまま利用',
@@ -1637,7 +1642,8 @@ export const jaOverrides = {
     relayLink: {
       title: 'Team Gateway',
       badge: 'ボットトークン不要',
-      intro: (platform: string) => `${platform} は共有の Hermes ボット経由でこのエージェントに届きます。${platform} アカウントをリンクし、ボットにメッセージを送るとエージェントと話せます。`,
+      intro: (platform: string) =>
+        `${platform} は共有の Hermes ボット経由でこのエージェントに届きます。${platform} アカウントをリンクし、ボットにメッセージを送るとエージェントと話せます。`,
       link: (platform: string) => `${platform} をリンク`,
       linkAnother: (platform: string) => `別の ${platform} アカウントをリンク`,
       linkedAccounts: 'リンク済みアカウント',
@@ -1650,15 +1656,19 @@ export const jaOverrides = {
       copied: 'コピーしました',
       copyFailed: (command: string) => `コピーできませんでした。${command} と入力してください。`,
       waiting: 'ボットがメッセージを受け取るのを待っています。コードは1回だけ使えます。',
-      linked: (platform: string) => `${platform} アカウントをリンクしました。ボットにメッセージを送るとエージェントと話せます。`,
+      linked: (platform: string) =>
+        `${platform} アカウントをリンクしました。ボットにメッセージを送るとエージェントと話せます。`,
       expired: 'コードは使われる前に期限切れになりました。新しいコードを取得してもう一度お試しください。',
-      refused: (platform: string) => `${platform} がリンクを拒否しました。新しいコードを取得してもう一度お試しください。`,
+      refused: (platform: string) =>
+        `${platform} がリンクを拒否しました。新しいコードを取得してもう一度お試しください。`,
       qrAlt: (platform: string) => `共有 ${platform} ボットの QR コード`,
       managed: 'Team Gateway が管理',
-      managedNote: (platform: string) => `このインスタンスではメッセージを Team Gateway が扱うため、ゲートウェイは起動のたびに ${platform} の直接接続をオフにします。リレーと併用するには、ゲートウェイの環境に GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true を設定してください（直接接続があるとインスタンスがゼロまでスケールダウンできず、メッセージが二重に届くことがあります）。`,
+      managedNote: (platform: string) =>
+        `このインスタンスではメッセージを Team Gateway が扱うため、ゲートウェイは起動のたびに ${platform} の直接接続をオフにします。リレーと併用するには、ゲートウェイの環境に GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true を設定してください（直接接続があるとインスタンスがゼロまでスケールダウンできず、メッセージが二重に届くことがあります）。`,
       managedIntro: 'このエージェントのアカウントは Nous Portal からリンクします。',
       openPortal: 'Nous Portal でアカウントをリンク',
-      noNewAccount: (platform: string) => `コードは無効になり、新しいアカウントは表示されませんでした。${platform} アカウントが一覧にない場合は、新しいコードを取得してもう一度お試しください。`
+      noNewAccount: (platform: string) =>
+        `コードは無効になり、新しいアカウントは表示されませんでした。${platform} アカウントが一覧にない場合は、新しいコードを取得してもう一度お試しください。`
     },
     telegramQr: {
       title: 'Telegram ボットの接続方法を選択',
@@ -2261,6 +2271,28 @@ export const jaOverrides = {
       unarchive: 'アーカイブを解除',
       newWindow: '新しいウィンドウ',
       openInTerminal: 'ターミナルで開く',
+      useTerminalHandoff: 'このホストのターミナルを使う…',
+      terminalHandoffTitle: 'Hermes ホストのターミナルでこのチャットを再開',
+      terminalHandoffInstructions:
+        'お使いのコンピューターで iTerm などのターミナルを開き、普段の SSH コマンドまたは gcloud compute ssh で同じ Hermes ホストに接続してから、このコマンドをリモートのプロンプトに貼り付けてください。',
+      terminalHandoffOwnerWarning:
+        '先にブラウザーの TUI で Ctrl+D または /exit を使ってこのチャットを終了し、完全に終了するまで待ってください。ブラウザーのタブを閉じても接続が切れるだけで、TUI がセッションを保持し続ける場合があります。現在の所有者が動作中は Hermes が 2 つ目の TUI を拒否します。',
+      terminalHandoffShellLabel: 'Hermes ホスト上のシェル',
+      terminalHandoffLoginShell: 'SSH ログインシェル',
+      terminalHandoffZsh: 'zsh（今回の起動のみ）',
+      terminalHandoffBash: 'bash（今回の起動のみ）',
+      terminalHandoffShellNote:
+        'Hermes ホストにインストール済みのシェルを選択してください。zsh は初回設定プロンプトを避けるため起動ファイルを読み込まず、SSH シェルの PATH を引き継ぎます。ホストのログインシェル設定は変更しません。',
+      terminalHandoffIdentityNote:
+        'Webapp と同じ Unix アカウントとプロファイル設定を使用してください。このコマンドは今回の起動時に Webapp の Hermes ホームを設定し、同じセッションデータベースを開きます。',
+      terminalHandoffPathNote:
+        'コマンドはリモートシェルの PATH にある hermes を使います。必要に応じて、実行前にインストール先のディレクトリを PATH に追加してください。',
+      terminalHandoffLoading: 'Hermes ホストの設定を読み込み中…',
+      terminalHandoffLoadFailed:
+        'Hermes ホストの設定を読み込めませんでした。再度サインインして、このダイアログを開き直してください。',
+      terminalHandoffHomeUnsupported:
+        'この Hermes ホームのパスは貼り付けコマンドで安全に引用できません。引用符やバックスラッシュを含まないパスを管理者に依頼してください。',
+      terminalHandoffCopy: '再開コマンドをコピー',
       copyIdFailed: 'セッション ID をコピーできませんでした',
 
       sessionActions: 'セッションアクション',
@@ -3517,6 +3549,34 @@ export const jaOverrides = {
       outputAlt: 'ツール出力',
       rawResponse: '生の応答',
       copyActivity: 'アクティビティをコピー',
+      codexSubagentActivity: {
+        openTrace: 'サブエージェントのトレースを開く',
+        traceTitle: 'Codex サブエージェントのトレース',
+        traceDescription:
+          'このサブエージェントのメッセージ、推論の要約、ツールのアクティビティを読み取り専用で表示します。',
+        traceUnavailable: 'サブエージェントのトレースを利用できません',
+        loading: 'トレースを読み込み中…',
+        loadFailed: 'トレースを読み込めませんでした。',
+        retry: '再試行',
+        close: '会話に戻る',
+        backToParent: '親のトレースに戻る',
+        empty: 'トレース項目がありません。',
+        waiting: 'サブエージェントのトレースを待機中…',
+        updating: 'ライブトレースを更新中…',
+        assistantRole: 'Codex',
+        userRole: '依頼',
+        systemRole: 'システム',
+        reasoningSummary: '推論の要約',
+        arguments: '引数',
+        result: '結果',
+        unknownKind: 'アクティビティ',
+        kinds: {
+          started: '開始',
+          interacted: '動作中',
+          interrupted: '中断',
+          completed: '完了'
+        }
+      },
       recoveredOne: '1 つの失敗したステップの後に回復しました',
       recoveredMany: count => `${count} つの失敗したステップの後に回復しました`,
       failedOne: '1 つのステップが失敗しました',

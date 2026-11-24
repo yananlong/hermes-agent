@@ -30,9 +30,9 @@ import { introFr } from './intro-fr'
 
 export const frOverrides = {
   gatewayGroupOpen: {
-    opening: "Ouverture de la discussion de groupe…",
-    lookupFailed: "Impossible de retrouver ce groupe sur la passerelle. Réessayez.",
-    missing: "Cette discussion de groupe n’existe plus."
+    opening: 'Ouverture de la discussion de groupe…',
+    lookupFailed: 'Impossible de retrouver ce groupe sur la passerelle. Réessayez.',
+    missing: 'Cette discussion de groupe n’existe plus.'
   },
   sharedMetrics: frSharedMetrics,
   firstRun: frFirstRun,
@@ -310,6 +310,29 @@ export const frOverrides = {
     }
   },
   sessionImport: {
+    hostCapabilityChecking: 'Vérification de ce que cet hôte peut exécuter…',
+    hostCapabilityUnknown:
+      'Cette passerelle précède le contrôle des capacités de l’hôte ; les sessions liées restent donc en lecture seule ici.',
+    hostCapabilityError: 'Impossible de vérifier ce que cet hôte peut exécuter.',
+    hostCapabilityAvailable: (label: string) => `${label} est disponible ici`,
+    hostCapabilityStore: (label: string, host: string) =>
+      `Aucun stockage de sessions ${label} lisible sur ${host}.`,
+    hostCapabilityCli: (label: string, host: string) => `${label} n’est pas installé sur ${host}.`,
+    hostCapabilityBuild: (label: string) =>
+      `Cette passerelle ne peut pas encore poursuivre les fils ${label}.`,
+    hostCapabilityReadOnly: (label: string) =>
+      `L’envoi est en lecture seule dans cette version : elle ne peut pas encore ajouter de tours aux fils ${label}.`,
+    hostCapabilityWritable: (label: string) =>
+      `Les nouveaux messages sont ajoutés à ce fil ${label} sur l’hôte et y sont visibles par ${label}.`,
+    codexThreads: 'Ouvrir un fil Codex',
+    codexThreadsHelp: 'Continuez la même conversation Codex dans Hermes.',
+    codexHandoff: 'Fermez le fil dans les autres clients avant de continuer ici.',
+    codexCallbacksWarning:
+      'Cette session liée ne peut pas restaurer les outils définis par le client Codex d’origine, notamment les rappels de délégation d’Hermes. Les appels à ces outils seront refusés ou échoueront en toute sécurité.',
+    codexLink: 'Ouvrir le fil lié',
+    codexLinking: 'Ouverture du fil…',
+    codexLinkError: 'Impossible d’ouvrir ce fil Codex.',
+    codexNoThreads: 'Aucun fil Codex trouvé',
     title: 'Reprendre depuis une autre application',
     subtitle: 'Importez une conversation dans Hermes et reprenez là où vous en étiez.',
     action: 'Importer une session',
@@ -1033,6 +1056,9 @@ export const frOverrides = {
       terminalFontPlaceholder: 'MesloLGS NF ou une pile de polices CSS',
       terminalFontPreview: 'Aperçu des glyphes',
       terminalFontReset: 'Utiliser la valeur par défaut',
+      terminalFontSizeTitle: 'Taille de police du terminal',
+      terminalFontSizeDesc: 'Choisissez une taille de texte de 8 à 32 pixels pour les terminaux utilisateur et agent.',
+      terminalFontSizeReset: 'Utiliser la taille par défaut',
       chatFontTitle: 'Police de la conversation',
       chatFontDesc:
         "Choisissez une police installée pour la conversation et le reste de l'application. Pratique pour des polices plus lisibles comme OpenDyslexic ; laissez vide pour utiliser celle du thème.",
@@ -2402,21 +2428,23 @@ export const frOverrides = {
       browserRealProfile: {
         label: 'Utiliser mon profil de navigateur réel',
         description:
-          'Copie les identifiants de connexion et les cookies de votre navigateur par défaut dans un instantané géré que l\'agent utilise pour naviguer, et connecte aussi le navigateur intégré avec eux. Votre profil actif n\'est jamais ouvert directement. S\'applique aux nouvelles sessions.',
+          "Copie les identifiants de connexion et les cookies de votre navigateur par défaut dans un instantané géré que l'agent utilise pour naviguer, et connecte aussi le navigateur intégré avec eux. Votre profil actif n'est jamais ouvert directement. S'applique aux nouvelles sessions.",
         enabledTitle: 'Navigation avec le profil réel activée',
         enabledMessage: 'Les nouvelles sessions utiliseront un instantané de votre profil de navigateur par défaut.',
         disabledTitle: 'Navigation avec le profil réel désactivée',
         disabledMessage:
-          'L\'instantané du profil sera supprimé et le navigateur intégré en sera déconnecté ; les nouvelles sessions utiliseront un navigateur vierge.',
+          "L'instantané du profil sera supprimé et le navigateur intégré en sera déconnecté ; les nouvelles sessions utiliseront un navigateur vierge.",
         failedSave: "Impossible d'enregistrer le paramètre du profil réel",
         reimportSignins: 'Réimporter les connexions',
         signinsImportedTitle: 'Connexions du navigateur intégré',
-        signinsImported: count => `Navigateur intégré connecté avec ${count} cookie${count === 1 ? '' : 's'} de votre profil de navigateur.`,
-        signinsRemote: 'Ce backend s\'exécute sur une autre machine, son profil de navigateur n\'est donc pas importé dans le navigateur intégré.',
-        signinsFailed: 'Impossible d\'importer les connexions dans le navigateur intégré',
+        signinsImported: count =>
+          `Navigateur intégré connecté avec ${count} cookie${count === 1 ? '' : 's'} de votre profil de navigateur.`,
+        signinsRemote:
+          "Ce backend s'exécute sur une autre machine, son profil de navigateur n'est donc pas importé dans le navigateur intégré.",
+        signinsFailed: "Impossible d'importer les connexions dans le navigateur intégré",
         prompt: {
           title: 'Restez connecté à vos sites',
-          body: 'Autorisez Hermes à naviguer avec un instantané de votre profil de navigateur par défaut afin que les sites s\'ouvrent avec vos sessions déjà connectées, pour l\'agent et dans le navigateur intégré.',
+          body: "Autorisez Hermes à naviguer avec un instantané de votre profil de navigateur par défaut afin que les sites s'ouvrent avec vos sessions déjà connectées, pour l'agent et dans le navigateur intégré.",
           bulletSnapshot: 'Les cookies et identifiants de connexion sont copiés dans un instantané géré.',
           bulletLiveProfile: "Votre profil de navigateur actif n'est jamais ouvert directement.",
           bulletLocal: 'Rien ne quitte cet ordinateur.',
@@ -3010,7 +3038,8 @@ export const frOverrides = {
     relayLink: {
       title: 'Team Gateway',
       badge: 'Aucun jeton de bot requis',
-      intro: (platform: string) => `${platform} atteint cet agent via le bot Hermes partagé. Associez votre compte ${platform} et écrivez au bot pour parler à votre agent.`,
+      intro: (platform: string) =>
+        `${platform} atteint cet agent via le bot Hermes partagé. Associez votre compte ${platform} et écrivez au bot pour parler à votre agent.`,
       link: (platform: string) => `Associer ${platform}`,
       linkAnother: (platform: string) => `Associer un autre compte ${platform}`,
       linkedAccounts: 'Comptes associés',
@@ -3028,10 +3057,12 @@ export const frOverrides = {
       refused: (platform: string) => `${platform} a refusé l’association. Demandez un nouveau code et réessayez.`,
       qrAlt: (platform: string) => `Code QR du bot ${platform} partagé`,
       managed: 'Géré par Team Gateway',
-      managedNote: (platform: string) => `Team Gateway assure la messagerie sur cette instance : le gateway désactive donc la connexion directe ${platform} à chaque démarrage. Pour l’utiliser en plus du relais, définissez GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true dans l’environnement du gateway (une connexion directe empêche l’instance de descendre à zéro et peut livrer les messages deux fois).`,
+      managedNote: (platform: string) =>
+        `Team Gateway assure la messagerie sur cette instance : le gateway désactive donc la connexion directe ${platform} à chaque démarrage. Pour l’utiliser en plus du relais, définissez GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true dans l’environnement du gateway (une connexion directe empêche l’instance de descendre à zéro et peut livrer les messages deux fois).`,
       managedIntro: 'Les comptes de cet agent se lient depuis Nous Portal.',
       openPortal: 'Lier des comptes dans Nous Portal',
-      noNewAccount: (platform: string) => `Le code n’est plus actif et aucun nouveau compte n’est apparu. Si votre compte ${platform} n’est pas listé, obtenez un nouveau code et réessayez.`
+      noNewAccount: (platform: string) =>
+        `Le code n’est plus actif et aucun nouveau compte n’est apparu. Si votre compte ${platform} n’est pas listé, obtenez un nouveau code et réessayez.`
     },
     telegramQr: {
       title: 'Choisissez comment connecter votre bot Telegram',
@@ -3732,6 +3763,28 @@ export const frOverrides = {
       unarchive: 'Restaurer',
       newWindow: 'Nouvelle fenêtre',
       openInTerminal: 'Ouvrir dans le terminal',
+      useTerminalHandoff: 'Utiliser un terminal sur cet hôte…',
+      terminalHandoffTitle: 'Reprendre cette discussion dans un terminal sur l’hôte Hermes',
+      terminalHandoffInstructions:
+        'Ouvrez iTerm ou un autre terminal sur votre ordinateur, connectez-vous au même hôte Hermes avec votre commande SSH habituelle ou gcloud compute ssh, puis collez cette commande dans l’invite distante.',
+      terminalHandoffOwnerWarning:
+        'Quittez d’abord cette discussion dans le TUI du navigateur avec Ctrl+D ou /exit et attendez sa fermeture. Fermer l’onglet du navigateur ne fait que détacher la vue ; le terminal du navigateur peut encore posséder la session. Hermes refusera un second TUI tant que le propriétaire actuel est actif.',
+      terminalHandoffShellLabel: 'Shell sur l’hôte Hermes',
+      terminalHandoffLoginShell: 'Shell de connexion SSH',
+      terminalHandoffZsh: 'zsh (pour ce lancement uniquement)',
+      terminalHandoffBash: 'bash (pour ce lancement uniquement)',
+      terminalHandoffShellNote:
+        'Choisissez un shell installé sur l’hôte Hermes. zsh ne charge pas ses fichiers de démarrage afin d’éviter l’assistant de première exécution et reprend le PATH du shell SSH. Le shell de connexion de l’hôte ne change pas.',
+      terminalHandoffIdentityNote:
+        'Utilisez le même compte Unix et la même configuration de profil que la Webapp. Pour cette exécution, la commande définit le dossier Hermes de la Webapp afin d’ouvrir la même base de sessions.',
+      terminalHandoffPathNote:
+        'La commande attend hermes dans le PATH du shell distant. Si nécessaire, ajoutez d’abord son dossier d’installation au PATH.',
+      terminalHandoffLoading: 'Chargement des réglages de l’hôte Hermes…',
+      terminalHandoffLoadFailed:
+        'Impossible de charger les réglages de l’hôte Hermes. Reconnectez-vous, puis rouvrez cette boîte de dialogue.',
+      terminalHandoffHomeUnsupported:
+        'Ce chemin Hermes ne peut pas être cité sans risque dans une commande à coller. Demandez à l’administrateur d’utiliser un chemin sans guillemets ni antislashs.',
+      terminalHandoffCopy: 'Copier la commande de reprise',
       hideTabBar: "Masquer la barre d'onglets",
       openInNewTab: 'Ouvrir dans un nouvel onglet',
       openInSplit: 'Ouvrir en split',
@@ -5257,6 +5310,33 @@ export const frOverrides = {
       outputAlt: "Sortie de l'outil",
       rawResponse: 'Réponse brute',
       copyActivity: "Copier l'activité",
+      codexSubagentActivity: {
+        openTrace: 'Ouvrir la trace du sous-agent',
+        traceTitle: 'Trace du sous-agent Codex',
+        traceDescription: 'Messages en lecture seule, résumés du raisonnement et activité des outils de ce sous-agent.',
+        traceUnavailable: 'Trace du sous-agent indisponible',
+        loading: 'Chargement de la trace…',
+        loadFailed: 'Impossible de charger cette trace.',
+        retry: 'Réessayer',
+        close: 'Retour à la conversation',
+        backToParent: 'Retour à la trace parente',
+        empty: 'Aucune entrée de trace reçue.',
+        waiting: 'En attente de la trace du sous-agent…',
+        updating: 'Mise à jour de la trace en direct…',
+        assistantRole: 'Codex',
+        userRole: 'Demande',
+        systemRole: 'Système',
+        reasoningSummary: 'Résumé du raisonnement',
+        arguments: 'Arguments',
+        result: 'Résultat',
+        unknownKind: 'Activité',
+        kinds: {
+          started: 'Démarré',
+          interacted: 'En activité',
+          interrupted: 'Interrompu',
+          completed: 'Terminé'
+        }
+      },
       recoveredOne: 'Récupéré après 1 étape échouée',
       recoveredMany: count => `Récupéré après ${count} étapes échouées`,
       failedOne: '1 étape a échoué',

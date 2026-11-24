@@ -30,9 +30,9 @@ import { introDe } from './intro-de'
 
 export const deOverrides = {
   gatewayGroupOpen: {
-    opening: "Gruppenchat wird geöffnet…",
-    lookupFailed: "Diese Gruppe konnte auf dem Gateway nicht gefunden werden. Versuche es erneut.",
-    missing: "Dieser Gruppenchat existiert nicht mehr."
+    opening: 'Gruppenchat wird geöffnet…',
+    lookupFailed: 'Diese Gruppe konnte auf dem Gateway nicht gefunden werden. Versuche es erneut.',
+    missing: 'Dieser Gruppenchat existiert nicht mehr.'
   },
   sharedMetrics: deSharedMetrics,
   firstRun: deFirstRun,
@@ -307,6 +307,29 @@ export const deOverrides = {
     }
   },
   sessionImport: {
+    hostCapabilityChecking: 'Es wird geprüft, was dieser Host ausführen kann…',
+    hostCapabilityUnknown:
+      'Dieses Gateway kennt die Host-Fähigkeitsprüfung noch nicht, deshalb bleiben verknüpfte Sitzungen hier schreibgeschützt.',
+    hostCapabilityError: 'Es konnte nicht geprüft werden, was dieser Host ausführen kann.',
+    hostCapabilityAvailable: (label: string) => `${label} ist hier verfügbar`,
+    hostCapabilityStore: (label: string, host: string) =>
+      `Kein lesbarer ${label}-Sitzungsspeicher auf ${host}.`,
+    hostCapabilityCli: (label: string, host: string) => `${label} ist auf ${host} nicht installiert.`,
+    hostCapabilityBuild: (label: string) =>
+      `Dieses Gateway kann ${label}-Threads noch nicht fortsetzen.`,
+    hostCapabilityReadOnly: (label: string) =>
+      `Senden ist in diesem Build schreibgeschützt — es kann noch keine Turns an ${label}-Threads anhängen.`,
+    hostCapabilityWritable: (label: string) =>
+      `Neue Nachrichten werden auf dem Host an diesen ${label}-Thread angehängt und sind dort in ${label} sichtbar.`,
+    codexThreads: 'Codex-Thread öffnen',
+    codexThreadsHelp: 'Setze dieselbe Codex-Konversation in Hermes fort.',
+    codexHandoff: 'Schließe den Thread in anderen Clients, bevor du hier fortfährst.',
+    codexCallbacksWarning:
+      'Diese verknüpfte Sitzung kann keine vom ursprünglichen Codex-Client bereitgestellten, clientdefinierten Tools wiederherstellen, einschließlich Hermes-Delegations-Callbacks. Aufrufe dieser Tools werden abgelehnt oder schlagen sicher fehl.',
+    codexLink: 'Verknüpften Thread öffnen',
+    codexLinking: 'Thread wird geöffnet…',
+    codexLinkError: 'Dieser Codex-Thread konnte nicht geöffnet werden.',
+    codexNoThreads: 'Keine Codex-Threads gefunden',
     title: 'Von einer anderen App fortfahren',
     subtitle: 'Holen Sie eine Konversation in Hermes und machen Sie dort weiter, wo Sie aufgehört haben.',
     action: 'Session importieren',
@@ -1027,6 +1050,9 @@ export const deOverrides = {
       terminalFontPlaceholder: 'MesloLGS NF oder ein CSS-Font-Stack',
       terminalFontPreview: 'Glyph-Vorschau',
       terminalFontReset: 'Standard verwenden',
+      terminalFontSizeTitle: 'Terminal-Schriftgröße',
+      terminalFontSizeDesc: 'Legen Sie die Textgröße für Benutzer- und Agent-Terminals zwischen 8 und 32 Pixeln fest.',
+      terminalFontSizeReset: 'Standardgröße verwenden',
       chatFontTitle: 'Chat-Schrift',
       chatFontDesc:
         'Wählen Sie eine installierte Schrift für den Chat und den Rest der App. Praktisch für Lesbarkeitsschriften wie OpenDyslexic; lassen Sie das Feld leer, um die Schrift des Themes zu verwenden.',
@@ -2401,12 +2427,15 @@ export const deOverrides = {
         enabledTitle: 'Echtes Profil-Browsen aktiv',
         enabledMessage: 'Neue Sessions browsen mit einem Schnappschuss Ihres Standard-Browserprofils.',
         disabledTitle: 'Echtes Profil-Browsen deaktiviert',
-        disabledMessage: 'Der Profil-Schnappschuss wird gelöscht und der In-App-Browser davon abgemeldet; neue Sessions verwenden einen sauberen Browser.',
+        disabledMessage:
+          'Der Profil-Schnappschuss wird gelöscht und der In-App-Browser davon abgemeldet; neue Sessions verwenden einen sauberen Browser.',
         failedSave: 'Die Echtes-Profil-Einstellung konnte nicht gespeichert werden',
         reimportSignins: 'Anmeldungen erneut importieren',
         signinsImportedTitle: 'Anmeldungen im In-App-Browser',
-        signinsImported: count => `In-App-Browser mit ${count} Cookie${count === 1 ? '' : 's'} aus Ihrem Browserprofil angemeldet.`,
-        signinsRemote: 'Dieses Backend läuft auf einem anderen Rechner, daher wird sein Browserprofil nicht in den In-App-Browser importiert.',
+        signinsImported: count =>
+          `In-App-Browser mit ${count} Cookie${count === 1 ? '' : 's'} aus Ihrem Browserprofil angemeldet.`,
+        signinsRemote:
+          'Dieses Backend läuft auf einem anderen Rechner, daher wird sein Browserprofil nicht in den In-App-Browser importiert.',
         signinsFailed: 'Anmeldungen konnten nicht in den In-App-Browser importiert werden',
         prompt: {
           title: 'Auf Ihren Websites angemeldet bleiben',
@@ -3002,7 +3031,8 @@ export const deOverrides = {
     relayLink: {
       title: 'Team Gateway',
       badge: 'Kein Bot-Token nötig',
-      intro: (platform: string) => `${platform} erreicht diesen Agenten über den gemeinsamen Hermes-Bot. Verknüpfe dein ${platform}-Konto damit und schreib dem Bot, um mit deinem Agenten zu sprechen.`,
+      intro: (platform: string) =>
+        `${platform} erreicht diesen Agenten über den gemeinsamen Hermes-Bot. Verknüpfe dein ${platform}-Konto damit und schreib dem Bot, um mit deinem Agenten zu sprechen.`,
       link: (platform: string) => `${platform} verknüpfen`,
       linkAnother: (platform: string) => `Weiteres ${platform}-Konto verknüpfen`,
       linkedAccounts: 'Verknüpfte Konten',
@@ -3017,13 +3047,16 @@ export const deOverrides = {
       waiting: 'Warte darauf, dass der Bot deine Nachricht sieht. Der Code gilt einmal.',
       linked: (platform: string) => `${platform}-Konto verknüpft. Schreib dem Bot, um mit deinem Agenten zu sprechen.`,
       expired: 'Der Code ist abgelaufen, bevor er benutzt wurde. Hol dir einen neuen Code und versuch es erneut.',
-      refused: (platform: string) => `${platform} hat die Verknüpfung abgelehnt. Hol dir einen neuen Code und versuch es erneut.`,
+      refused: (platform: string) =>
+        `${platform} hat die Verknüpfung abgelehnt. Hol dir einen neuen Code und versuch es erneut.`,
       qrAlt: (platform: string) => `QR-Code für den gemeinsamen ${platform}-Bot`,
       managed: 'Von Team Gateway verwaltet',
-      managedNote: (platform: string) => `Team Gateway übernimmt auf dieser Instanz das Messaging, daher schaltet das Gateway die direkte ${platform}-Verbindung bei jedem Start ab. Um sie parallel zum Relay zu betreiben, setze GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true in der Umgebung des Gateways (eine direkte Verbindung verhindert das Herunterskalieren auf null und kann Nachrichten doppelt zustellen).`,
+      managedNote: (platform: string) =>
+        `Team Gateway übernimmt auf dieser Instanz das Messaging, daher schaltet das Gateway die direkte ${platform}-Verbindung bei jedem Start ab. Um sie parallel zum Relay zu betreiben, setze GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true in der Umgebung des Gateways (eine direkte Verbindung verhindert das Herunterskalieren auf null und kann Nachrichten doppelt zustellen).`,
       managedIntro: 'Die Konten dieses Agenten werden im Nous Portal verknüpft.',
       openPortal: 'Konten im Nous Portal verknüpfen',
-      noNewAccount: (platform: string) => `Der Code ist nicht mehr aktiv und es ist kein neues Konto erschienen. Falls dein ${platform}-Konto nicht aufgeführt ist, hol dir einen neuen Code und versuche es erneut.`
+      noNewAccount: (platform: string) =>
+        `Der Code ist nicht mehr aktiv und es ist kein neues Konto erschienen. Falls dein ${platform}-Konto nicht aufgeführt ist, hol dir einen neuen Code und versuche es erneut.`
     },
     telegramQr: {
       title: 'Wählen Sie, wie Sie Ihren Telegram-Bot verbinden',
@@ -3725,6 +3758,28 @@ export const deOverrides = {
       unarchive: 'Archivierung aufheben',
       newWindow: 'Neues Fenster',
       openInTerminal: 'Im Terminal öffnen',
+      useTerminalHandoff: 'Terminal auf diesem Host verwenden…',
+      terminalHandoffTitle: 'Diesen Chat in einem Terminal auf dem Hermes-Host fortsetzen',
+      terminalHandoffInstructions:
+        'Öffnen Sie iTerm oder ein anderes Terminal auf Ihrem Computer, verbinden Sie sich mit Ihrem üblichen SSH-Befehl oder gcloud compute ssh mit demselben Hermes-Host und fügen Sie diesen Befehl an der entfernten Eingabeaufforderung ein.',
+      terminalHandoffOwnerWarning:
+        'Beenden Sie zuerst diesen Chat im Browser-TUI mit Ctrl+D oder /exit und warten Sie, bis er beendet ist. Das Schließen des Browser-Tabs trennt nur die Verbindung; das Browser-Terminal kann die Sitzung weiterhin besitzen. Hermes verweigert ein zweites TUI, solange der aktuelle Besitzer aktiv ist.',
+      terminalHandoffShellLabel: 'Shell auf dem Hermes-Host',
+      terminalHandoffLoginShell: 'SSH-Anmelde-Shell',
+      terminalHandoffZsh: 'zsh (nur für diesen Start)',
+      terminalHandoffBash: 'bash (nur für diesen Start)',
+      terminalHandoffShellNote:
+        'Wählen Sie eine auf dem Hermes-Host installierte Shell. zsh lädt keine Startdateien, damit keine Ersteinrichtungsabfrage erscheint, und übernimmt PATH aus Ihrer SSH-Shell. Die Anmelde-Shell des Hosts wird nicht geändert.',
+      terminalHandoffIdentityNote:
+        'Verwenden Sie dasselbe Unix-Konto und dieselbe Profilkonfiguration wie die Webapp. Der Befehl setzt für diesen Aufruf das Hermes-Home der Webapp, damit dieselbe Sitzungsdatenbank geöffnet wird.',
+      terminalHandoffPathNote:
+        'Der Befehl erwartet hermes im PATH der entfernten Shell. Fügen Sie bei Bedarf zuerst das Installationsverzeichnis zum PATH hinzu.',
+      terminalHandoffLoading: 'Hermes-Hosteinstellungen werden geladen…',
+      terminalHandoffLoadFailed:
+        'Hermes-Hosteinstellungen konnten nicht geladen werden. Melden Sie sich erneut an und öffnen Sie diesen Dialog noch einmal.',
+      terminalHandoffHomeUnsupported:
+        'Dieser Hermes-Home-Pfad kann nicht sicher in einem eingefügten Befehl zitiert werden. Bitten Sie die Administration um einen Pfad ohne Anführungszeichen oder Backslashes.',
+      terminalHandoffCopy: 'Fortsetzungsbefehl kopieren',
       hideTabBar: 'Tab-Leiste ausblenden',
       openInNewTab: 'In neuem Tab öffnen',
       openInSplit: 'Im Split öffnen',
@@ -5132,7 +5187,8 @@ export const deOverrides = {
       readAloud: 'Vorlesen',
       copyFullResponse: 'Vollständige Antwort kopieren',
       readAloudFullResponseHint: 'Umschalt-Klick: vollständige Antwort vorlesen',
-      contentRefusedNotice: 'Diese Nachricht wurde vom Sicherheitsfilter des Modells abgelehnt – versuche eine andere Anfrage.',
+      contentRefusedNotice:
+        'Diese Nachricht wurde vom Sicherheitsfilter des Modells abgelehnt – versuche eine andere Anfrage.',
       editMessage: 'Nachricht bearbeiten',
       expandMessage: 'Nachricht aufklappen',
       scrollToBottom: 'Nach unten scrollen',
@@ -5248,6 +5304,34 @@ export const deOverrides = {
       outputAlt: 'Tool-Ausgabe',
       rawResponse: 'Rohantwort',
       copyActivity: 'Aktivität kopieren',
+      codexSubagentActivity: {
+        openTrace: 'Subagenten-Trace öffnen',
+        traceTitle: 'Codex-Subagenten-Trace',
+        traceDescription:
+          'Schreibgeschützte Nachrichten, Begründungszusammenfassungen und Tool-Aktivitäten dieses Subagenten.',
+        traceUnavailable: 'Subagenten-Trace nicht verfügbar',
+        loading: 'Trace wird geladen…',
+        loadFailed: 'Trace konnte nicht geladen werden.',
+        retry: 'Erneut versuchen',
+        close: 'Zurück zum Gespräch',
+        backToParent: 'Zurück zum übergeordneten Trace',
+        empty: 'Keine Trace-Einträge zurückgegeben.',
+        waiting: 'Warte auf den Subagenten-Trace…',
+        updating: 'Live-Trace wird aktualisiert…',
+        assistantRole: 'Codex',
+        userRole: 'Prompt',
+        systemRole: 'System',
+        reasoningSummary: 'Begründungszusammenfassung',
+        arguments: 'Argumente',
+        result: 'Ergebnis',
+        unknownKind: 'Aktivität',
+        kinds: {
+          started: 'Gestartet',
+          interacted: 'Aktiv',
+          interrupted: 'Unterbrochen',
+          completed: 'Abgeschlossen'
+        }
+      },
       recoveredOne: 'Nach 1 fehlgeschlagenem Schritt wiederhergestellt',
       recoveredMany: count => `Nach ${count} fehlgeschlagenen Schritten wiederhergestellt`,
       failedOne: '1 Schritt fehlgeschlagen',

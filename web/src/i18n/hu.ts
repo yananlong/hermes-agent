@@ -174,6 +174,11 @@ export const hu: Translations = {
     selectedSessionsSkippedActive: "{deleted} törölve; {count} megtartva, mert egy kör még fut",
     failedToDeleteSelected: "Nem sikerült törölni a kijelölt munkameneteket",
     resumeInChat: "Folytatás a csevegésben",
+    linkedReadonlyBadge: "linked · read-only",
+    linkedReadonlyWarning:
+      "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript; new turns cannot be appended to the native session from the web dashboard.",
+    linkedResumeDisabled:
+      "Linked sessions are read-only in the web dashboard; open the conversation in the native app to continue it.",
     newChat: "Új csevegés",
     workspace: "munkaterület",
     workspaceDefault: "Alapértelmezett",

@@ -1,9 +1,11 @@
+import { LOCAL_CONNECTION_ID } from '@hermes/shared'
 import { act, renderHook } from '@testing-library/react'
 import type { WritableAtom } from 'nanostores'
 import { isValidElement, type ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { CwdChangeTarget } from '@/app/session/hooks/use-cwd-actions'
 import { group } from '@/components/pane-shell/tree/model'
 import { $layoutTree, noteActiveTreeGroup } from '@/components/pane-shell/tree/store'
 import { en } from '@/i18n/en'
@@ -11,6 +13,7 @@ import { createClientSessionState } from '@/lib/chat-runtime'
 import type * as DesktopFs from '@/lib/desktop-fs'
 import { usageContextLabel } from '@/lib/statusbar'
 import { $freeTierStatus } from '@/store/free-tier'
+import { setPrimaryGatewayConnection } from '@/store/gateway'
 import { INTERFACE_MODES, setInterfaceMode } from '@/store/interface-mode'
 import { markOnboardingDecided, setOnboardingSurfaceActive } from '@/store/onboarding-presence'
 import {
@@ -85,7 +88,9 @@ function focusPane(storedId: null | string): void {
 
 const wrapper = ({ children }: { children: ReactNode }) => <MemoryRouter>{children}</MemoryRouter>
 
-function renderStatusbarItems(changeSessionCwd: (cwd: string, sessionId?: string) => Promise<void> = async () => {}) {
+function renderStatusbarItems(
+  changeSessionCwd: (cwd: string, sessionId?: string, target?: CwdChangeTarget) => Promise<void> = async () => {}
+) {
   const { result } = renderHook(
     () =>
       useStatusbarItems({
@@ -110,7 +115,7 @@ function renderStatusbarItems(changeSessionCwd: (cwd: string, sessionId?: string
   return result.current
 }
 
-function workspaceMenu(changeSessionCwd?: (cwd: string, sessionId?: string) => Promise<void>) {
+function workspaceMenu(changeSessionCwd?: (cwd: string, sessionId?: string, target?: CwdChangeTarget) => Promise<void>) {
   const workspace = renderStatusbarItems(changeSessionCwd).leftStatusbarItems.find(item => item.id === 'workspace-cwd')
 
   return (workspace?.menuItems ?? []).filter(item => !item.hidden)
@@ -122,6 +127,7 @@ function workspaceMenuIds(): string[] {
 
 afterEach(() => {
   $connection.set(null)
+  setPrimaryGatewayConnection(null)
   $currentCwd.set('')
   $sessionTiles.set([])
   focusPane(null)
@@ -230,7 +236,42 @@ describe('statusbar workspace menu — change working directory', () => {
     )
   })
 
-  it("targets a focused tile's own runtime, and is absent for a cold tile or another gateway's tile", async () => {
+  it('hides the picker for a cold primary row while keeping the no-session draft state unchanged', () => {
+    setActiveSessionId(null)
+    $selectedStoredSessionId.set('cold-primary')
+    $sessions.set([{ cwd: '/opt/data', id: 'cold-primary' }] as never)
+    focusPane(null)
+
+    expect(workspaceMenuIds()).not.toContain('change-workspace-path')
+
+    $selectedStoredSessionId.set(null)
+    $sessions.set([])
+    expect(workspaceMenuIds()).not.toContain('change-workspace-path')
+  })
+
+  it('shows the picker for a cold linked row and explicitly targets its stored id', async () => {
+    const changeSessionCwd = vi.fn(async () => {})
+    $selectedStoredSessionId.set('cold-linked')
+    $sessions.set([{
+      codex_linked: true,
+      connection_id: LOCAL_CONNECTION_ID,
+      cwd: '/home/BNP_AI_evals',
+      id: 'cold-linked',
+      profile: 'default'
+    }] as never)
+    focusPane(null)
+    selectDesktopPaths.mockResolvedValueOnce(['/home'])
+
+    const item = workspaceMenu(changeSessionCwd).find(menuItem => menuItem.id === 'change-workspace-path')
+    expect(item).toBeDefined()
+    item?.onSelect?.()
+
+    await vi.waitFor(() => expect(changeSessionCwd).toHaveBeenCalledWith(
+      '/home', 'cold-linked', expect.objectContaining({ kind: 'stored-linked-codex' })
+    ))
+  })
+
+  it("hides cold local rows, targets a resumed tile runtime, and hides another gateway's tile", async () => {
     const changeSessionCwd = vi.fn(async () => {})
     selectDesktopPaths.mockResolvedValueOnce(['/srv/bot'])
     $selectedStoredSessionId.set('primary')
@@ -256,6 +297,32 @@ describe('statusbar workspace menu — change working directory', () => {
 
     $sessions.set([{ connection_id: 'conn-remote', cwd: '/opt/data', id: 'tile' }] as never)
     expect(workspaceMenuIds()).not.toContain('change-workspace-path')
+  })
+
+  it('keeps a resumed linked row on its stored owner when its runtime is focused', async () => {
+    const changeSessionCwd = vi.fn(async () => {})
+    selectDesktopPaths.mockResolvedValueOnce(['/home'])
+    $connection.set({ connectionId: LOCAL_CONNECTION_ID, mode: 'remote', profile: 'default' } as never)
+    setPrimaryGatewayConnection({ connectionId: LOCAL_CONNECTION_ID, mode: 'remote' }, 'default')
+    $selectedStoredSessionId.set('linked-native')
+    setActiveSessionId('runtime-native')
+    $sessions.set([{
+      codex_linked: true,
+      connection_id: LOCAL_CONNECTION_ID,
+      cwd: '/backend/work/native',
+      id: 'linked-native',
+      profile: 'default'
+    }] as never)
+
+    const item = workspaceMenu(changeSessionCwd).find(menuItem => menuItem.id === 'change-workspace-path')
+    expect(item).toBeDefined()
+    item?.onSelect?.()
+
+    await vi.waitFor(() => expect(changeSessionCwd).toHaveBeenCalledWith(
+      '/home',
+      'linked-native',
+      expect.objectContaining({ kind: 'stored-linked-codex', runtimeId: 'runtime-native' })
+    ))
   })
 })
 

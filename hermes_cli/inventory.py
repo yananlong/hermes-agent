@@ -4,14 +4,23 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 from contextvars import copy_context
 from dataclasses import dataclass, replace
+from datetime import UTC
+from pathlib import Path
 from threading import Lock, Thread, current_thread
 from typing import Any, Optional
-from datetime import UTC
 
 _pricing_prewarm_lock = Lock()
 _pricing_prewarm_threads: dict[tuple[str, tuple[tuple[str, str], ...]], Thread] = {}
+_codex_catalog_lock = Lock()
+_codex_catalog_cache: dict[tuple[str, str, str], tuple[float, tuple[str, ...]]] = {}
+_CODEX_CATALOG_TTL_SECONDS = 30
+_CODEX_PICKER_MODEL_ORDER = (
+    "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna",
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +34,7 @@ class ConfigContext:
     user_providers: dict
     custom_providers: list
     excluded_providers: list = None
+    openai_runtime: str = ""
 
     def with_overrides(
         self, *, current_provider: Optional[str] = None, current_model: Optional[str] = None,
@@ -51,14 +61,17 @@ def load_picker_context() -> ConfigContext:
         current_model = str(model_cfg.get("default", model_cfg.get("name", "")) or "")
         current_provider = coerce_provider_id(model_cfg.get("provider", ""))
         current_base_url = str(model_cfg.get("base_url", "") or "")
+        openai_runtime = str(model_cfg.get("openai_runtime", "") or "").strip().lower()
     else:  # config.model can be a bare string in older configs
         current_model, current_provider, current_base_url = (str(model_cfg) if model_cfg else ""), "", ""
+        openai_runtime = ""
     excluded = cfg.get("model_catalog", {}).get("excluded_providers") or []
     return ConfigContext(
         current_provider=current_provider, current_model=current_model, current_base_url=current_base_url,
         user_providers=stringify_provider_map(cfg.get("providers")),
         custom_providers=get_compatible_custom_providers(cfg),
         excluded_providers=excluded if isinstance(excluded, list) else [],
+        openai_runtime=openai_runtime,
     )
 
 
@@ -125,6 +138,15 @@ def build_models_payload(
 
     if include_unconfigured:
         rows = list(rows) + _without_slug(_append_unconfigured_rows(rows, ctx), "moa")
+
+    codex_app_server_row = _codex_app_server_provider_row(ctx)
+    if codex_app_server_row is not None and not any(_slug(row) == "openai" for row in rows):
+        # ``openai`` is a runtime alias rather than a canonical provider id, so it is absent from
+        # the authenticated-provider inventory and cannot be restored by canonical skeletons.
+        # The configured runtime is itself the explicit opt-in, so expose the local Codex catalog
+        # after Desktop's explicit-only filter.
+        rows = list(rows) + [codex_app_server_row]
+
     if picker_hints:
         _apply_picker_hints(rows)
     if canonical_order:
@@ -1074,6 +1096,98 @@ def _local_runtime_row(ctx: ConfigContext) -> dict | None:
                     source="local-runtime", authenticated=True, auth_type="local", warning=None)
     except Exception:
         return None
+
+
+def _codex_app_server_provider_row(ctx: ConfigContext) -> dict | None:
+    """Expose the ``openai`` alias when explicitly routed through Codex's app-server runtime.
+
+    Codex's app-server catalog is the account-aware source for gated models such as Astra. If it
+    cannot be read, fall back to Hermes' credential-free local catalog. In either case, only the
+    small supported picker set is exposed; the ``-900k`` aliases never reach this row.
+    """
+    if str(getattr(ctx, "openai_runtime", "") or "").strip().lower() != "codex_app_server":
+        return None
+
+    excluded = {str(value).strip().lower() for value in (getattr(ctx, "excluded_providers", None) or [])}
+    if "openai" in excluded:
+        return None
+
+    available = _codex_app_server_model_ids()
+    live_catalog = available is not None
+    if available is None:
+        from hermes_cli.codex_models import get_codex_model_ids
+
+        available = [str(model).strip() for model in get_codex_model_ids() if str(model).strip()]
+
+    available_bare = {model.rsplit("/", 1)[-1].strip().lower() for model in available if str(model).strip()}
+    models = [model for model in _CODEX_PICKER_MODEL_ORDER if model in available_bare]
+    current = str(getattr(ctx, "current_provider", "") or "").strip().lower() == "openai"
+    current_model = str(getattr(ctx, "current_model", "") or "").strip()
+    current_bare = current_model.rsplit("/", 1)[-1].strip().lower()
+    if current and not live_catalog and current_bare in _CODEX_PICKER_MODEL_ORDER and current_bare not in models:
+        # Preserve a configured supported selection if the account catalog could not be read.
+        # An authoritative live catalog remains the availability gate.
+        models = [model for model in _CODEX_PICKER_MODEL_ORDER if model in {*models, current_bare}]
+
+    return _row(
+        "openai", "OpenAI Codex CLI", current,
+        models=models, total_models=len(models), source="codex-app-server",
+        authenticated=live_catalog, auth_type="codex_app_server", key_env="",
+        warning=(None if live_catalog else
+                 "Could not verify the Codex account model list; displayed models may be incomplete."),
+    )
+
+
+def _codex_app_server_model_ids() -> list[str] | None:
+    """Read visible models from the configured Codex CLI without handling its credentials.
+
+    ``model/list`` uses the CLI's existing login and returns its current account catalog. Keep a
+    short process-local cache because each read starts an app-server subprocess; failures return
+    ``None`` so the caller can use Hermes' offline catalog instead.
+    """
+    from hermes_cli.config import load_config
+    from hermes_cli.codex_runtime_switch import get_configured_codex_binary
+
+    codex_bin = get_configured_codex_binary(load_config())
+    try:
+        from hermes_constants import get_hermes_home, hermes_home_key
+        from hermes_cli.codex_linked_threads import resolve_codex_home
+
+        profile_home = Path(get_hermes_home()).expanduser()
+        codex_home = resolve_codex_home(profile_home=profile_home)
+        cache_key = (codex_bin, hermes_home_key(profile_home), str(codex_home))
+    except (OSError, RuntimeError, ValueError):
+        # A missing profile scope or Codex home cannot be treated as the
+        # process account's catalog; the caller may still show offline models.
+        return None
+
+    with _codex_catalog_lock:
+        cached = _codex_catalog_cache.get(cache_key)
+        now = time.monotonic()
+        if cached and now - cached[0] < _CODEX_CATALOG_TTL_SECONDS:
+            return list(cached[1])
+
+        try:
+            from hermes_cli.codex_linked_threads import _codex_client
+            from agent.transports.codex_app_server import CodexAppServerError
+        except ImportError:
+            return None
+
+        try:
+            with _codex_client(profile_home=profile_home) as client:
+                page = client.request("model/list", {"limit": 200}, timeout=8)
+            models = []
+            for entry in page.get("data", []) if isinstance(page, dict) else []:
+                if not isinstance(entry, dict) or entry.get("hidden") is True:
+                    continue
+                model = entry.get("model") or entry.get("id")
+                if isinstance(model, str) and model.strip():
+                    models.append(model.strip())
+            result = tuple(dict.fromkeys(models))
+            _codex_catalog_cache[cache_key] = (time.monotonic(), result)
+            return list(result)
+        except (CodexAppServerError, OSError, TimeoutError, ValueError, RuntimeError):
+            return None
 
 
 def _prewarm_pricing_async(

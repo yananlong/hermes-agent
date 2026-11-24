@@ -2051,6 +2051,15 @@ export interface SessionInfo {
   /** Owning profile stamped by the list/detail endpoints (the store the row
    * was read from). Absent on search-endpoint rows, which carry no stamp. */
   profile?: string;
+  /** Linked foreign pointer rows: the transcript is owned by a native tool
+   * (Codex app-server / Claude Code / Mistral Vibe) instead of a Hermes
+   * state.db, so the web dashboard treats them read-only. Stamped by
+   * GET /api/sessions from the model_config flag; undefined against backends
+   * predating the flags. The native ids themselves are stripped from list
+   * payloads and must never be displayed. */
+  codex_linked?: boolean;
+  claude_linked?: boolean;
+  mistral_linked?: boolean;
 }
 
 export interface SessionLatestDescendantResponse {

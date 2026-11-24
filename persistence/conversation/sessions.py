@@ -247,6 +247,20 @@ def is_corrupt_model_config(raw: Any) -> bool:
     return False
 
 
+def is_linked_codex_config(model_config: Any) -> bool:
+    """A native history pointer carries an explicit marker in its persisted model configuration."""
+    return parse_model_config(model_config).get("codex_linked_thread") is True
+
+
+LINKED_FOREIGN_FLAGS = ("codex_linked_thread", "claude_linked_thread", "mistral_linked_thread")
+
+
+def is_linked_foreign_config(model_config: Any) -> bool:
+    """Whether a persisted ``model_config`` marks a pointer to any foreign-owned transcript."""
+    config = parse_model_config(model_config)
+    return any(config.get(flag) is True for flag in LINKED_FOREIGN_FLAGS)
+
+
 def session_yolo_enabled(model_config: Any) -> bool:
     """The persisted YOLO flag of a session's ``model_config``; ``False`` on any parse failure."""
     return bool(parse_model_config(model_config).get(YOLO_KEY))
@@ -880,6 +894,43 @@ class SessionRepository(Protocol):
 
     def create(self, spec: NewSession) -> SessionId:
         """Upsert the row and return its id. An existing row keeps every column an earlier writer set (a placeholder ``unknown`` source takes the spec's; ``user_id`` is never filled later) and fills the unset ones; a config holding only a ``_reset_from`` marker takes the spec's config with the marker kept. A child fills unset cwd and git columns from its parent, and its owner within the same ``agent:<ns>:`` key namespace; a compression continuation (parent ended by compression, not a delegate or branch fork of it) also fills its routing and peer columns. A retired absent id raises ``RetiredSessionError('not_found')``."""
+        ...
+
+    def link_codex_session(self, spec: NewSession, title: str, thread_id: str) -> tuple[SessionId, bool]:
+        """Atomically install or find the pointer in this profile. The flag reports an existing link."""
+        ...
+
+    def link_foreign_session(self, spec: NewSession, title: str, *, flag: str, id_key: str,
+                             native_id: str, fallback_title: str) -> tuple[SessionId, bool]:
+        """Atomically install or find a foreign-tool pointer (Claude/Mistral) in this profile."""
+        ...
+
+    def save_linked_codex_display_overlay(
+        self, session_id: SessionId, thread_id: str, turn_id: str, *,
+        final_text: str | None, held: bool, platform: str,
+    ) -> bool:
+        """Install the settled display decision for an exact native thread binding."""
+        ...
+
+    def load_linked_codex_display_overlays(
+        self, session_id: SessionId, thread_id: str, turn_ids: list[str],
+    ) -> dict[str, dict[str, JsonValue]]:
+        """Read bounded display decisions for this session, thread, and requested turn IDs."""
+        ...
+
+    def claim_linked_codex_workspace_change(self, session_id: SessionId, intent: dict[str, JsonValue]) -> bool:
+        """Install a workspace-change intent only if the link and original cwd still match."""
+        ...
+
+    def finish_linked_codex_workspace_change(
+        self, session_id: SessionId, intent: dict[str, JsonValue], cwd: str,
+        git_branch: str | None = None, git_repo_root: str | None = None,
+    ) -> int | None:
+        """Commit the observed Codex cwd when the intent still matches, leaving a recovery marker."""
+        ...
+
+    def clear_linked_codex_workspace_change(self, session_id: SessionId, intent: dict[str, JsonValue]) -> bool:
+        """Consume the exact durable recovery marker."""
         ...
 
     def create_exclusive(

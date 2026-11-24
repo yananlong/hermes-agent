@@ -205,6 +205,26 @@ export const zhHantChrome = {
       unarchive: '取消封存',
       newWindow: '新視窗',
       openInTerminal: '在終端機中開啟',
+      useTerminalHandoff: '在此主機上使用終端機…',
+      terminalHandoffTitle: '在 Hermes 主機的終端機中恢復此聊天',
+      terminalHandoffInstructions:
+        '在您的電腦上開啟 iTerm 或其他終端機，使用平常的 SSH 指令或 gcloud compute ssh 連線至同一台 Hermes 主機，然後在遠端提示字元貼上此指令。',
+      terminalHandoffOwnerWarning:
+        '請先在瀏覽器 TUI 中按 Ctrl+D 或輸入 /exit 結束此聊天，並等待其完全結束。關閉瀏覽器分頁只會中斷連線，TUI 可能仍持有工作階段。現有擁有者仍在執行時，Hermes 會拒絕第二個 TUI。',
+      terminalHandoffShellLabel: 'Hermes 主機上的 Shell',
+      terminalHandoffLoginShell: 'SSH 登入 Shell',
+      terminalHandoffZsh: 'zsh（僅限這次啟動）',
+      terminalHandoffBash: 'bash（僅限這次啟動）',
+      terminalHandoffShellNote:
+        '請選擇 Hermes 主機上已安裝的 Shell。zsh 不會載入啟動檔，以避免首次執行設定提示，並會沿用 SSH Shell 的 PATH。主機的登入 Shell 設定不會變更。',
+      terminalHandoffIdentityNote:
+        '請使用與 Webapp 相同的 Unix 帳戶及設定檔。此指令會在這次啟動時設定 Webapp 使用的 Hermes 主目錄，以開啟同一個工作階段資料庫。',
+      terminalHandoffPathNote: '指令要求遠端 Shell 的 PATH 中包含 hermes。如有需要，請先將其安裝目錄加入 PATH。',
+      terminalHandoffLoading: '正在載入 Hermes 主機設定…',
+      terminalHandoffLoadFailed: '無法載入 Hermes 主機設定。請重新登入後再次開啟此對話框。',
+      terminalHandoffHomeUnsupported:
+        '此 Hermes 主目錄路徑無法在貼上指令中安全引用。請管理員使用不含引號或反斜線的路徑。',
+      terminalHandoffCopy: '複製恢復指令',
       copyIdFailed: '無法複製工作階段 ID',
 
       sessionActions: '工作階段動作',
@@ -479,12 +499,9 @@ export const zhHantChrome = {
     terminalCloseAll: '全部關閉',
     terminalNewOn: '新增終端機於…',
     terminalGatewayRemoved: '已移除的閘道',
-    terminalGatewayRemovedBody:
-      '此終端機所在的閘道已被移除，無法重新開啟。請關閉此分頁。',
-    terminalGatewayNoShellBody:
-      '此閘道不提供 Shell 存取，此終端機無法重新開啟。請關閉此分頁。',
-    terminalDisconnectedBody:
-      '終端機已中斷連線。按 Enter 啟動新的 shell；捲動記錄會保留。',
+    terminalGatewayRemovedBody: '此終端機所在的閘道已被移除，無法重新開啟。請關閉此分頁。',
+    terminalGatewayNoShellBody: '此閘道不提供 Shell 存取，此終端機無法重新開啟。請關閉此分頁。',
+    terminalDisconnectedBody: '終端機已中斷連線。按 Enter 啟動新的 shell；捲動記錄會保留。',
     addToChat: '新增至聊天'
   },
 

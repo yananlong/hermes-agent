@@ -356,6 +356,11 @@ export function ownershipErrorSurface(error: unknown): { errorSurface?: ErrorSur
     return { errorSurface: { layer: 'gateway', code: 'session_read_only', retryable: false } }
   }
 
+  // A linked foreign thread: the gateway refused the append, and the native app owns the turn.
+  if (gatewayReason(error) === 'linked_session_read_only') {
+    return { errorSurface: { layer: 'gateway', code: 'linked_session_read_only', retryable: false } }
+  }
+
   if (gatewayReason(error) === 'SESSION_OWNER_UNCONFIRMED') {
     // The owner may already hold the send: a Retry would run a second copy.
     return { errorSurface: { layer: 'gateway', code: 'SESSION_OWNER_UNCONFIRMED', retryable: false } }

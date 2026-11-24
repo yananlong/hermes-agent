@@ -153,6 +153,42 @@ async def test_a_bot_chat_stamped_with_a_forwarded_login_subject_is_never_moved_
     assert db.sessions.get_by_title('Bot Chat').session_id == old and len(_session_ids(db)) == 1
 
 
+@pytest.mark.asyncio
+async def test_linked_codex_title_is_preserved_and_never_used_as_bot_chat(headless):
+    from gateway.platforms.api_server_bot_chat import bot_chat_tip
+    from gateway.session_local_migration import bot_chat_row
+    from tests.fixtures.storage_read import transcript_rows
+    from tests.waiting import async_wait_until
+    from tui_gateway.agent_factory import _row_follows_profile
+    from tui_gateway.methods_profiles import _canonical_session_row
+
+    authority = headless.authority
+    db = authority.persistence
+    old = _squatter(db, 'linked_codex_bot_title', column=None, value=None, source='desktop')
+    db.sessions.patch_model_config(old, {
+        'codex_linked_thread': True, 'codex_thread_id': 'native-thread', 'follow_profile_config': True,
+    })
+    seed_messages(db, old, {'role': 'user', 'content': 'native history stays attached to Codex'})
+    linked = db.sessions.get(old)
+    assert bot_chat_row(linked) is False
+    assert _row_follows_profile(linked.as_session_row()) is False
+    assert bot_chat_tip(authority, old) is None
+    assert _canonical_session_row(db, db.scope.profile_dir) is None
+
+    delivery = await _deliver(authority, '7')
+    new = delivery['session_id']
+    assert new != old and str(db.sessions.get(new).chat_id).startswith('local-')
+    assert db.sessions.get_by_title('Bot Chat').session_id == new
+    moved = db.sessions.get(old)
+    assert moved.title == f'Bot Chat (desktop {old})'
+    assert db.sessions.get_model_config_value(old, 'codex_thread_id') == 'native-thread'
+    assert [message['content'] for message in transcript_rows(db, old)] == [
+        'native history stays attached to Codex',
+    ]
+    await async_wait_until(lambda: len(headless.executed) == 1, timeout=10, interval=.05)
+    assert [sid for sid, _, _ in headless.executed] == [new]
+
+
 def _lineage(db, root_stamp, tip_stamp, tip_column=None, tip_value=None):
     # A compressed old local Bot Chat: the root holds the title, the delivery adopts the tip.
     seed_session(db, 'bot_chat_root', 'tui', user_id=root_stamp, title='Bot Chat')

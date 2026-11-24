@@ -2,12 +2,12 @@
  "counts": {
   "http": {
    "keep-host-wide": 1,
-   "undecided": 349
+   "undecided": 350
   },
   "rpc": {
-   "authority": 113,
+   "authority": 114,
    "keep-host-wide": 1,
-   "undecided": 179
+   "undecided": 188
   },
   "websocket": {
    "undecided": 10
@@ -189,6 +189,7 @@
   {"current_path": "hermes_cli.web_routers.tools:get_toolset_models", "decision": "undecided", "handler": "GET /api/tools/toolsets/{name}/models", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.ui_preferences:get_ui_preferences; surface: ui_preferences", "decision": "undecided", "handler": "GET /api/ui-preferences", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.webapp_access:webapp_access_status; surface: web_access", "decision": "undecided", "handler": "GET /api/webapp-access/status", "kind": "http", "ref": ""},
+  {"current_path": "hermes_cli.web_routers.webapp:terminal_context", "decision": "undecided", "handler": "GET /api/webapp/terminal-context", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.ops:list_webhooks", "decision": "undecided", "handler": "GET /api/webhooks", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.dashboard_auth.routes:auth_callback", "decision": "undecided", "handler": "GET /auth/callback", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.dashboard_auth.routes:auth_login", "decision": "undecided", "handler": "GET /auth/login", "kind": "http", "ref": ""},
@@ -584,8 +585,14 @@
   {"current_path": "authority refuses (-32601); standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.branch", "kind": "rpc", "ref": "D3"},
   {"current_path": "authority refuses (-32601); standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.branch_stored", "kind": "rpc", "ref": "D3"},
   {"current_path": "authority refuses (-32601); standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.branch_whole", "kind": "rpc", "ref": "D3"},
+  {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.claude.history", "kind": "rpc", "ref": "D3"},
+  {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.claude.link", "kind": "rpc", "ref": "D3"},
+  {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.claude.list", "kind": "rpc", "ref": "D3"},
   {"current_path": "authority refuses (-32601); standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.close", "kind": "rpc", "ref": "D3"},
-  {"current_path": "authority refuses (-32601); standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.compress", "kind": "rpc", "ref": "D3"},
+  {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.codex.history", "kind": "rpc", "ref": "D3"},
+  {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.codex.link", "kind": "rpc", "ref": "D3"},
+  {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.codex.list", "kind": "rpc", "ref": "D3"},
+  {"current_path": "authority; standalone: legacy server.dispatch", "decision": "authority", "handler": "session.compress", "kind": "rpc", "ref": ""},
   {"current_path": "authority; standalone: legacy server.dispatch", "decision": "authority", "handler": "session.context_breakdown", "kind": "rpc", "ref": ""},
   {"current_path": "authority; standalone: legacy server.dispatch", "decision": "authority", "handler": "session.control", "kind": "rpc", "ref": ""},
   {"current_path": "authority; standalone: legacy server.dispatch", "decision": "authority", "handler": "session.control.read", "kind": "rpc", "ref": ""},
@@ -599,10 +606,14 @@
   {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.foreign.import", "kind": "rpc", "ref": "D3"},
   {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.foreign.list", "kind": "rpc", "ref": "D3"},
   {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.foreign.preview", "kind": "rpc", "ref": "D3"},
+  {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.foreign.status", "kind": "rpc", "ref": "D3"},
   {"current_path": "authority; standalone: legacy server.dispatch", "decision": "authority", "handler": "session.history", "kind": "rpc", "ref": ""},
   {"current_path": "authority; standalone: unknown method", "decision": "authority", "handler": "session.info", "kind": "rpc", "ref": ""},
   {"current_path": "authority; standalone: legacy server.dispatch", "decision": "authority", "handler": "session.interrupt", "kind": "rpc", "ref": ""},
   {"current_path": "authority; standalone: legacy server.dispatch", "decision": "authority", "handler": "session.list", "kind": "rpc", "ref": ""},
+  {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.mistral.history", "kind": "rpc", "ref": "D3"},
+  {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.mistral.link", "kind": "rpc", "ref": "D3"},
+  {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.mistral.list", "kind": "rpc", "ref": "D3"},
   {"current_path": "legacy fallback; standalone: legacy server.dispatch", "decision": "undecided", "handler": "session.most_recent", "kind": "rpc", "ref": "D3"},
   {"current_path": "authority; standalone: unknown method", "decision": "authority", "handler": "session.mutate", "kind": "rpc", "ref": ""},
   {"current_path": "authority; standalone: unknown method", "decision": "authority", "handler": "session.prune", "kind": "rpc", "ref": ""},

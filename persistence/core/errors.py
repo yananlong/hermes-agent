@@ -303,6 +303,17 @@ class ExportTooLarge(PersistenceError, ValueError):
         )
 
 
+class LinkedCodexExportUnavailable(PersistenceError, ValueError):
+    """A session snapshot cannot describe the turns held by the native Codex thread."""
+
+    def __init__(self, session_id: SessionId) -> None:
+        self.session_id = session_id
+        super().__init__(
+            f"Session '{session_id}' is a linked Codex thread whose history is stored in Codex. "
+            "Export the original from Codex or use 'Link from Codex' in the destination profile."
+        )
+
+
 class CapabilityUnsupported(PersistenceError):
     """The operation requires a capability this backend does not declare."""
 

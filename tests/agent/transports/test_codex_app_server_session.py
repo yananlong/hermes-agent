@@ -262,6 +262,25 @@ class TestLifecycle:
         assert s.ensure_started() == "fresh-2"
         assert [m for m, _ in client.requests] == ["thread/resume", "thread/start"]
 
+    def test_linked_explicit_workspace_resume_changes_only_cwd_and_keeps_native_settings(self):
+        client = FakeClient()
+        client._request_handler = lambda method, params: {
+            "thread": {"id": params["threadId"]},
+            "cwd": "/tmp/new-workspace",
+            "model": "gpt-6.1-sol",
+        }
+        session = CodexAppServerSession(
+            cwd="/tmp/new-workspace", client_factory=lambda **_: client,
+            resume_thread_id="linked-thread", preserve_thread_settings=True,
+            resume_cwd_override=True, model="ignored-model", model_provider="ignored-provider",
+            permission_profile="ignored-permission-profile",
+        )
+
+        assert session.ensure_started() == "linked-thread"
+        assert client.requests == [("thread/resume", {"threadId": "linked-thread", "cwd": "/tmp/new-workspace"})]
+        assert session.effective_cwd == "/tmp/new-workspace"
+        assert session.effective_model == "gpt-6.1-sol"
+
     def test_close_idempotent(self):
         client = FakeClient()
         s = make_session(client)
@@ -296,6 +315,37 @@ class TestRunTurn:
                    for m in r.projected_messages)
         # turn_id propagated for downstream session-DB linkage
         assert r.turn_id == "turn-fake-001"
+
+    def test_completed_reasoning_is_flushed_when_interrupt_ends_poll_without_turn_completed(self):
+        client = FakeClient()
+        client.queue_notification(
+            "item/completed",
+            item={"type": "reasoning", "id": "reason-1", "summary": ["I was checking the result."]},
+            threadId="t", turnId="tu1",
+        )
+        finished = []
+
+        def on_event(_note):
+            pass
+
+        on_event.finish = lambda *, interrupted: finished.append(interrupted)
+        session = make_session(client, on_event=on_event)
+        take_notification = client.take_notification
+
+        def interrupt_after_reasoning(timeout=0.0):
+            note = take_notification(timeout)
+            if note and note.get("method") == "item/completed":
+                session._interrupt_event.set()
+            return note
+
+        client.take_notification = interrupt_after_reasoning
+
+        result = session.run_turn("Question", turn_timeout=2.0)
+
+        assert result.interrupted is True
+        assert result.projected_messages == [{"role": "assistant", "content": None,
+                                              "reasoning": "I was checking the result."}]
+        assert finished == [True]
 
 
 
@@ -705,9 +755,46 @@ class TestServerRequestRouting:
             for (rid, code, _msg) in client.error_responses
         )
 
+    def test_persisted_client_dynamic_tool_fails_without_name_based_dispatch(self):
+        client = FakeClient()
+        client._request_handler = lambda method, params: {
+            "thread/resume": {"thread": {"id": params["threadId"]}, "cwd": "/tmp", "model": "gpt-6.1-sol"},
+            "turn/start": {"turn": {"id": "turn-fake-001"}},
+        }.get(method, {})
+        client.queue_server_request(
+            "item/tool/call", request_id="dynamic-1", threadId="thread-linked",
+            turnId="turn-fake-001", callId="call-1", tool="memory_write",
+            arguments={"content": "sensitive content"},
+        )
+        original_respond = client.respond
+
+        def respond_and_complete_turn(request_id, response):
+            original_respond(request_id, response)
+            client.queue_notification(
+                "turn/completed", threadId="thread-linked",
+                turn={"id": "turn-fake-001", "status": "completed", "error": None},
+            )
+
+        client.respond = respond_and_complete_turn
+        session = make_session(
+            client, resume_thread_id="thread-linked", preserve_thread_settings=True,
+        )
+
+        result = session.run_turn("continue", turn_timeout=0.2)
+
+        assert result.error is None
+        assert client.responses == [("dynamic-1", {
+            "contentItems": [{
+                "type": "inputText",
+                "text": "This client-defined Codex tool is unavailable in Hermes. Continue with the tools available in this session.",
+            }],
+            "success": False,
+        })]
+        assert not client.error_responses
+
     def test_on_event_fires_during_approval_drain(self):
         """When a server-initiated approval request arrives, the session
-        drains up to 8 pending notifications first so per-turn state
+        drains pending notifications first so per-turn state
         (e.g. _pending_file_changes for fileChange approvals) is current.
         Those drained notifications must also reach the on_event display
         hook — otherwise tool bubbles around approvals silently disappear.
@@ -762,6 +849,66 @@ class TestServerRequestRouting:
             "forwarded to on_event — display will miss tool bubbles "
             "around approvals"
         )
+
+    def test_linked_patch_approval_survives_more_than_eight_queued_notifications(self):
+        """A valid fileChange preview behind ordinary activity remains approvable."""
+        client = FakeClient()
+        client._request_handler = lambda method, params: {
+            "thread": {"id": params["threadId"]},
+            "cwd": "/tmp",
+            "model": "gpt-6.1-sol",
+        } if method == "thread/resume" else (
+            {"turn": {"id": "turn-fake-001"}} if method == "turn/start" else {})
+
+        # These ordinary events used to fill the drain budget before the fileChange item.
+        for index in range(12):
+            client.queue_notification(
+                "item/started",
+                item={"type": "commandExecution", "id": f"ordinary-{index}",
+                      "command": f"echo {index}", "cwd": "/tmp"},
+                threadId="t", turnId="tu1",
+            )
+        client.queue_notification(
+            "item/started",
+            item={"type": "fileChange", "id": "fc-after-backlog", "changes": [{
+                "kind": {"type": "update"}, "path": "/tmp/approved.py",
+                "diff": "--- a/approved.py\n+++ b/approved.py\n@@ -1 +1 @@\n-old\n+new",
+            }]},
+            threadId="t", turnId="tu1",
+        )
+        client.queue_server_request(
+            "item/fileChange/requestApproval", request_id="linked-approval",
+            itemId="fc-after-backlog", turnId="tu1", threadId="t",
+            reason="update one file",
+        )
+        original_respond = client.respond
+
+        def respond_and_complete_turn(request_id, response):
+            original_respond(request_id, response)
+            client.queue_notification(
+                "turn/completed", threadId="t",
+                turn={"id": "tu1", "status": "completed", "error": None},
+            )
+
+        client.respond = respond_and_complete_turn
+
+        captured = {}
+
+        def approve(command, description, *, allow_permanent=True):
+            captured["command"] = command
+            captured["description"] = description
+            return "once"
+
+        session = make_session(
+            client, resume_thread_id="thread-fake-001", preserve_thread_settings=True,
+            approval_callback=approve,
+        )
+        result = session.run_turn("continue", turn_timeout=0.2)
+
+        assert result.error is None
+        assert "/tmp/approved.py" in captured["command"]
+        assert "+new" in captured["command"]
+        assert client.responses == [("linked-approval", {"decision": "accept"})]
 
 
 

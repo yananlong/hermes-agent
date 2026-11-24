@@ -313,6 +313,27 @@ export const arChrome = {
       unarchive: 'إلغاء الأرشفة',
       newWindow: 'فتح في نافذة جديدة',
       openInTerminal: 'فتح في الطرفية',
+      useTerminalHandoff: 'استخدام طرفية على هذا المضيف…',
+      terminalHandoffTitle: 'استئناف هذه المحادثة في طرفية على مضيف Hermes',
+      terminalHandoffInstructions:
+        'افتح iTerm أو طرفية أخرى على جهازك، واتصل بمضيف Hermes نفسه باستخدام أمر SSH المعتاد أو gcloud compute ssh، ثم الصق هذا الأمر في موجه الأوامر البعيد.',
+      terminalHandoffOwnerWarning:
+        'أنهِ هذه المحادثة أولاً في TUI المتصفح باستخدام Ctrl+D أو /exit وانتظر حتى تنتهي. إغلاق علامة تبويب المتصفح يفصلها فقط، وقد تظل طرفية المتصفح مالكة للجلسة. سيرفض Hermes تشغيل TUI ثانٍ ما دام المالك الحالي نشطاً.',
+      terminalHandoffShellLabel: 'الصدفة على مضيف Hermes',
+      terminalHandoffLoginShell: 'صدفة تسجيل الدخول عبر SSH',
+      terminalHandoffZsh: 'zsh (لهذا التشغيل فقط)',
+      terminalHandoffBash: 'bash (لهذا التشغيل فقط)',
+      terminalHandoffShellNote:
+        'اختر صدفة مثبتة على مضيف Hermes. لا تحمّل zsh ملفات بدء التشغيل لتجنب مطالبة الإعداد لأول مرة، وترث PATH من صدفة SSH. لا يغيّر ذلك صدفة تسجيل الدخول على المضيف.',
+      terminalHandoffIdentityNote:
+        'استخدم حساب Unix وإعداد الملف الشخصي نفسيهما اللذين يستخدمهما Webapp. يضبط الأمر دليل Hermes الخاص بـ Webapp لهذا التشغيل كي يفتح قاعدة بيانات الجلسات نفسها.',
+      terminalHandoffPathNote:
+        'يتوقع الأمر وجود hermes في PATH الخاص بالصدفة البعيدة. أضف دليل التثبيت إلى PATH أولاً إذا لزم الأمر.',
+      terminalHandoffLoading: 'جارٍ تحميل إعدادات مضيف Hermes…',
+      terminalHandoffLoadFailed: 'تعذر تحميل إعدادات مضيف Hermes. سجّل الدخول مجدداً ثم افتح هذا الحوار مرة أخرى.',
+      terminalHandoffHomeUnsupported:
+        'لا يمكن اقتباس مسار Hermes هذا بأمان في أمر قابل للصق. اطلب من المسؤول استخدام مسار بلا علامات اقتباس أو شرطات عكسية.',
+      terminalHandoffCopy: 'نسخ أمر الاستئناف',
       copyIdFailed: 'فشل نسخ المعرف',
 
       sessionActions: 'إجراءات الجلسة',
@@ -534,8 +555,7 @@ export const arChrome = {
       'حُذفت البوابة التي كانت تعمل عليها هذه الطرفية، لذا لا يمكن إعادة فتحها. أغلق علامة التبويب هذه.',
     terminalGatewayNoShellBody:
       'لا توفر هذه البوابة وصولاً إلى الصدفة، لذا لا يمكن إعادة فتح هذه الطرفية. أغلق علامة التبويب هذه.',
-    terminalDisconnectedBody:
-      'انقطع اتصال الطرفية. اضغط Enter لبدء صدفة جديدة؛ يُحفظ سجل التمرير.',
+    terminalDisconnectedBody: 'انقطع اتصال الطرفية. اضغط Enter لبدء صدفة جديدة؛ يُحفظ سجل التمرير.',
     addToChat: 'إضافة للمحادثة'
   },
   zones: {

@@ -137,12 +137,20 @@ def model_only(row):
     return isinstance(metadata, dict) and bool(metadata.get(MODEL_ONLY_DISPLAY_METADATA_KEY))
 
 
-async def _resume_transcript(authority, ref, snapshot, history, omit):
+async def _resume_transcript(authority, ref, snapshot, history, omit, *, linked_history=None):
     """A resume reply's transcript fields. *omit* (``omit_messages``): no rows and ``messages_omitted``, the
     stored count and the todo plan of the physical target the attach resolved, as the stdio resume answers
     it; the display-row lineage read is skipped (the todo lookup still walks the lineage's todo rows)."""
     # Its home module, not tui_gateway.server: importing the stdio sidecar points sys.stdout at stderr.
     from tui_gateway.tool_progress import _todo_state_from_history
+    if linked_history is not None:
+        # A linked row is a pointer only. The local mirror may be empty or stale; Codex's native
+        # turns are the history the resumed viewer must render.
+        if omit:
+            return {'messages': [], 'messages_omitted': True, 'message_count': len(linked_history),
+                    'todo_state': _todo_state_from_history(linked_history)}
+        return {'messages': linked_history, 'message_count': len(linked_history),
+                'todo_state': _todo_state_from_history(linked_history)}
     if not omit:
         # The newest todo result in the transcript, the snapshot the session's agent hydrates
         # from and its ``todo.updated`` frames carried: a viewer attaching shows the plan now.
@@ -750,12 +758,31 @@ class AuthorityConnection:
         from gateway.session_connections import pending_connection
         from gateway.session_server_requests import open_requests
         history, display = list(snapshot.history), {}
+        linked_history = None
+        # A history-bearing attach intentionally leaves ``transcript_target`` unset; resolve the
+        # physical target once here so a linked row never falls back to its empty local mirror.
+        target = snapshot.transcript_target
+        if target is None:
+            from gateway.session_local_recovery import transcript_target
+            target = transcript_target(self.authority, ref)
+        from gateway.session_linked_codex import linked_thread_id, read_display_history
+        if thread_id := linked_thread_id(authority_persistence(self.authority), target):
+            # This is a network read; keep Codex startup and pagination off the gateway event loop.
+            store = authority_persistence(self.authority)
+            owner_row = store.sessions.get(target)
+            linked_history = await asyncio.to_thread(
+                lambda: read_display_history(thread_id, session_id=target, model=owner_row.model if owner_row is not None else None,
+                                             profile_home=store.scope.profile_dir, session_db=store,
+                                             platform=owner_row.source if owner_row else ""))
+            if not omit:
+                history = linked_history
         if params.get('display_projection'):
             # A micro-compaction merge stays in ``messages`` (an undo target); its originals are what shows.
             display['display_messages'] = display_projection(
                 [row for row in history if not model_only(row)], self.authority.profile_id)
         return {'session_id': ref.session_id, 'stored_session_id': ref.session_id,
-                **await _resume_transcript(self.authority, ref, snapshot, history, omit), **display,
+                **await _resume_transcript(self.authority, ref, snapshot, history, omit,
+                                           linked_history=linked_history), **display,
                 'running': snapshot.handle.execution_state == 'running',
                 'authority_epoch': snapshot.handle.authority_epoch,
                 'replay_epoch': snapshot.replay_epoch, 'last_sequence': snapshot.last_sequence,

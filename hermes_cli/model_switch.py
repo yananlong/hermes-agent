@@ -22,7 +22,7 @@ from agent.models_dev import (
 from utils import base_url_host_matches, base_url_hostname, base_url_origin
 # Re-exported: callers/tests patch hermes_cli.model_switch.<name>.
 from hermes_cli.model_switch_providers import (
-    _extra_headers_from_config, _saved_entry_on_other_origin, list_authenticated_providers)
+    _extra_headers_from_config, _saved_entry_on_other_origin, _switch_provider_label, list_authenticated_providers)
 
 
 logger = logging.getLogger(__name__)
@@ -1262,7 +1262,9 @@ class _Switch:
 def _route_explicit_provider(st: _Switch) -> Optional[ModelSwitchResult]:
     """PATH A (``--provider`` given): resolve the provider, auto-detect a model from a local
     endpoint when none was typed, then resolve the alias on the TARGET provider."""
-    pdef = resolve_provider_full(st.explicit_provider, st.user_providers, st.custom_providers)
+    from hermes_cli.model_switch_codex import openai_provider_def
+    pdef = openai_provider_def(st) or resolve_provider_full(
+        st.explicit_provider, st.user_providers, st.custom_providers)
     if pdef is None and st.explicit_provider.strip().lower() == "custom":
         pdef = _bare_custom_provider_def(st.current_base_url)
     if pdef is None:
@@ -1453,17 +1455,6 @@ def _route_from_model_input(st: _Switch) -> Optional[ModelSwitchResult]:
         if detected:
             st.target_provider, st.new_model = detected
     return None
-
-
-def _switch_provider_label(st: _Switch) -> str:
-    label = get_label(st.target_provider)
-    if st.target_provider == "custom" and st.current_base_url:
-        label = "Custom endpoint"
-    if st.target_provider.startswith("custom:"):
-        custom_pdef = resolve_provider_full(st.target_provider, st.user_providers, st.custom_providers)
-        if custom_pdef is not None:
-            label = custom_pdef.name
-    return label
 
 
 def _creds_for_switched_provider(st: _Switch) -> Optional[ModelSwitchResult]:
@@ -1660,8 +1651,11 @@ def _validate_switch(st: _Switch) -> Optional[ModelSwitchResult]:
     accept config-declared models the remote catalog lacks."""
     from hermes_cli.models_local import _get_ollama_request_headers
     from hermes_cli.models_validate import validate_requested_model
-    st.new_model = _resolve_named_custom_model_id(st.new_model, st.target_provider, st.custom_providers)
-    st.new_model = normalize_model_for_provider(st.new_model, st.target_provider)
+    from hermes_cli.model_switch_codex import openai_provider_def
+    codex_openai_alias = st.target_provider.strip().lower() == "openai" and openai_provider_def(st) is not None
+    validation_provider = "openai-codex" if codex_openai_alias else st.target_provider
+    st.new_model = _resolve_named_custom_model_id(st.new_model, validation_provider, st.custom_providers)
+    st.new_model = normalize_model_for_provider(st.new_model, validation_provider)
 
     from hermes_cli.chat_catalog import is_known_non_chat_model
     if is_known_non_chat_model(st.new_model):
@@ -1682,7 +1676,7 @@ def _validate_switch(st: _Switch) -> Optional[ModelSwitchResult]:
     # listing lacks is soft-accepted) whether the slug arrived as ``custom:<key>`` or the bare key
     # the picker rows carry — otherwise the bare spelling fell into the built-in live-listing
     # branch and hard-rejected the very model the user selected.
-    validate_as = st.target_provider
+    validate_as = validation_provider
     if not validate_as.lower().startswith("custom"):
         pdef = resolve_provider_full(validate_as, st.user_providers, st.custom_providers)
         # A settings-only ``providers.<slug>`` block (no endpoint of its own) is not a

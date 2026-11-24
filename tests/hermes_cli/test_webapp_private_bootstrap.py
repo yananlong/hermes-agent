@@ -42,6 +42,47 @@ def test_bootstrap_token_visibility(monkeypatch, tmp_path, surface, gated, headl
             assert 'window.__HERMES_UI_SURFACE__="webapp"' in response.text
 
 
+def test_terminal_context_is_webapp_only_and_requires_authenticated_identity(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from hermes_cli.web_routers import webapp as routes
+
+    real_home = tmp_path / "real-home"
+    real_home.mkdir()
+    hermes_home_alias = tmp_path / "configured-home"
+    hermes_home_alias.symlink_to(real_home, target_is_directory=True)
+    monkeypatch.setenv("TERMINAL_CONTEXT_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", "$TERMINAL_CONTEXT_HOME/configured-home")
+    monkeypatch.setattr(routes.shutil, "which", lambda name: f"/usr/bin/{name}" if name == "bash" else None)
+    application = FastAPI()
+    application.state.ui_surface = "webapp"
+    application.state.auth_required = True
+
+    @application.middleware("http")
+    async def auth_for_test(request, call_next):
+        if request.headers.get("x-test-user"):
+            request.state.session = SimpleNamespace(user_id="user", provider="test", issuer="")
+        return await call_next(request)
+
+    application.include_router(routes.router)
+    client = TestClient(application)
+
+    assert client.get("/api/webapp/terminal-context").status_code == 401
+
+    response = client.get("/api/webapp/terminal-context", headers={"x-test-user": "signed-in"})
+    assert response.status_code == 200
+    assert response.json() == {
+        "hermes_home": str(hermes_home_alias),
+        "shells": {"bash": True, "zsh": False},
+    }
+    assert response.headers["cache-control"] == "no-store"
+
+    application.state.ui_surface = "dashboard"
+    unavailable = client.get("/api/webapp/terminal-context", headers={"x-test-user": "signed-in"})
+    assert unavailable.status_code == 404
+
+
+
 @pytest.mark.parametrize("operation", ["shell", "reattach", "close", "rpc", "file"])
 def test_html_cannot_authorize_privileged_sibling_routes(monkeypatch, tmp_path, operation):
     from hermes_cli import web_server as server

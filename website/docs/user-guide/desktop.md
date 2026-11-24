@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
-title: "Hermes Desktop"
-description: "The native Hermes desktop app — a polished experience for chatting with Hermes, with streaming tool output, side-by-side previews, a file browser, voice, cron, profiles, skills, and settings. macOS, Windows, and Linux."
+title: 'Hermes Desktop'
+description: 'The native Hermes desktop app — a polished experience for chatting with Hermes, with streaming tool output, side-by-side previews, a file browser, voice, cron, profiles, skills, and settings. macOS, Windows, and Linux.'
 ---
 
 # Hermes Desktop
@@ -209,6 +209,26 @@ re-pointing the saved connection ends its terminals. The remote `serve --isolate
 need Webapp enabled. For an HTTP gateway connection, the remote must itself provide the
 Webapp host-terminal service; a plain `serve` or gateway listener does not expose host shells.
 
+To resume a chat in a terminal app on your Mac, use the session menu's **Use a terminal on this
+host** action. Open iTerm or another terminal yourself, connect to the same Hermes host with your
+usual SSH command or `gcloud compute ssh`, then paste the copied command at the remote prompt.
+The command selects the session's profile and resumes its stored history; it does not attach to
+the browser's live PTY. Exit the chat in the browser TUI with Ctrl+D or `/exit` and wait for it
+to end before starting the copied command. Closing the browser tab only detaches it, and its TUI
+may continue to own the session until it exits. Hermes keeps its normal single-owner check, so a
+second TUI cannot take over an active owner.
+
+The shell selector chooses an installed shell on the Hermes host for this launch. The zsh option
+skips zsh startup files to avoid its first-run setup prompt and inherits `PATH` from the SSH login
+shell. This does not change your computer's shell settings or the Hermes host's login-shell setting. Connect with the
+same Unix account and profile configuration the Webapp uses. The copied command sets the Webapp's
+`HERMES_HOME` for this process, so it opens the same Hermes session database even when the service
+uses a custom home.
+The copied command expects `hermes` on the remote shell's `PATH`; add its installation directory
+to that `PATH` first if needed. The Webapp cannot open iTerm on your computer or
+inspect the Mac's SSH/gcloud configuration, so it does not copy connection credentials or host
+details into the command.
+
 The bundle's npm dependencies install into `.build/webapp-workspace` in the checkout, separately from
 the native Desktop, and reinstall only when the lockfile changes. With lazy installs disabled, a plain
 `hermes webapp` does not install them; `--build-only` or `--force-build` does.
@@ -258,6 +278,7 @@ Two independent font settings live in **Settings → Appearance**, both stored p
 
 - **Chat Font** (`desktop.font_family`) — chat and the rest of the app's UI. Readability faces such as OpenDyslexic or Atkinson Hyperlegible work as soon as they are installed on the system; the active theme's stack stays behind your pick so missing glyphs still render. Blank means the theme's font.
 - **Terminal Font** (`terminal.font_family`) — the embedded terminal pane; Nerd Fonts render shell icons here. Blank means the bundled JetBrains Mono.
+- **Terminal Font Size** (`terminal.font_size`) — the embedded user and agent terminal panes, from 8 to 32 CSS pixels; 11 is the default.
 
 #### Repository discovery
 
@@ -322,18 +343,18 @@ The app is built for working on several things at once:
 
 #### Interface mode
 
-The layout editor (titlebar button, or **Cmd/Ctrl+Shift+\\**) opens with an **Interface mode** choice — also under **Settings → Appearance → Window & layout** and as *Simple mode* in the command palette. It changes what is shown, not what Hermes can do.
+The layout editor (titlebar button, or **Cmd/Ctrl+Shift+\\**) opens with an **Interface mode** choice — also under **Settings → Appearance → Window & layout** and as _Simple mode_ in the command palette. It changes what is shown, not what Hermes can do.
 
 - **Advanced** (default) is the app as you have set it up. Users who have not explicitly selected Simple stay in Advanced.
-- **Simple** is chat-first: the statusbar, profile rail, terminal, file browser and review panes, the technical tool-call view, inline code diffs, and the Artifacts / Scheduled jobs rows rest out of the way (Capabilities and Messaging stay — they are how you set Hermes up); thinking starts collapsed; session rows show the title, a preview and when they were last active. The titlebar keeps Settings and the layout editor. Simple's layout picker offers *Sidebar left* or *Sidebar right*. The templates and saved layouts are Advanced.
+- **Simple** is chat-first: the statusbar, profile rail, terminal, file browser and review panes, the technical tool-call view, inline code diffs, and the Artifacts / Scheduled jobs rows rest out of the way (Capabilities and Messaging stay — they are how you set Hermes up); thinking starts collapsed; session rows show the title, a preview and when they were last active. The titlebar keeps Settings and the layout editor. Simple's layout picker offers _Sidebar left_ or _Sidebar right_. The templates and saved layouts are Advanced.
 
-A layout says what is on screen, not just where things sit: applying one opens every pane it places and closes the ones it leaves *resting*, so **Ctrl+`**, **Cmd/Ctrl+J** and **Cmd/Ctrl+G** always agree with what you see. *Basic* is sessions and chat with the terminal resting as a collapsed rail under the chat and the file browser and review resting in a right column — **Ctrl+`** opens the terminal under the chat, **Cmd/Ctrl+J** opens the tree on the right. *Focus* keeps files and review as tabs behind the chat, with the same terminal rail. *Default*, *Terminal deck* and *Quad* open everything they place. A layout you save remembers which of its panes were closed.
+A layout says what is on screen, not just where things sit: applying one opens every pane it places and closes the ones it leaves _resting_, so **Ctrl+`**, **Cmd/Ctrl+J** and **Cmd/Ctrl+G** always agree with what you see. *Basic* is sessions and chat with the terminal resting as a collapsed rail under the chat and the file browser and review resting in a right column — **Ctrl+`** opens the terminal under the chat, **Cmd/Ctrl+J** opens the tree on the right. _Focus_ keeps files and review as tabs behind the chat, with the same terminal rail. _Default_, _Terminal deck_ and _Quad_ open everything they place. A layout you save remembers which of its panes were closed.
 
 Each mode remembers its own arrangement: pane positions, sizes, active tabs, hidden tabs, dismissals, collapsed sides and floating-card positions. Returning to a mode restores that arrangement rather than reapplying a preset. Simple starts with the sidebar on the left; moving it to the right does not change Advanced. Conversations, drafts, previews and running work stay shared.
 
 Existing layouts are retained on upgrade. Advanced continues using the original storage keys. If you already explicitly selected Simple, its current layout is copied into Simple's separate storage without deleting the originals. An older arrangement that was overwritten before this separation cannot be reconstructed.
 
-Simple shadows your display preferences instead of overwriting them. Every keybind still works in Simple — **Ctrl+`**, **Cmd/Ctrl+J** and **Cmd/Ctrl+G** open the terminal, file browser and review for the current session, and the next launch is quiet again. With more than one profile the profile rail stays, since it is then the only way to switch. First-run onboarding sets the mode from the layout you pick: *Basic* starts in Simple, *Elite* in Advanced; skipping leaves it on Advanced.
+Simple shadows your display preferences instead of overwriting them. Every keybind still works in Simple — **Ctrl+`**, **Cmd/Ctrl+J** and **Cmd/Ctrl+G** open the terminal, file browser and review for the current session, and the next launch is quiet again. With more than one profile the profile rail stays, since it is then the only way to switch. First-run onboarding sets the mode from the layout you pick: _Basic_ starts in Simple, _Elite_ in Advanced; skipping leaves it on Advanced.
 
 #### Minimize to tray
 
@@ -375,7 +396,7 @@ For sessions running inside a Git repository, the app has a built-in source-cont
 
 ### Memory Graph
 
-The **Memory Graph** (command palette → *Memory Graph*, or the status-bar item) is an interactive map of what Hermes has learned for you — skills and memories laid out as a zoomable node graph with a timeline, filterable by **All / Used / Learned**. A share control exports the map layout as a compact code you can paste to someone else (layout only — none of your memory or skill text is included) and imports codes the same way.
+The **Memory Graph** (command palette → _Memory Graph_, or the status-bar item) is an interactive map of what Hermes has learned for you — skills and memories laid out as a zoomable node graph with a timeline, filterable by **All / Used / Learned**. A share control exports the map layout as a compact code you can paste to someone else (layout only — none of your memory or skill text is included) and imports codes the same way.
 
 ### Quick Entry
 
@@ -423,8 +444,8 @@ Two `desktop.*` keys reach Chromium at launch on every path — `hermes desktop`
 
 ```yaml
 desktop:
-  electron_flags: ["--ozone-platform=x11"]   # extra Chromium switches; a single string is split on spaces
-  renderer_max_old_space_mb: 2048            # V8 heap ceiling for the chat renderer; 0 = Chromium default
+  electron_flags: ['--ozone-platform=x11'] # extra Chromium switches; a single string is split on spaces
+  renderer_max_old_space_mb: 2048 # V8 heap ceiling for the chat renderer; 0 = Chromium default
 ```
 
 `renderer_max_old_space_mb` is applied as `--js-flags=--max-old-space-size=N` and merged with any `--js-flags` you already pass, so neither overwrites the other. Set it when a very long, tool-heavy session drives the renderer past what the machine can spare: the renderer then hits its own limit and reloads (bounded to three reloads per minute) instead of freezing the whole machine.
@@ -434,8 +455,8 @@ Both keys must be written exactly as shown — two spaces of indentation under a
 ```yaml
 desktop:
   electron_flags:
-    - "--ozone-platform=x11"
-    - "--js-flags=--expose-gc"
+    - '--ozone-platform=x11'
+    - '--js-flags=--expose-gc'
 ```
 
 The pre-window reader is a small YAML subset, not the full parser the rest of Hermes uses, because it has to run before the app loads anything. Other indentations are valid YAML but are ignored here; when that happens the app logs `desktop.electron_flags / desktop.renderer_max_old_space_mb were ignored` at startup and launches with Chromium's defaults.
@@ -454,7 +475,7 @@ Manage providers, models, tools, and credentials from a real UI instead of editi
 - **Reopen Last Chat on Launch** — by default the app picks up where you left off on cold start. Turn it off in **Settings → Appearance** (or set `display.resume_last_session: false` in `config.yaml`) to always begin with a fresh chat. Deep links and explicit destinations are never overridden either way.
 - **Auxiliary-model warning** — if you switch the main model to a new provider while auxiliary tasks (titling, summarization, and similar helpers) are still pinned to another provider, the app warns you so you don't unknowingly split work across two providers.
 - **Per-task reasoning effort** — each row under **Settings → Model → Auxiliary models** has a reasoning selector next to its provider/model pick: a level, **Off**, or **inherit · main model effort** (the default, which removes the task's override). It is saved as `auxiliary.<task>.reasoning_effort` in `config.yaml`, the same key `hermes model` writes, and shows in the row's summary when set. Use it to run frequent helpers such as compression or titling at low or no reasoning while the main agent stays at high.
-- **VS Code Marketplace themes** — beyond the built-in theme presets, the appearance settings include a live VS Code Marketplace search: pick any color theme and the app downloads, converts, and installs it as a desktop theme. The same importer is available from the command palette (*Install theme*), and imported themes can be removed again from the appearance settings.
+- **VS Code Marketplace themes** — beyond the built-in theme presets, the appearance settings include a live VS Code Marketplace search: pick any color theme and the app downloads, converts, and installs it as a desktop theme. The same importer is available from the command palette (_Install theme_), and imported themes can be removed again from the appearance settings.
 - **Keep computer awake** — **Settings → Advanced → Keep computer awake** stops the machine from sleeping so long or overnight agent runs keep going (the display can still dim). **While working** holds the machine awake only while a turn is in flight and lets it sleep normally once the run finishes or fails; **Always** holds it whenever Hermes is open. **While working** is the default on a computer where nobody has picked a mode. If you turned it **Off** and a timed sleep interrupts a turn, Hermes offers **Keep awake while working** once on wake. Closing the lid or choosing Sleep still sleeps the machine, and on battery Windows may still sleep after its own timeout. This is a per-computer setting.
 
 First-run onboarding has been redesigned on a unified overlay design system, and you can pick **Choose provider later** to skip provider setup and get into the app first.
@@ -470,7 +491,7 @@ The file belongs to the computer, not to a gateway connection or a profile. A de
 When you have two or more [profiles](./profiles.md), the config-backed settings pages — **Model, Workspace, Safety, Memory & Context, Voice, Chat, Advanced, and Tools & Keys** — plus **Providers → Custom Endpoints** and the **Messaging** overlay show a shared **Applies to** chip row at the top. It selects which profile your edits target:
 
 - The default selection **follows the active profile**, which behaves exactly as before — edit the profile you're using.
-- Pick another profile to view and edit *its* settings without switching the whole app; the selection persists as you move between settings pages.
+- Pick another profile to view and edit _its_ settings without switching the whole app; the selection persists as you move between settings pages.
 - Switching the app's active profile resets the selector, so edits can't silently keep landing on a previously selected profile.
 - With fewer than two profiles the chip row is hidden entirely.
 
@@ -618,16 +639,16 @@ A missing entry is still created; the flag only stops `hermes desktop` from rewr
 
 When you start Hermes from the application grid or menu (the launcher sets `DESKTOP_STARTUP_ID`), the entry is written only after the window is on screen. If the app exits before a window appears, nothing is written that time; the next terminal launch, updater relaunch, or grid launch that shows a window installs it. Some GNOME Shell versions lose track of an app whose `.desktop` file changes while it is still starting (they keep it in that state until the startup notification completes or times out, not until the process exits), and that can crash the whole session later; waiting for the window avoids it. Terminal launches and the updater's relaunch still write the entry immediately.
 
-| Flag                 | Description                                                                               |
-| -------------------- | ----------------------------------------------------------------------------------------- |
+| Flag                 | Description                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------ |
 | `--skip-build`       | Skip pnpm install/package and launch the existing unpacked app from `apps/desktop/release` |
-| `--force-build`      | Force a full rebuild even if the content stamp matches                                    |
-| `--build-only`       | Build the desktop app but do not launch it (used by `hermes update`)                      |
-| `--source`           | Launch via `electron .` against `apps/desktop/dist` instead of the packaged app           |
-| `--cwd PATH`         | Initial project directory for desktop chat sessions (sets `HERMES_DESKTOP_CWD`)           |
-| `--hermes-root PATH` | Override the Hermes source root the app uses (sets `HERMES_DESKTOP_HERMES_ROOT`)          |
-| `--ignore-existing`  | Skip the installed Hermes runtime so no local backend starts; offer connect or install    |
-| `--fake-boot`        | Enable deterministic boot delays for validating the startup UI                            |
+| `--force-build`      | Force a full rebuild even if the content stamp matches                                     |
+| `--build-only`       | Build the desktop app but do not launch it (used by `hermes update`)                       |
+| `--source`           | Launch via `electron .` against `apps/desktop/dist` instead of the packaged app            |
+| `--cwd PATH`         | Initial project directory for desktop chat sessions (sets `HERMES_DESKTOP_CWD`)            |
+| `--hermes-root PATH` | Override the Hermes source root the app uses (sets `HERMES_DESKTOP_HERMES_ROOT`)           |
+| `--ignore-existing`  | Skip the installed Hermes runtime so no local backend starts; offer connect or install     |
+| `--fake-boot`        | Enable deterministic boot delays for validating the startup UI                             |
 
 ## How it works
 
@@ -644,7 +665,7 @@ Everything connection-related lives on one settings page: **Settings → Gateway
 - **Remote gateway** — enter the URL of a `hermes serve` backend you run yourself and sign in. This is the mode the rest of this section walks through.
 - **Hermes Cloud** — sign in once to Hermes Cloud and pick from the agents on your account; no URL to paste. The app discovers your agents (with an organization picker if your account spans several orgs), and connecting to one switches the session over automatically. The status bar shows the cloud connection while it's active.
 
-Gateway connections are **machine-level**: the Gateways page manages which gateway backends this desktop can connect to, and profiles are discovered *from* the gateways you connect. Sessions select one gateway at a time, while the adjacent profile rail selects a profile discovered on that gateway.
+Gateway connections are **machine-level**: the Gateways page manages which gateway backends this desktop can connect to, and profiles are discovered _from_ the gateways you connect. Sessions select one gateway at a time, while the adjacent profile rail selects a profile discovered on that gateway.
 
 ### The multi-connection registry
 
@@ -662,9 +683,8 @@ Further down the same **Settings → Gateways** page, **Registered gateways** ma
 
 Side-by-side routing is live: each registered gateway dials its own backends and sockets on demand (keyed per connection + profile), the plugin SDK exposes the union agent roster (`host.agents()` / `host.ensureAgent()`), and **Update all instances** on the Gateways page dispatches `hermes update` to every eligible gateway at once — Hermes Cloud entries are skipped (the platform updates them), and each instance reports its own result.
 
-
 :::info The remote backend is a running `hermes serve` process
-"Remote backend" means a **`hermes serve`** server running on the remote machine — that is the process the desktop app connects to. Nothing in this section works unless that backend is actually up and reachable. The desktop app does not start it for you; you (or a `systemd` service) keep `hermes serve` running on the remote host, and the app attaches to it. If you also use messaging channels (Telegram, Discord, etc.), the **gateway** is a *separate* long-running process you start independently — see the note after the setup steps.
+"Remote backend" means a **`hermes serve`** server running on the remote machine — that is the process the desktop app connects to. Nothing in this section works unless that backend is actually up and reachable. The desktop app does not start it for you; you (or a `systemd` service) keep `hermes serve` running on the remote host, and the app attaches to it. If you also use messaging channels (Telegram, Discord, etc.), the **gateway** is a _separate_ long-running process you start independently — see the note after the setup steps.
 :::
 
 The connection has two halves: on the backend you protect it with an **auth provider**, and in the app you enter the backend's URL and sign in. Binding the backend to a non-loopback address automatically engages its auth gate, and the provider you configure is what lets the desktop app through.
@@ -716,7 +736,7 @@ The backend reads and writes your `.env` (API keys, secrets) and can run agent c
 **Settings → Gateways → Remote gateway:**
 
 1. **Remote URL** — `http://<backend-host>:9119` (path prefixes like `/hermes` work if you front it with a reverse proxy)
-2. **Sign in** — the app detects which provider the backend advertises and adapts the button. For a username/password backend it shows a **Sign in** button that opens a credential form (enter the credentials from step 1). For an OAuth backend it shows **Sign in with `<provider>`** (e.g. *Sign in with Nous Research*), which runs the provider's browser sign-in. Either way the app ends up with an authenticated session against the backend.
+2. **Sign in** — the app detects which provider the backend advertises and adapts the button. For a username/password backend it shows a **Sign in** button that opens a credential form (enter the credentials from step 1). For an OAuth backend it shows **Sign in with `<provider>`** (e.g. _Sign in with Nous Research_), which runs the provider's browser sign-in. Either way the app ends up with an authenticated session against the backend.
 3. **Save and reconnect** — switches the desktop shell onto the remote backend. The session refreshes automatically; you stay signed in across restarts when `HERMES_DASHBOARD_BASIC_AUTH_SECRET` is set.
 
 You can also set the backend URL without the UI via the `HERMES_DESKTOP_REMOTE_URL` environment variable before launching the app (it overrides the in-app setting); you still sign in from the Gateways settings panel.
@@ -1041,11 +1061,11 @@ with Hermes' stable signing identities it survives every update:
 grant, and `hermes setup` shows this tip on macOS when it doesn't.
 
 macOS remembers permission grants (Full Disk Access, Desktop/Downloads/Documents,
-Accessibility, Automation, microphone) against the app's *code-signing identity*,
+Accessibility, Automation, microphone) against the app's _code-signing identity_,
 not its path. Locally built and self-updated apps are signed with a stable
 identifier-pinned ad-hoc signature, so grants persist across updates.
 
-One-time note: grants made to builds *before* the identifier-pinned signing
+One-time note: grants made to builds _before_ the identifier-pinned signing
 fix (PR #73681) carry the old cdhash-pinned requirement. macOS keeps showing the
 toggle as ON for those stale grants but still re-prompts, because the stored
 grant no longer matches the rebuilt binary — and the modern prompt has no Allow
@@ -1072,10 +1092,10 @@ hermes desktop --setup-tcc-identity
 Or do it manually:
 
 1. Keychain Access → Certificate Assistant → **Create a Certificate…**
-2. Name: `Hermes Local Signing`, Identity Type: *Self-Signed Root*,
+2. Name: `Hermes Local Signing`, Identity Type: _Self-Signed Root_,
    Certificate Type: **Code Signing**.
 3. In Keychain Access, double-click the new certificate → **Trust** → set
-   **Code Signing** to *Always Trust* (an imported self-signed certificate is
+   **Code Signing** to _Always Trust_ (an imported self-signed certificate is
    not a valid signing identity until it is trusted for code signing —
    `security find-identity -v -p codesigning` should list it afterwards).
 4. `hermes config set desktop.macos_signing_identity "Hermes Local Signing"`

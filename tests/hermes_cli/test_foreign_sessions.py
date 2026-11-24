@@ -14,6 +14,7 @@ from tests.gateway.fixtures.storage_handles import close_storage_handles, storag
 from tests.fixtures.storage_read import session_row, transcript_rows
 
 from hermes_cli.foreign_sessions import (
+    _format_import_tool_value,
     _list_sessions,
     gather_foreign_sessions,
     import_foreign_session,
@@ -81,7 +82,8 @@ def _codex_lines():
         message("user", "input_text", "<recommended_plugins>\ninjected wrapper"),
         message("user", "input_text", "Summarize the transcripts please."),
         message("assistant", "output_text", "Reading them one at a time."),
-        item({"type": "custom_tool_call", "name": "shell", "call_id": "c1"}),
+        item({"type": "custom_tool_call", "name": "shell", "call_id": "c1",
+              "input": {"command": "echo fixture", "cwd": "/home/user/repo"}}),
         item({"type": "custom_tool_call_output", "call_id": "c1", "output": "big output"}),
         message("assistant", "output_text", "Done — here is the summary."),
         message("user", "input_text", "Now write it to a file."),
@@ -172,8 +174,19 @@ def test_parse_codex_session(tmp_path):
     all_text = "\n".join(t["content"] for t in turns)
     assert "skills_instructions" not in all_text
     assert "recommended_plugins" not in all_text
-    # tool call summarized in assistant text
+    # Imported snapshots keep recoverable tool inputs and outputs as bounded assistant text.
     assert "[ran tool: shell]" in all_text
+    assert 'Input:\n{"command": "echo fixture", "cwd": "/home/user/repo"}' in all_text
+    assert "Output:\nbig output" in all_text
+
+
+def test_imported_codex_tool_values_are_redacted_and_bounded():
+    rendered = _format_import_tool_value({"Cookie": "s=opaque-session-secret-1234567890"})
+    assert "opaque-session-secret" not in rendered
+
+    rendered = _format_import_tool_value("x" * 5000)
+    assert rendered.endswith("… [truncated]")
+    assert len(rendered) < 4100
 
 
 def test_malformed_lines_are_skipped(tmp_path):
@@ -281,6 +294,10 @@ def test_import_codex_session(tmp_path, gateway):
     assert title.startswith("Imported from Codex CLI: ")
     messages = transcript_rows(gateway.store, session_id)
     _assert_alternating(messages)
+    assistant_text = "\n".join(message["content"] for message in messages if message["role"] == "assistant")
+    assert "[ran tool: shell]" in assistant_text
+    assert f'"command": "echo fixture", "cwd": "{tmp_path}"' in assistant_text
+    assert "Output:\nbig output" in assistant_text
 
 
 def test_import_rejects_bad_input(tmp_path, gateway):

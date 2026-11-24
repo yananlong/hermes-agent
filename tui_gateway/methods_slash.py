@@ -417,6 +417,9 @@ def _compress_live_with_feedback(sid: str, session: dict, agent, arg: str, *, sn
         AGGRESSIVE_UNSUPPORTED, compress_now, parse_compress_args, render_compress_result)
     from agent.manual_compression_feedback import describe_compression_lock_skip, summarize_manual_compression
     from agent.model_metadata import estimate_request_tokens_rough
+    linked = _session_is_codex_linked(session)
+    if linked and arg.strip():
+        return "Linked Codex threads support /compress without arguments"
     request = parse_compress_args(arg)
     if request.aggressive:
         return AGGRESSIVE_UNSUPPORTED
@@ -447,6 +450,9 @@ def _compress_live_with_feedback(sid: str, session: dict, agent, arg: str, *, sn
         except CompressionLockHeld as e:
             return describe_compression_lock_skip(e.holder)
         _sync_session_key_after_compress(sid, session)
+        if linked:
+            finalize_context_engine_compression_notification(agent, committed=True)
+            return "Codex thread compressed."
         with session["history_lock"]:
             after_messages = list(session.get("history", []))
         after_tokens = estimate(

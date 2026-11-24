@@ -1058,11 +1058,13 @@ class GatewaySessionCommandsMixin:
         # Never trust path separators from chat input; the filename is only echoed to the platform.
         filename = parts[1] if len(parts) > 1 else default_save_filename(session_id, fmt)
         filename = os.path.basename(filename) or default_save_filename(session_id, fmt)
-        from persistence.core.errors import ExportTooLarge
+        from persistence.core.errors import ExportTooLarge, LinkedCodexExportUnavailable
         try:
             # One off-loop hop for the cap check + read; the helper is shared with the CLI and TUI /save.
             export_data = await asyncio.to_thread(load_save_snapshot, store, session_id, fmt, persistence=store)
         except ExportTooLarge as e:
+            return str(e)
+        except LinkedCodexExportUnavailable as e:
             return str(e)
         if not export_data:
             return t("gateway.save.no_messages", session_id=session_id)

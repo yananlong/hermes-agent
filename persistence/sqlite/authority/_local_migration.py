@@ -33,6 +33,10 @@ def bind_legacy_target(holder, conn, receipt, owner=None):
     if conn.execute('SELECT 1 FROM session_turn_leases WHERE conversation_id=? AND expires_at>?',
                     (root, time.time())).fetchone():
         raise AuthorityRefusal('runtime_coordination_required')
+    from ..conversation._store.sessions import _parse_model_config
+    if _parse_model_config(row["model_config"]).get("codex_pending_cwd") is not None:
+        raise AuthorityRefusal("session_busy", field="workspace",
+                              detail="a linked Codex workspace change is in progress")
     from ..conversation._store.local_migration import LEGACY_PREFIX
     key = LEGACY_PREFIX + target
     if conn.execute('SELECT 1 FROM state_meta WHERE key=?', (key,)).fetchone():

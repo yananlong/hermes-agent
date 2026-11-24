@@ -3283,6 +3283,60 @@
       }
     },
     {
+      "name": "session.claude.history",
+      "summary": "Read a safe display page for a Claude Code session linked to this session.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionClaudeHistoryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionClaudeHistoryResult"
+        }
+      }
+    },
+    {
+      "name": "session.claude.link",
+      "summary": "Link this profile to an existing native Claude Code session without copying it.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionClaudeThreadParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionClaudeLinkResult"
+        }
+      }
+    },
+    {
+      "name": "session.claude.list",
+      "summary": "List native Claude Code sessions without importing or resuming them.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionClaudePageParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionClaudeListResult"
+        }
+      }
+    },
+    {
       "name": "session.close",
       "summary": "Tear down a live session (its stored row stays resumable).",
       "params": [
@@ -3297,6 +3351,60 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SessionCloseResult"
+        }
+      }
+    },
+    {
+      "name": "session.codex.history",
+      "summary": "Read a safe display page for a Codex thread linked to this session.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionCodexHistoryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionCodexHistoryResult"
+        }
+      }
+    },
+    {
+      "name": "session.codex.link",
+      "summary": "Link this profile to an existing native Codex thread without copying it.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionCodexThreadParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionCodexLinkResult"
+        }
+      }
+    },
+    {
+      "name": "session.codex.list",
+      "summary": "List native Codex threads without importing or resuming them.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionCodexPageParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionCodexListResult"
         }
       }
     },
@@ -3517,6 +3625,24 @@
       }
     },
     {
+      "name": "session.foreign.status",
+      "summary": "Per-agent host capability on the serving backend: native store, CLI and writable-continue.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionForeignStatusParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionForeignStatusResult"
+        }
+      }
+    },
+    {
       "name": "session.history",
       "summary": "The durable display transcript (ancestors included, row ids attached).",
       "params": [
@@ -3567,6 +3693,60 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SessionListResult"
+        }
+      }
+    },
+    {
+      "name": "session.mistral.history",
+      "summary": "Read a safe display page for a Mistral Vibe session linked to this session.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionMistralHistoryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionMistralHistoryResult"
+        }
+      }
+    },
+    {
+      "name": "session.mistral.link",
+      "summary": "Link this profile to an existing native Mistral Vibe session without copying it.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionMistralThreadParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionMistralLinkResult"
+        }
+      }
+    },
+    {
+      "name": "session.mistral.list",
+      "summary": "List native Mistral Vibe sessions without importing or resuming them.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionMistralPageParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionMistralListResult"
         }
       }
     },
@@ -12415,6 +12595,99 @@
         "title": "ClarifyResult",
         "type": "object"
       },
+      "ClaudeDisplayMessage": {
+        "additionalProperties": false,
+        "description": "A safe display projection of one native Claude row, with payloads redacted.",
+        "properties": {
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timestamp"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ClaudeDisplayMessage",
+        "type": "object"
+      },
+      "ClaudeThreadRow": {
+        "additionalProperties": false,
+        "description": "``hermes_cli/claude_linked_threads.list_claude_threads`` row; ``preview`` stays empty by policy.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cwd"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated At"
+          },
+          "preview": {
+            "default": "",
+            "title": "Preview",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "ClaudeThreadRow",
+        "type": "object"
+      },
       "CliExecParams": {
         "additionalProperties": false,
         "properties": {
@@ -12560,6 +12833,101 @@
           "session_id"
         ],
         "title": "ClipboardPasteParams",
+        "type": "object"
+      },
+      "CodexDisplayTurn": {
+        "additionalProperties": false,
+        "description": "A safe display projection of one turn, with native item payloads removed.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CodexDisplayTurn",
+        "type": "object"
+      },
+      "CodexThreadRow": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cwd"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated At"
+          },
+          "preview": {
+            "default": "",
+            "title": "Preview",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "CodexThreadRow",
         "type": "object"
       },
       "CommandCatalogMeta": {
@@ -18962,6 +19330,179 @@
         "title": "FileAttachResult",
         "type": "object"
       },
+      "ForeignAgent": {
+        "description": "The three native tools a Hermes row can be linked to.",
+        "enum": [
+          "codex",
+          "claude",
+          "mistral"
+        ],
+        "title": "ForeignAgent",
+        "type": "string"
+      },
+      "ForeignAgentCapability": {
+        "additionalProperties": false,
+        "description": "One agent's row of ``session.foreign.status``.",
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/ForeignAgent"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "store": {
+            "$ref": "#/components/schemas/ForeignStoreCapability"
+          },
+          "cli": {
+            "$ref": "#/components/schemas/ForeignCliCapability"
+          },
+          "continue_status": {
+            "$ref": "#/components/schemas/ForeignContinueCapability"
+          }
+        },
+        "required": [
+          "agent",
+          "label",
+          "store",
+          "cli",
+          "continue_status"
+        ],
+        "title": "ForeignAgentCapability",
+        "type": "object"
+      },
+      "ForeignCapabilityReason": {
+        "description": "Why a capability is missing, as a closed set (so a client keys its copy, never a sentence).\n\n``store_missing``: no native store directory on the serving host. ``store_unreadable``: it is\nthere but this gateway cannot enumerate it. ``profile_scope``: the requested profile has no\nstore of its own (a routed profile must configure its ``CODEX_HOME`` / ``CLAUDE_CONFIG_DIR`` /\n``VIBE_HOME``). ``cli_missing``: the native CLI does not resolve on the host. \n``build_unsupported``: this gateway build has no append path for that agent at all.\n``send_read_only``: the build can append, but its send admission still refuses linked rows.",
+        "enum": [
+          "store_missing",
+          "store_unreadable",
+          "profile_scope",
+          "cli_missing",
+          "build_unsupported",
+          "send_read_only"
+        ],
+        "title": "ForeignCapabilityReason",
+        "type": "string"
+      },
+      "ForeignCliCapability": {
+        "additionalProperties": false,
+        "description": "The native CLI as it resolves on the serving host.\n\n``command`` is the display token (an absolute configured binary collapses to its basename),\n``path`` is ``~``-collapsed, and ``version`` is filled only when the caller asked for the\n``--version`` probe \u2014 a status surface that runs on mount must stay a stat / ``which``.\n``source`` says whether the profile pinned the binary (``config``) or PATH resolved it.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          },
+          "source": {
+            "default": "path",
+            "enum": [
+              "config",
+              "path"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ForeignCapabilityReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "available",
+          "command"
+        ],
+        "title": "ForeignCliCapability",
+        "type": "object"
+      },
+      "ForeignContinueCapability": {
+        "additionalProperties": false,
+        "description": "Can a turn be APPENDED to this agent's native thread from the serving host?\n\n``supported`` is the build question (the append path ships in this gateway); ``writable`` is\nthe end-to-end verdict a client acts on: supported, the store is readable here, the CLI\nresolves here, and ``prompt.submit`` admits a send onto a linked row of this agent. When\n``writable`` is false, ``reason_code`` names the first failing condition and ``reason`` is the\nsentence to render. A client must treat an ABSENT method as unknown, never as writable.",
+        "properties": {
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          },
+          "writable": {
+            "title": "Writable",
+            "type": "boolean"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ForeignCapabilityReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "supported",
+          "writable"
+        ],
+        "title": "ForeignContinueCapability",
+        "type": "object"
+      },
       "ForeignSessionRow": {
         "additionalProperties": false,
         "description": "``hermes_cli/foreign_sessions_browser.py::list_foreign_sessions`` \u2014 ``id`` is an opaque\nhandle, never a path.",
@@ -19025,6 +19566,49 @@
         ],
         "title": "ForeignSource",
         "type": "string"
+      },
+      "ForeignStoreCapability": {
+        "additionalProperties": false,
+        "description": "``hermes_cli/foreign_host_capability.store_capability`` \u2014 evaluated on the serving host.\n\n``available`` = the resolved store directory exists; ``readable`` = this gateway also proved\nit can enumerate it. No path is ever returned: a client needs the verdict, not the layout.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "readable": {
+            "title": "Readable",
+            "type": "boolean"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ForeignCapabilityReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "available",
+          "readable"
+        ],
+        "title": "ForeignStoreCapability",
+        "type": "object"
       },
       "ForeignTurn": {
         "additionalProperties": false,
@@ -25061,6 +25645,87 @@
           }
         },
         "title": "MessageStartPayload",
+        "type": "object"
+      },
+      "MistralDisplayMessage": {
+        "additionalProperties": false,
+        "description": "A safe display projection of one native Vibe row, with payloads redacted.",
+        "properties": {
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "MistralDisplayMessage",
+        "type": "object"
+      },
+      "MistralThreadRow": {
+        "additionalProperties": false,
+        "description": "``hermes_cli/mistral_linked_threads.list_mistral_threads`` row; ``preview`` stays empty by policy.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cwd"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated At"
+          },
+          "preview": {
+            "default": "",
+            "title": "Preview",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "MistralThreadRow",
         "type": "object"
       },
       "MoaAggregatingPayload": {
@@ -37776,6 +38441,238 @@
         "title": "SessionBranchWholeResult",
         "type": "object"
       },
+      "SessionClaudeHistoryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "session_id_native": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id Native"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "SessionClaudeHistoryParams",
+        "type": "object"
+      },
+      "SessionClaudeHistoryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ClaudeDisplayMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Next Cursor"
+          }
+        },
+        "title": "SessionClaudeHistoryResult",
+        "type": "object"
+      },
+      "SessionClaudeLinkResult": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "already_linked": {
+            "title": "Already Linked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "already_linked"
+        ],
+        "title": "SessionClaudeLinkResult",
+        "type": "object"
+      },
+      "SessionClaudeListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "threads": {
+            "items": {
+              "$ref": "#/components/schemas/ClaudeThreadRow"
+            },
+            "title": "Threads",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Next Cursor"
+          }
+        },
+        "title": "SessionClaudeListResult",
+        "type": "object"
+      },
+      "SessionClaudePageParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          }
+        },
+        "title": "SessionClaudePageParams",
+        "type": "object"
+      },
+      "SessionClaudeThreadParams": {
+        "additionalProperties": false,
+        "description": "``session_id`` is the Hermes session to link; ``thread_id`` is accepted as its alias.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          }
+        },
+        "title": "SessionClaudeThreadParams",
+        "type": "object"
+      },
       "SessionCloseParams": {
         "additionalProperties": false,
         "properties": {
@@ -37821,6 +38718,201 @@
           "closed"
         ],
         "title": "SessionCloseResult",
+        "type": "object"
+      },
+      "SessionCodexHistoryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "thread_id"
+        ],
+        "title": "SessionCodexHistoryParams",
+        "type": "object"
+      },
+      "SessionCodexHistoryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/CodexDisplayTurn"
+            },
+            "title": "Turns",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Next Cursor"
+          }
+        },
+        "title": "SessionCodexHistoryResult",
+        "type": "object"
+      },
+      "SessionCodexLinkResult": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "already_linked": {
+            "title": "Already Linked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "already_linked"
+        ],
+        "title": "SessionCodexLinkResult",
+        "type": "object"
+      },
+      "SessionCodexListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "threads": {
+            "items": {
+              "$ref": "#/components/schemas/CodexThreadRow"
+            },
+            "title": "Threads",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Next Cursor"
+          }
+        },
+        "title": "SessionCodexListResult",
+        "type": "object"
+      },
+      "SessionCodexPageParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          }
+        },
+        "title": "SessionCodexPageParams",
+        "type": "object"
+      },
+      "SessionCodexThreadParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id"
+        ],
+        "title": "SessionCodexThreadParams",
         "type": "object"
       },
       "SessionCompressParams": {
@@ -39498,6 +40590,60 @@
         "title": "SessionForeignPreviewResult",
         "type": "object"
       },
+      "SessionForeignStatusParams": {
+        "additionalProperties": false,
+        "description": "``probe_version`` opts into a bounded ``--version`` spawn per agent; default stays a stat.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "probe_version": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Probe Version"
+          }
+        },
+        "title": "SessionForeignStatusParams",
+        "type": "object"
+      },
+      "SessionForeignStatusResult": {
+        "additionalProperties": false,
+        "description": "Host capability for every linked agent, profiled like the sibling ``session.foreign.*``.\n\n``host`` is the same display label ``session.foreign.list`` returns (the hostname the gateway\nserves from), so a remote client can say \"not installed on <host>\" without inventing one.",
+        "properties": {
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/ForeignAgentCapability"
+            },
+            "title": "Agents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "title": "SessionForeignStatusResult",
+        "type": "object"
+      },
       "SessionHistoryParams": {
         "additionalProperties": false,
         "properties": {
@@ -39999,6 +41145,238 @@
           }
         },
         "title": "SessionLiveInfo",
+        "type": "object"
+      },
+      "SessionMistralHistoryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "session_id_native": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id Native"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "SessionMistralHistoryParams",
+        "type": "object"
+      },
+      "SessionMistralHistoryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MistralDisplayMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Next Cursor"
+          }
+        },
+        "title": "SessionMistralHistoryResult",
+        "type": "object"
+      },
+      "SessionMistralLinkResult": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "already_linked": {
+            "title": "Already Linked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "already_linked"
+        ],
+        "title": "SessionMistralLinkResult",
+        "type": "object"
+      },
+      "SessionMistralListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "threads": {
+            "items": {
+              "$ref": "#/components/schemas/MistralThreadRow"
+            },
+            "title": "Threads",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Next Cursor"
+          }
+        },
+        "title": "SessionMistralListResult",
+        "type": "object"
+      },
+      "SessionMistralPageParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          }
+        },
+        "title": "SessionMistralPageParams",
+        "type": "object"
+      },
+      "SessionMistralThreadParams": {
+        "additionalProperties": false,
+        "description": "``session_id`` is the Hermes session to link; ``thread_id`` is accepted as its alias.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          }
+        },
+        "title": "SessionMistralThreadParams",
         "type": "object"
       },
       "SessionMostRecentParams": {
@@ -44310,6 +45688,18 @@
             ],
             "default": null,
             "title": "Subagent Id"
+          },
+          "codex_subagent_thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Codex Subagent Thread Id"
           },
           "cursor": {
             "anyOf": [
@@ -51065,6 +52455,24 @@
       }
     },
     {
+      "name": "session.compress",
+      "summary": "Manual /compress of an idle session through the owner mutation fence; linked Codex threads use native compaction.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionCompressParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionCompressResult"
+        }
+      }
+    },
+    {
       "name": "session.create",
       "summary": "",
       "params": [
@@ -51300,7 +52708,7 @@
     },
     {
       "name": "session.transcript",
-      "summary": "One page of a stored conversation's display rows across its compression lineage (live rows and rows a compaction archived, each logical message once, and each compaction handoff as a `row_kind: 'compaction'` row at its position), from the oldest or the newest. Never attaches the caller. A page holds at most `limit` (1-500) rows, compaction rows included, plus up to 64 tool results of the call at its edge, and at most 2 MiB of JSON, cut between tool groups (a single larger row keeps only its role, kind, time, ids and the head of its text, and carries `truncated`). Oldest order: read on until a page is empty, then poll with the same `next_cursor` for the rows written since; `reset: true` means the rows the cursor covered changed shape, so the reply starts again from the first page. Latest order: read on until `next_cursor` is null; its cursor stays valid across later compactions and turns. A rotated lineage past `sessions.max_resume_messages` pages only its current segment (a cursor from before it crossed, or a latest-order cursor from before a compaction rotated that segment, answers `reset: true`). With `subagent_id`: a delegated child of the session (running: through the parent's roster; finished: through its stored row, when its ancestry reaches this conversation); a foreign or unknown child is `available: false`. Refusals: invalid_params (a cursor issued for another session, child or order, or not by this read), not_found, permission_denied, profile_mismatch.",
+      "summary": "One page of a stored conversation's display rows across its compression lineage (live rows and rows a compaction archived, each logical message once, and each compaction handoff as a `row_kind: 'compaction'` row at its position), from the oldest or the newest. Never attaches the caller. A page holds at most `limit` (1-500) rows, compaction rows included, plus up to 64 tool results of the call at its edge, and at most 2 MiB of JSON, cut between tool groups (a single larger row keeps only its role, kind, time, ids and the head of its text, and carries `truncated`). Oldest order: read on until a page is empty, then poll with the same `next_cursor` for the rows written since; `reset: true` means the rows the cursor covered changed shape, so the reply starts again from the first page. Latest order: read on until `next_cursor` is null; its cursor stays valid across later compactions and turns. A rotated lineage past `sessions.max_resume_messages` pages only its current segment (a cursor from before it crossed, or a latest-order cursor from before a compaction rotated that segment, answers `reset: true`). `subagent_id` reads a delegated Hermes child. `codex_subagent_thread_id` reads a Codex child only when its read-only native parent ancestry reaches this authorized session and its immediate parent history references the child; the request never resumes or mutates Codex threads. The two child selectors are mutually exclusive. With `subagent_id`, running children come from the parent's roster and finished children from their stored rows when their ancestry reaches this conversation. A foreign or unknown child selector is `available: false`. Refusals: invalid_params (a cursor issued for another session, child or order, or not by this read), not_found, permission_denied, profile_mismatch.",
       "params": [
         {
           "name": "params",

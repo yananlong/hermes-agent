@@ -33,7 +33,7 @@ def mutate_runtime_session(holder, *, epoch: int, principal_id: str, session_id:
                            request_id: str, expected_revision: int,
                            operation: str, payload: dict, expected_generation: int | None = None,
                            live_guard=None, history=None, prepare_only=False, prepared=None, media_root=None,
-                           owner=None):
+                           owner=None, require_idle_target=False):
     """Commit a closed metadata edit and its retry receipt in the same transaction.
 
     Returns ``(result, gone, replayed)``: the receipt result, the session-gone event the commit owes its caller
@@ -62,6 +62,13 @@ def mutate_runtime_session(holder, *, epoch: int, principal_id: str, session_id:
         replay = replay_mutation_receipt(conn, key, digest)
         if replay is not None:
             return replay, None, True
+        from ._native_codex_compaction import require_native_codex_compaction_clear
+        require_native_codex_compaction_clear(
+            conn, (session_id,), request_identity={
+                'request_key': key, 'request_digest': digest, 'request_session_id': session_id,
+                'principal_id': principal_id, 'request_id': request_id,
+                'expected_revision': expected_revision, 'expected_generation': expected_generation,
+            } if operation == 'compress' else None)
         session = conn.execute('SELECT * FROM sessions WHERE id=?', (session_id,)).fetchone()
         if session is None and operation != 'import':
             raise AuthorityRefusal('not_found')
@@ -78,10 +85,15 @@ def mutate_runtime_session(holder, *, epoch: int, principal_id: str, session_id:
             raise live_guard.refusal()
         if history is not None:
             authorize_write(conn, history, session_id, owner)
+            if operation != 'workspace' and session is not None:
+                from ..conversation._store.sessions import _parse_model_config
+                if _parse_model_config(session['model_config']).get('codex_pending_cwd') is not None:
+                    raise AuthorityRefusal('session_busy', field='workspace',
+                                          detail='a linked Codex workspace change is in progress')
         if prepare_only:
             from ._runtime_picks import local_snapshot
             snapshot = local_snapshot(holder, conn, session_id)
-            if operation == 'branch':
+            if operation == 'branch' or require_idle_target:
                 # The branch commit's own idle rule (queued input too), before the owner starts servers.
                 from ._runtime_guards import require_idle
                 require_idle(holder, conn, list({session_id, snapshot['target']}))

@@ -28,9 +28,9 @@ import { ruUpdateChannel } from './ru_update_channel'
 
 export const ruOverrides = {
   gatewayGroupOpen: {
-    opening: "Открываем групповой чат…",
-    lookupFailed: "Не удалось найти эту группу на шлюзе. Попробуйте ещё раз.",
-    missing: "Этот групповой чат больше не существует."
+    opening: 'Открываем групповой чат…',
+    lookupFailed: 'Не удалось найти эту группу на шлюзе. Попробуйте ещё раз.',
+    missing: 'Этот групповой чат больше не существует.'
   },
   catalog: ruCatalog,
   connectors: ruConnectors.connectors,
@@ -518,6 +518,9 @@ export const ruOverrides = {
       terminalFontPlaceholder: 'MesloLGS NF или CSS-стек шрифтов',
       terminalFontPreview: 'Предпросмотр глифов',
       terminalFontReset: 'Использовать по умолчанию',
+      terminalFontSizeTitle: 'Размер шрифта терминала',
+      terminalFontSizeDesc: 'Задайте размер текста от 8 до 32 пикселей для пользовательского и агентского терминалов.',
+      terminalFontSizeReset: 'Размер по умолчанию',
       chatFontTitle: 'Шрифт чата',
       chatFontDesc:
         'Выберите установленный шрифт для чата и всего интерфейса. Удобно для шрифтов повышенной читаемости, например OpenDyslexic; оставьте пустым, чтобы использовать шрифт темы.',
@@ -1350,8 +1353,9 @@ export const ruOverrides = {
         reimportSignins: 'Импортировать входы заново',
         signinsImportedTitle: 'Входы во встроенном браузере',
         signinsImported: count => `Встроенный браузер вошёл с cookie из профиля браузера: ${count}.`,
-        signinsRemote: 'Этот бэкенд работает на другом компьютере, поэтому его профиль браузера не импортируется во встроенный браузер.',
-        signinsFailed: 'Не удалось импортировать входы во встроенный браузер',
+        signinsRemote:
+          'Этот бэкенд работает на другом компьютере, поэтому его профиль браузера не импортируется во встроенный браузер.',
+        signinsFailed: 'Не удалось импортировать входы во встроенный браузер'
       },
       loadingConfig: 'Загрузка конфигурации',
       savedTitle: 'Учётные данные сохранены',
@@ -1896,7 +1900,8 @@ export const ruOverrides = {
     relayLink: {
       title: 'Team Gateway',
       badge: 'Токен бота не нужен',
-      intro: (platform: string) => `${platform} связывается с этим агентом через общий бот Hermes. Привяжите свой аккаунт ${platform} и напишите боту, чтобы говорить с агентом.`,
+      intro: (platform: string) =>
+        `${platform} связывается с этим агентом через общий бот Hermes. Привяжите свой аккаунт ${platform} и напишите боту, чтобы говорить с агентом.`,
       link: (platform: string) => `Привязать ${platform}`,
       linkAnother: (platform: string) => `Привязать ещё один аккаунт ${platform}`,
       linkedAccounts: 'Привязанные аккаунты',
@@ -1914,10 +1919,12 @@ export const ruOverrides = {
       refused: (platform: string) => `${platform} отклонил привязку. Получите новый код и попробуйте снова.`,
       qrAlt: (platform: string) => `QR-код общего бота ${platform}`,
       managed: 'Под управлением Team Gateway',
-      managedNote: (platform: string) => `На этом экземпляре сообщения идут через Team Gateway, поэтому шлюз отключает прямое подключение ${platform} при каждом запуске. Чтобы использовать его вместе с ретранслятором, задайте GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true в окружении шлюза (прямое подключение не даёт экземпляру масштабироваться до нуля и может доставлять сообщения дважды).`,
+      managedNote: (platform: string) =>
+        `На этом экземпляре сообщения идут через Team Gateway, поэтому шлюз отключает прямое подключение ${platform} при каждом запуске. Чтобы использовать его вместе с ретранслятором, задайте GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true в окружении шлюза (прямое подключение не даёт экземпляру масштабироваться до нуля и может доставлять сообщения дважды).`,
       managedIntro: 'Аккаунты этого агента привязываются в Nous Portal.',
       openPortal: 'Привязать аккаунты в Nous Portal',
-      noNewAccount: (platform: string) => `Код больше не активен, и новый аккаунт не появился. Если вашего аккаунта ${platform} нет в списке, получите новый код и попробуйте снова.`
+      noNewAccount: (platform: string) =>
+        `Код больше не активен, и новый аккаунт не появился. Если вашего аккаунта ${platform} нет в списке, получите новый код и попробуйте снова.`
     },
     telegramQr: {
       title: 'Выберите способ подключения Telegram-бота',
@@ -2519,6 +2526,28 @@ export const ruOverrides = {
       unarchive: 'Восстановить',
       newWindow: 'Новое окно',
       openInTerminal: 'Открыть в терминале',
+      useTerminalHandoff: 'Использовать терминал на этом хосте…',
+      terminalHandoffTitle: 'Возобновить этот чат в терминале на хосте Hermes',
+      terminalHandoffInstructions:
+        'Откройте iTerm или другой терминал на своём компьютере, подключитесь к тому же хосту Hermes обычной SSH-командой или через gcloud compute ssh, затем вставьте эту команду в удалённую оболочку.',
+      terminalHandoffOwnerWarning:
+        'Сначала завершите этот чат в браузерном TUI с помощью Ctrl+D или /exit и дождитесь его завершения. Закрытие вкладки браузера только отключает её; TUI может продолжать владеть сеансом. Hermes отклонит второй TUI, пока текущий владелец активен.',
+      terminalHandoffShellLabel: 'Оболочка на хосте Hermes',
+      terminalHandoffLoginShell: 'Оболочка SSH-входа',
+      terminalHandoffZsh: 'zsh (только для этого запуска)',
+      terminalHandoffBash: 'bash (только для этого запуска)',
+      terminalHandoffShellNote:
+        'Выберите оболочку, установленную на хосте Hermes. zsh не загружает файлы запуска, чтобы избежать первоначального мастера настройки, и наследует PATH из SSH-оболочки. Оболочка входа на хосте не меняется.',
+      terminalHandoffIdentityNote:
+        'Используйте ту же учётную запись Unix и ту же конфигурацию профиля, что и Webapp. Для этого запуска команда задаёт каталог Hermes из Webapp и открывает ту же базу сессий.',
+      terminalHandoffPathNote:
+        'Команда ожидает hermes в PATH удалённой оболочки. При необходимости сначала добавьте каталог установки в PATH.',
+      terminalHandoffLoading: 'Загрузка настроек хоста Hermes…',
+      terminalHandoffLoadFailed:
+        'Не удалось загрузить настройки хоста Hermes. Войдите снова и откройте это окно ещё раз.',
+      terminalHandoffHomeUnsupported:
+        'Этот путь Hermes нельзя безопасно заключить в кавычки для вставляемой команды. Попросите администратора использовать путь без кавычек и обратных косых черт.',
+      terminalHandoffCopy: 'Копировать команду возобновления',
       hideTabBar: 'Скрыть панель вкладок',
       openInNewTab: 'Открыть в новой вкладке',
       openInSplit: 'Открыть в сплит-виде',
@@ -3709,6 +3738,33 @@ export const ruOverrides = {
       outputAlt: 'Вывод инструмента',
       rawResponse: 'Сырой ответ',
       copyActivity: 'Копировать активность',
+      codexSubagentActivity: {
+        openTrace: 'Открыть трассировку субагента',
+        traceTitle: 'Трассировка субагента Codex',
+        traceDescription: 'Сообщения, сводки рассуждений и работа инструментов этого субагента в режиме чтения.',
+        traceUnavailable: 'Трассировка субагента недоступна',
+        loading: 'Загрузка трассировки…',
+        loadFailed: 'Не удалось загрузить трассировку.',
+        retry: 'Повторить',
+        close: 'Вернуться к разговору',
+        backToParent: 'Вернуться к родительской трассировке',
+        empty: 'Записи трассировки не получены.',
+        waiting: 'Ожидание трассировки субагента…',
+        updating: 'Обновление текущей трассировки…',
+        assistantRole: 'Codex',
+        userRole: 'Запрос',
+        systemRole: 'Система',
+        reasoningSummary: 'Сводка рассуждений',
+        arguments: 'Аргументы',
+        result: 'Результат',
+        unknownKind: 'Активность',
+        kinds: {
+          started: 'Запущен',
+          interacted: 'Работает',
+          interrupted: 'Прерван',
+          completed: 'Завершён'
+        }
+      },
       recoveredOne: 'Восстановлено после 1 неудачного шага',
       recoveredMany: count =>
         `Восстановлено после ${count} ${RU_NOUN(count, 'неудачного шага', 'неудачных шагов', 'неудачных шагов')}`,
