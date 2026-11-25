@@ -29,7 +29,7 @@ const unavailableLine = (states: LinkAgentState[], agent: ForeignAgent) =>
  *
  * The capability answer is asked once per invocation, the way the overlay asks it once when it
  * opens: a gateway that answered "-32601 unknown method" (an older backend) or that failed the
- * probe leaves every agent unavailable, so `/link` refuses with the reason instead of creating a
+ * probe leaves every agent unavailable, so `/link-thread` refuses with the reason instead of creating a
  * pointer row the next send cannot use.
  */
 const withAgentStates = (ctx: SlashRunCtx, run: (states: LinkAgentState[]) => void) => {
@@ -71,7 +71,7 @@ const linkThread = (ctx: SlashRunCtx, agent: ForeignAgent, threadId: string) => 
     .catch(ctx.guardedErr)
 }
 
-/** `/link <thread-id>` with no agent: the id is unambiguous only when ONE agent can serve it. */
+/** `/link-thread <thread-id>` with no agent: the id is unambiguous only when ONE agent can serve it. */
 const linkByThreadId = (ctx: SlashRunCtx, states: LinkAgentState[], threadId: string) => {
   const usable = states.filter(state => state.writable)
 
@@ -88,7 +88,7 @@ const linkByThreadId = (ctx: SlashRunCtx, states: LinkAgentState[], threadId: st
   }
 
   return ctx.transcript.sys(
-    `error: name the agent — /link <agent> ${threadId} (this host can serve ${usable
+    `error: name the agent — /link-thread <agent> ${threadId} (this host can serve ${usable
       .map(state => state.agent)
       .join(', ')})`
   )
@@ -96,12 +96,16 @@ const linkByThreadId = (ctx: SlashRunCtx, states: LinkAgentState[], threadId: st
 
 export const linkCommands: SlashCommand[] = [
   {
+    // The Python registry declares the same alias; both must agree or /link falls through to
+    // slash.exec and is refused.
+    aliases: ['link'],
     help: 'link a Codex, Claude Code, or Mistral Vibe thread',
-    name: 'link',
+    name: 'link-thread',
     run: (arg, ctx) => {
       const { agent, threadId } = parseLinkArg(arg)
 
-      // Bare `/link` (or `/link <agent>`) browses: linking is a write, so it stays a second step.
+      // Bare `/link-thread` (or `/link-thread <agent>`) browses: linking is a write, so it stays a
+      // second step.
       if (!threadId) {
         return openPicker(agent)
       }
