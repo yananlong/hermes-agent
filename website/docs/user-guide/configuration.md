@@ -329,6 +329,8 @@ warns about directories over 1 GB elsewhere under `cache/` that no pruner covers
 
 `terminal.font_family` and `terminal.font_size` control the embedded terminals in Desktop and the dashboard's Chat and Console. The family accepts an installed font name (for example, `MesloLGS NF`) or a CSS font stack; an empty value uses bundled Source Code Pro. The size is 8–32 CSS pixels and defaults to 15; dashboard Chat scales it down on narrow screens. Set these per profile in Desktop's **Settings → Appearance** or the dashboard's **Config → Terminal**. Saving in the dashboard updates open terminals without restarting their sessions.
 
+`terminal.font_size` controls the embedded user and agent terminal panes in Hermes Desktop. It accepts an integer from 8 to 32 CSS pixels and defaults to 11. Edit it in **Settings → Appearance → Terminal Font Size**.
+
 For cloud sandboxes such as Modal, Daytona, Vercel Sandbox, and Sprites, `container_persistent: true` means Hermes will try to preserve filesystem state across sandbox recreation. It does not promise that the same live sandbox, PID space, or background processes will still be running later.
 
 ### Backend Overview

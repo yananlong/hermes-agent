@@ -174,6 +174,17 @@ export const ko: Translations = {
     selectedSessionsSkippedActive: "{deleted}개 삭제됨, 진행 중인 턴이 있어 {count}개 유지됨",
     failedToDeleteSelected: "선택한 세션 삭제에 실패했습니다",
     resumeInChat: "채팅에서 다시 시작",
+    linkedReadonlyBadge: "linked · read-only",
+    linkedResumeUnverified:
+      "Hermes could not confirm what this session stores, so it is not opened in a terminal here. Reload the page, then reopen it from the Sessions list.",
+    linkedReadonlyWarning:
+      "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript; new turns cannot be appended to the native session from the web dashboard.",
+    linkedResumeDisabled:
+      "Linked sessions are read-only in the web dashboard; open the conversation in the native app to continue it.",
+    linkedHostStore: (label: string, host: string) => `No readable ${label} session store on ${host}.`,
+    linkedHostWritable: (label: string) =>
+      `This host can append to ${label} threads; continue this one from the Hermes Desktop app.`,
+    linkedHostUnnamed: "the gateway host",
     newChat: "새 채팅",
     workspace: "작업 공간",
     workspaceDefault: "기본값",

@@ -136,6 +136,102 @@ def _in_process_prefill(authority, policy, monkeypatch, chat_id):
     return built['prefill_messages']
 
 
+def _in_process_agent_kwargs(session_row, monkeypatch):
+    """Capture the fresh agent constructor kwargs without starting a gateway turn."""
+    from gateway import session_policy
+    from gateway.session_execution import GatewaySessionAgentMixin
+
+    class _DB:
+        def get_session(self, session_id):
+            return SimpleNamespace(cwd=session_row['cwd'], model_config=json.loads(session_row['model_config']))
+
+    monkeypatch.setattr(session_policy, 'policy_for_source', lambda runner, source: None)
+    built = {}
+    turn = GatewaySessionAgentMixin.__new__(GatewaySessionAgentMixin)
+    turn._runner = SimpleNamespace(
+        persistence=SimpleNamespace(sessions=SimpleNamespace(get=_DB().get_session)), _prefill_messages=None, _service_tier=None,
+        _refresh_fallback_model=lambda: None)
+    source = SimpleNamespace(chat_id='chat', user_id='user', user_id_alt=None, user_name=None, chat_name=None,
+                             chat_type='dm', thread_id=None)
+    turn._ctx = SimpleNamespace(source=source, user_config={}, enabled_toolsets=[], disabled_toolsets=None,
+                                session_id='linked-session', session_key='route',
+                                AIAgent=lambda **kwargs: built.update(kwargs))
+    turn._build_fresh_agent({'model': 'm', 'runtime': {}}, 'local', None, 1, None, {}, False)
+    return built
+
+
+def test_linked_codex_gateway_agent_uses_native_thread_workspace(tmp_path, monkeypatch):
+    """A linked thread's immutable state.db cwd reaches the native app-server agent."""
+    cwd = tmp_path / 'workspace'
+    cwd.mkdir()
+    built = _in_process_agent_kwargs({
+        'cwd': str(cwd),
+        'model_config': json.dumps({'codex_linked_thread': True, 'codex_thread_id': 'native-thread'}),
+    }, monkeypatch)
+    assert built['cwd'] == str(cwd)
+
+
+def test_cold_linked_codex_compressor_uses_native_thread_workspace(tmp_path, monkeypatch):
+    """The cold /compress agent resumes Codex from the linked row's same workspace."""
+    from gateway import run as gateway_run
+    from gateway import session_api_turn, session_authorities, session_policy
+    from gateway.session_cold_review import cold_review_parent
+    import run_agent
+
+    cwd = tmp_path / 'workspace'
+    cwd.mkdir()
+    session_row = {
+        'cwd': str(cwd),
+        'model_config': json.dumps({'codex_linked_thread': True, 'codex_thread_id': 'native-thread'}),
+    }
+
+    class _DB:
+        def get_session(self, session_id):
+            return SimpleNamespace(cwd=session_row['cwd'], model_config=json.loads(session_row['model_config']))
+
+    class _Agent:
+        def release_clients(self):
+            pass
+
+    built = {}
+    monkeypatch.setattr(gateway_run, '_load_gateway_config', dict)
+    monkeypatch.setattr(gateway_run, '_platform_config_key', lambda platform: 'local')
+    monkeypatch.setattr(session_api_turn, 'api_runtime_locked', lambda: False)
+    monkeypatch.setattr(session_authorities, 'active_authority', lambda runner: None)
+    monkeypatch.setattr(session_policy, 'policy_for_source', lambda runner, source: None)
+    monkeypatch.setattr(run_agent, 'AIAgent', lambda **kwargs: (built.update(kwargs) or _Agent()))
+    runner = SimpleNamespace(
+        persistence=SimpleNamespace(sessions=SimpleNamespace(get=_DB().get_session)), _provider_routing={}, _prefill_messages=None,
+        _resolve_turn_toolsets=lambda *args: ([], []), _service_tier=None,
+        _resolve_session_agent_runtime=lambda **kwargs: ('m', {'api_mode': 'codex_app_server'}),
+        _resolve_session_service_tier=lambda **kwargs: None,
+        _resolve_turn_agent_config=lambda message, model, runtime, **kwargs: {
+            'model': model, 'runtime': runtime, 'request_overrides': None},
+        _resolve_session_reasoning_config=lambda **kwargs: None,
+        _refresh_fallback_model=lambda: None)
+    source = SimpleNamespace(platform='local', chat_id='chat')
+
+    with cold_review_parent(runner, source, 'route', 'linked-session') as agent:
+        assert isinstance(agent, _Agent)
+    assert built['cwd'] == str(cwd)
+    assert built['api_mode'] == 'codex_app_server'
+
+
+def test_linked_codex_gateway_agent_refuses_missing_native_workspace(tmp_path, monkeypatch):
+    """A damaged linked pointer never borrows the gateway process's cwd."""
+    with pytest.raises(RuntimeError, match='original working directory'):
+        _in_process_agent_kwargs({
+            'cwd': str(tmp_path / 'missing'),
+            'model_config': json.dumps({'codex_linked_thread': True, 'codex_thread_id': 'native-thread'}),
+        }, monkeypatch)
+
+
+def test_ordinary_gateway_agent_does_not_adopt_stored_session_cwd(tmp_path, monkeypatch):
+    """Only the native linked route overrides the normal session cwd policy."""
+    built = _in_process_agent_kwargs({'cwd': str(tmp_path), 'model_config': '{}'}, monkeypatch)
+    assert 'cwd' not in built
+
+
 def test_an_open_sessions_prefill_survives_cache_pressure_and_file_edits(tmp_path, monkeypatch):
     """However many other sessions read prefill meanwhile, an open session keeps the examples it
     started with on every later construction: a managed worker's and an in-process rebuild's."""

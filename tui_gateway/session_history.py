@@ -294,6 +294,14 @@ def _remember_tool_call_args(tool_calls: list, tool_call_args: dict) -> None:
             tool_call_args[tc_id] = (fn["name"], args)
 
 
+def _codex_native_history_row(message: dict) -> bool:
+    """Recognize both live projections and native markers restored from the message DB."""
+    if message.get("codex_native") is True:
+        return True
+    metadata = message.get("display_metadata")
+    return isinstance(metadata, dict) and metadata.get("codex_native") is True
+
+
 def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: bool = True) -> list[dict]:
     """``image_urls=False`` is the ``inline_images=false`` projection (#116511): image parts render ``[image]``
     so a remote client's history read stays kilobytes instead of re-transmitting every stored attachment."""
@@ -334,18 +342,28 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
             tc_name, tc_args = tool_call_args.get(m.get("tool_call_id") or "", (None, None))
             name = tc_name or m.get("tool_name") or "tool"
             args = tc_args or {}
+            codex_native = _codex_native_history_row(m)
             # `context` is an 80-char preview; ship args so a full-call renderer isn't truncated.
             labels = _bridged_tool_labels(name, args)
             messages.append({"role": "tool", "name": name, "context": _tool_ctx(name, args),
-                             # Edit cards and settled clarify cards need the original result; other
-                             # tool outputs remain omitted from this compact display projection.
-                             **({"content": m.get("content")} if name in {"write_file", "patch", "skill_manage", "clarify"} else {}),
+                             # Edit and settled clarify cards need the original result; other tool outputs
+                             # remain omitted from this compact display projection. Codex's linked
+                             # history is a native transcript read, so preserve its result content
+                             # for the tool-call part renderer without widening ordinary history.
+                             **({"content": m.get("content")} if (
+                                 name in {"write_file", "patch", "skill_manage", "clarify"}
+                                 or (codex_native and "content" in m
+                                     and m.get("content") is not None)
+                             ) else {}),
                              **{key: m[key] for key in ("tool_call_id", "timestamp", "display_metadata")
                                 if m.get(key) is not None},
                              **({"args": args} if args else {}), **({"labels": labels} if labels else {})})
             continue
         # Assistant detail sidecars can carry the only visible reply or reasoning after resume/reload.
-        has_assistant_detail = role == "assistant" and any(m.get(key) for key in _HISTORY_ASSISTANT_DETAIL_KEYS)
+        has_assistant_detail = role == "assistant" and (
+            any(m.get(key) for key in _HISTORY_ASSISTANT_DETAIL_KEYS)
+            or (_codex_native_history_row(m) and bool(m.get("tool_calls")))
+        )
         if not content_text.strip() and not has_assistant_detail:
             continue
         msg = {"role": role, "text": content_text}
@@ -363,6 +381,10 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
             msg.update(text=invocation, display_kind="skill_invocation")
         if role == "assistant":
             msg.update((key, m[key]) for key in _HISTORY_ASSISTANT_DETAIL_KEYS if m.get(key) is not None)
+            # Native Codex tool-call rows are history display data, not active Hermes requests.
+            # Keep their ordinary OpenAI shape for the transcript renderer only.
+            if _codex_native_history_row(m) and m.get("tool_calls"):
+                msg["tool_calls"] = m["tool_calls"]
         # Display-only timeline metadata (model switches, delegation events).
         display_kind = m.get("display_kind") or _legacy_display_kind(role, content_text)
         if display_kind:

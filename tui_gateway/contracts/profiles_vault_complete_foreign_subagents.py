@@ -666,6 +666,296 @@ method("session.foreign.import", params=SessionForeignIdParams, result=SessionFo
        doc="Import a foreign session into this profile's history (idempotent per origin).")
 
 
+class ForeignAgent(WireEnum):
+    """The three native tools a Hermes row can be linked to."""
+
+    codex = "codex"
+    claude = "claude"
+    mistral = "mistral"
+
+
+class ForeignCapabilityReason(WireEnum):
+    """Why a capability is missing, as a closed set (so a client keys its copy, never a sentence).
+
+    ``store_missing``: no native store directory on the serving host. ``store_unreadable``: it is
+    there but this gateway cannot enumerate it. ``profile_scope``: the requested profile has no
+    store of its own (a routed profile must configure its ``CODEX_HOME`` / ``CLAUDE_CONFIG_DIR`` /
+    ``VIBE_HOME``). ``cli_missing``: the native CLI does not resolve on the host. 
+    ``build_unsupported``: this gateway build has no append path for that agent at all.
+    ``send_read_only``: the build can append, but its send admission still refuses linked rows.
+    """
+
+    store_missing = "store_missing"
+    store_unreadable = "store_unreadable"
+    profile_scope = "profile_scope"
+    cli_missing = "cli_missing"
+    build_unsupported = "build_unsupported"
+    send_read_only = "send_read_only"
+
+
+class ForeignStoreCapability(Result):
+    """``hermes_cli/foreign_host_capability.store_capability`` — evaluated on the serving host.
+
+    ``available`` = the resolved store directory exists; ``readable`` = this gateway also proved
+    it can enumerate it. No path is ever returned: a client needs the verdict, not the layout.
+    """
+
+    available: bool
+    readable: bool
+    reason_code: ForeignCapabilityReason | None = None
+    reason: str | None = None
+
+
+class ForeignCliCapability(Result):
+    """The native CLI as it resolves on the serving host.
+
+    ``command`` is the display token (an absolute configured binary collapses to its basename),
+    ``path`` is ``~``-collapsed, and ``version`` is filled only when the caller asked for the
+    ``--version`` probe — a status surface that runs on mount must stay a stat / ``which``.
+    ``source`` says whether the profile pinned the binary (``config``) or PATH resolved it.
+    """
+
+    available: bool
+    command: str
+    path: str | None = None
+    version: str | None = None
+    source: Literal["config", "path"] = "path"
+    reason_code: ForeignCapabilityReason | None = None
+    reason: str | None = None
+
+
+class ForeignContinueCapability(Result):
+    """Can a turn be APPENDED to this agent's native thread from the serving host?
+
+    ``supported`` is the build question (the append path ships in this gateway); ``writable`` is
+    the end-to-end verdict a client acts on: supported, the store is readable here, the CLI
+    resolves here, and ``prompt.submit`` admits a send onto a linked row of this agent. When
+    ``writable`` is false, ``reason_code`` names the first failing condition and ``reason`` is the
+    sentence to render. A client must treat an ABSENT method as unknown, never as writable.
+    """
+
+    supported: bool
+    writable: bool
+    reason_code: ForeignCapabilityReason | None = None
+    reason: str | None = None
+
+
+class ForeignAgentCapability(Result):
+    """One agent's row of ``session.foreign.status``."""
+
+    agent: ForeignAgent
+    label: str
+    store: ForeignStoreCapability
+    cli: ForeignCliCapability
+    continue_status: ForeignContinueCapability
+
+
+class SessionForeignStatusParams(ProfileParams):
+    """``probe_version`` opts into a bounded ``--version`` spawn per agent; default stays a stat."""
+
+    probe_version: bool | None = None
+
+
+class SessionForeignStatusResult(Result):
+    """Host capability for every linked agent, profiled like the sibling ``session.foreign.*``.
+
+    ``host`` is the same display label ``session.foreign.list`` returns (the hostname the gateway
+    serves from), so a remote client can say "not installed on <host>" without inventing one.
+    """
+
+    host: str
+    agents: list[ForeignAgentCapability] = Field(default_factory=list)
+
+
+method("session.foreign.status", params=SessionForeignStatusParams, result=SessionForeignStatusResult,
+       doc="Per-agent host capability on the serving backend: native store, CLI and writable-continue.")
+
+
+class SessionCodexPageParams(ProfileParams):
+    cursor: str | None = None
+    limit: int | None = None
+
+
+class CodexThreadRow(Result):
+    id: str
+    title: str
+    cwd: str | None = None
+    updated_at: int | None = None
+    preview: str = ""
+    source: str | None = None
+
+
+class SessionCodexListResult(Result):
+    threads: list[CodexThreadRow] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+method("session.codex.list", params=SessionCodexPageParams, result=SessionCodexListResult,
+       doc="List native Codex threads without importing or resuming them.")
+
+
+class SessionCodexThreadParams(ProfileParams):
+    thread_id: str
+
+
+class SessionCodexHistoryParams(SessionCodexPageParams):
+    session_id: str
+    thread_id: str
+
+
+class CodexDisplayTurn(Result):
+    """A safe display projection of one turn, with native item payloads removed."""
+
+    id: str
+    status: str | None = None
+    rows: list[dict[str, JsonValue]] = Field(default_factory=list)
+
+
+class SessionCodexHistoryResult(Result):
+    turns: list[CodexDisplayTurn] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+method("session.codex.history", params=SessionCodexHistoryParams, result=SessionCodexHistoryResult,
+       doc="Read a safe display page for a Codex thread linked to this session.")
+
+
+class SessionCodexLinkResult(Result):
+    session_id: str
+    already_linked: bool
+
+
+method("session.codex.link", params=SessionCodexThreadParams, result=SessionCodexLinkResult,
+       doc="Link this profile to an existing native Codex thread without copying it.")
+
+
+class SessionClaudePageParams(ProfileParams):
+    cursor: str | None = None
+    limit: int | None = None
+
+
+class ClaudeThreadRow(Result):
+    """``hermes_cli/claude_linked_threads.list_claude_threads`` row; ``preview`` stays empty by policy."""
+
+    id: str
+    title: str
+    cwd: str | None = None
+    updated_at: int | None = None
+    preview: str = ""
+    source: str | None = None
+
+
+class SessionClaudeListResult(Result):
+    threads: list[ClaudeThreadRow] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+method("session.claude.list", params=SessionClaudePageParams, result=SessionClaudeListResult,
+       doc="List native Claude Code sessions without importing or resuming them.")
+
+
+class SessionClaudeThreadParams(ProfileParams):
+    """``session_id`` is the Hermes session to link; ``thread_id`` is accepted as its alias."""
+
+    session_id: str | None = None
+    thread_id: str | None = None
+
+
+class SessionClaudeHistoryParams(SessionClaudePageParams):
+    session_id: str
+    session_id_native: str | None = None
+    thread_id: str | None = None
+
+
+class ClaudeDisplayMessage(Result):
+    """A safe display projection of one native Claude row, with payloads redacted."""
+
+    role: str
+    content: str
+    timestamp: float | None = None
+
+
+class SessionClaudeHistoryResult(Result):
+    messages: list[ClaudeDisplayMessage] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+method("session.claude.history", params=SessionClaudeHistoryParams, result=SessionClaudeHistoryResult,
+       doc="Read a safe display page for a Claude Code session linked to this session.")
+
+
+class SessionClaudeLinkResult(Result):
+    session_id: str
+    already_linked: bool
+
+
+method("session.claude.link", params=SessionClaudeThreadParams, result=SessionClaudeLinkResult,
+       doc="Link this profile to an existing native Claude Code session without copying it.")
+
+
+class SessionMistralPageParams(ProfileParams):
+    cursor: str | None = None
+    limit: int | None = None
+
+
+class MistralThreadRow(Result):
+    """``hermes_cli/mistral_linked_threads.list_mistral_threads`` row; ``preview`` stays empty by policy."""
+
+    id: str
+    title: str
+    cwd: str | None = None
+    updated_at: int | None = None
+    preview: str = ""
+    source: str | None = None
+
+
+class SessionMistralListResult(Result):
+    threads: list[MistralThreadRow] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+method("session.mistral.list", params=SessionMistralPageParams, result=SessionMistralListResult,
+       doc="List native Mistral Vibe sessions without importing or resuming them.")
+
+
+class SessionMistralThreadParams(ProfileParams):
+    """``session_id`` is the Hermes session to link; ``thread_id`` is accepted as its alias."""
+
+    session_id: str | None = None
+    thread_id: str | None = None
+
+
+class SessionMistralHistoryParams(SessionMistralPageParams):
+    session_id: str
+    session_id_native: str | None = None
+    thread_id: str | None = None
+
+
+class MistralDisplayMessage(Result):
+    """A safe display projection of one native Vibe row, with payloads redacted."""
+
+    role: str
+    content: str
+
+
+class SessionMistralHistoryResult(Result):
+    messages: list[MistralDisplayMessage] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+method("session.mistral.history", params=SessionMistralHistoryParams, result=SessionMistralHistoryResult,
+       doc="Read a safe display page for a Mistral Vibe session linked to this session.")
+
+
+class SessionMistralLinkResult(Result):
+    session_id: str
+    already_linked: bool
+
+
+method("session.mistral.link", params=SessionMistralThreadParams, result=SessionMistralLinkResult,
+       doc="Link this profile to an existing native Mistral Vibe session without copying it.")
+
+
 # ── subagents (methods_subagents) ─────────────────────────────────────────────────────────────
 
 

@@ -54,3 +54,14 @@ def test_profile_bound_ticket_reads_only_its_own_profile(homes, monkeypatch):
     assert call(launch, 'session.most_recent')['result']['session_id'] == 'launch-sid'
     assert {row['id'] for row in call(launch, 'session.active_list')['result']['sessions']} == {
         'live-launch', 'live-bee'}
+
+
+@pytest.mark.parametrize("method", ["session.codex.list", "session.codex.history", "session.codex.link"])
+def test_codex_link_methods_require_full_interactive_grant(method):
+    from gateway.runtime_bootstrap import _PURPOSE_CAPABILITIES
+    from tui_gateway.ws_legacy_fallback import legacy_fallback_allowed
+
+    viewer = types.SimpleNamespace(capabilities=_PURPOSE_CAPABILITIES["interactive"])
+    worker = types.SimpleNamespace(capabilities={"worker:adopt"})
+    assert legacy_fallback_allowed(viewer, method)
+    assert not legacy_fallback_allowed(worker, method)

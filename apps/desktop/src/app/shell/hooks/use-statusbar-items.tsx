@@ -7,6 +7,7 @@ import { ConnectionSwitcher } from '@/app/chat/sidebar/connection-switcher'
 import { ProfileSwitcher } from '@/app/chat/sidebar/profile-dropdown-switcher'
 import type { CommandCenterSection } from '@/app/command-center'
 import { toggleTerminalPane } from '@/app/right-sidebar/terminal/reveal-focus'
+import type { CwdChangeTarget } from '@/app/session/hooks/use-cwd-actions'
 import { useApprovalModeStatusbarItem } from '@/app/shell/approval-mode-menu'
 import { ContextMeterDetail, ContextUsagePanel } from '@/app/shell/context-usage-panel'
 import { GatewayMenuPanel } from '@/app/shell/gateway-menu-panel'
@@ -50,7 +51,7 @@ import { $cloudOwnsUpdates } from '@/store/cloud-updates'
 import { copyFilePath, revealFile, shouldOfferLocalReveal } from '@/store/file-actions'
 import { $freeTierSignInOpen, $freeTierStatus, FREE_TIER_MODEL } from '@/store/free-tier'
 import { openFreeTierSignIn } from '@/store/free-tier-sign-in'
-import { $gateway } from '@/store/gateway'
+import { $gateway, activeGatewayConnectionId } from '@/store/gateway'
 import { revealFileInTree } from '@/store/layout'
 import { $activeGatewayProfile } from '@/store/profile'
 import { $profileRailVisible } from '@/store/profile-rail-prefs'
@@ -66,10 +67,17 @@ import {
   $sessionStartedAt,
   $tileSessionFocusStartedAt,
   $turnStartedAt,
-  idsShareLineage
+  idsShareLineage,
 } from '@/store/session'
 import { $focusedStoredSessionId } from '@/store/session-focus'
-import { $focusedRuntimeId, $focusedSessionState, $sessionTiles, isSessionRemote } from '@/store/session-states'
+import { isSessionOwnerRoute, profileScopeForSessionOwner } from '@/store/session-request-router'
+import {
+  $focusedRuntimeId,
+  $focusedSessionState,
+  $sessionTiles,
+  isSessionRemote,
+  knownOwnerForSession
+} from '@/store/session-states'
 import { $statusbarHiddenIds } from '@/store/statusbar-prefs'
 import { $subagentsBySession, activeSubagentCount, failedSubagentCount } from '@/store/subagents'
 import { $gatewayRestarting } from '@/store/system-actions'
@@ -90,7 +98,7 @@ const EMPTY_USAGE: UsageStats = { calls: 0, input: 0, output: 0, total: 0 }
 
 interface StatusbarItemsOptions {
   agentsOpen: boolean
-  changeSessionCwd: (cwd: string, sessionId?: string) => Promise<void>
+  changeSessionCwd: (cwd: string, sessionId?: string, target?: CwdChangeTarget) => Promise<void>
   chatOpen: boolean
   commandCenterOpen: boolean
   extraLeftItems: readonly StatusbarItem[]
@@ -222,6 +230,10 @@ export function useStatusbarItems({
   // clicking into a tile makes the statusbar describe THAT session.
   const focusedStoredSessionId = useStore($focusedStoredSessionId)
   const focusedRuntimeId = useStore($focusedRuntimeId)
+
+  const focusedStoredSessionLinkedCodex = useStoreSelector($sessions, sessions =>
+    Boolean(focusedStoredSessionId && sessions.some(row => row.id === focusedStoredSessionId && row.codex_linked === true))
+  )
   // Whether the FOCUSED session's workspace lives on another machine: a
   // Connections-tagged tile on a remote gateway inside a local-primary window
   // (and vice versa) is decided by the tile's owner route, falling back to the
@@ -263,6 +275,18 @@ export function useStatusbarItems({
 
   // A tile's stored row: cold/fallback start and cwd, and which backend it runs on.
   const { focusedRowConnectionId, focusedRowCwd, focusedRowStartedAt } = useFocusedSessionRow(focusedStoredSessionId)
+
+  const focusedOwner = focusedStoredSessionId ? knownOwnerForSession(focusedStoredSessionId) : undefined
+  const workspaceOwner = profileScopeForSessionOwner(focusedOwner) ?? activeGatewayProfile ?? undefined
+
+  const focusedOwnerConnectionId = focusedRowConnectionId ||
+    (isSessionOwnerRoute(focusedOwner) ? focusedOwner.connectionId : '')
+
+  const activeWorkspaceConnectionId = activeGatewayConnectionId() || 'local'
+
+  const focusedWorkspaceOtherGateway = Boolean(
+    focusedOwnerConnectionId && (focusedOwnerConnectionId || 'local') !== activeWorkspaceConnectionId
+  )
 
   const offerLocalReveal = shouldOfferLocalReveal(focusedRowConnectionId, connection?.mode === 'remote')
 
@@ -306,8 +330,12 @@ export function useStatusbarItems({
   const projectName = useMemo(() => projectNameForCwd(currentCwd), [currentCwd, projectTree])
 
   const changeWorkspaceItem = useChangeWorkspaceItem(changeSessionCwd, currentCwd, busy, {
-    focusedRowConnectionId,
+    focusedStoredSessionId,
+    focusedStoredSessionLinkedCodex,
+    focusedWorkspaceOtherGateway,
     focusedRuntimeId,
+    workspaceOwner,
+    primaryRuntimeId: primaryActiveSessionId,
     primaryFocused
   })
 

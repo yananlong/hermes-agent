@@ -3991,6 +3991,24 @@ def compress_context(
     # compression.codex_app_server_auto). Memory handoff is Hermes-only: no native
     # summary prompt to inject into. `is True`: MagicMock attributes are truthy.
     checkpoint_required = getattr(agent, "compression_checkpoint_required", False) is True
+    # Every OTHER native tool a row can be linked to owns its transcript just as completely.
+    # Codex exposes `compact` through the app-server runtime (routed above); Claude Code and
+    # Mistral Vibe compact only inside themselves, and their Hermes row holds no messages at all
+    # (pointer semantics). Dispatching on `api_mode` alone let a linked Claude/Mistral row fall
+    # through to the LOCAL summarizer: a billable LLM call over a projection nobody persists, plus
+    # a SQLite session split of a row that has no transcript. Branch on the row's agent kind.
+    from agent.linked_foreign_turn import linked_compaction_refusal, linked_foreign_agent
+
+    linked_lane_refusal = linked_compaction_refusal(linked_foreign_agent(agent))
+    if linked_lane_refusal is not None:
+        if not force:
+            # Automatic passes (pre-API / idle / hygiene) no-op on the same contract as a breaker
+            # gate: the transcript is fine, it simply does not live here.
+            logger.info(
+                "Compression skipped for a linked native row (%s, session=%s)",
+                trigger or "auto", getattr(agent, "session_id", None) or "none")
+            return messages, _existing_system_prompt(agent, system_message)
+        raise ValueError(linked_lane_refusal)
     if getattr(agent, "api_mode", None) == "codex_app_server":
         if checkpoint_required:
             blocked = _checkpoint_blocked(

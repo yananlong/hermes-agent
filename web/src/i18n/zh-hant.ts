@@ -174,6 +174,17 @@ export const zhHant: Translations = {
     selectedSessionsSkippedActive: "已刪除 {deleted} 個；{count} 個因仍有回合執行中而保留",
     failedToDeleteSelected: "刪除所選工作階段失敗",
     resumeInChat: "在對話中繼續",
+    linkedReadonlyBadge: "linked · read-only",
+    linkedResumeUnverified:
+      "Hermes could not confirm what this session stores, so it is not opened in a terminal here. Reload the page, then reopen it from the Sessions list.",
+    linkedReadonlyWarning:
+      "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript; new turns cannot be appended to the native session from the web dashboard.",
+    linkedResumeDisabled:
+      "Linked sessions are read-only in the web dashboard; open the conversation in the native app to continue it.",
+    linkedHostStore: (label: string, host: string) => `No readable ${label} session store on ${host}.`,
+    linkedHostWritable: (label: string) =>
+      `This host can append to ${label} threads; continue this one from the Hermes Desktop app.`,
+    linkedHostUnnamed: "the gateway host",
     newChat: "新對話",
     workspace: "工作區",
     workspaceDefault: "預設",

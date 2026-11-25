@@ -56,6 +56,10 @@ export const ERROR_CODE_KEYS = [
   // Stored history the gateway shows but cannot continue (an old cron run, subagent, imported or
   // WebUI chat): prompt.submit refuses it with this reason.
   'session_read_only',
+  // A linked foreign thread (Codex / Claude Code / Vibe) the gateway can show but not append to:
+  // prompt.submit answers 4008 with this reason, so the card names the native app instead of
+  // pretending the chat is ordinary stored history.
+  'linked_session_read_only',
   // The chat's working folder was moved or deleted: nothing ran, and nothing will until it is back
   // or the chat moves to another folder.
   'workspace_unavailable',
@@ -404,6 +408,8 @@ const CODE_ACTIONS: Partial<Record<ErrorCodeKey, ErrorCardActions>> = {
   SESSION_OWNER_UNCONFIRMED: { primary: null },
   cron_session_read_only: { primary: 'start_new_session' },
   session_read_only: { primary: 'start_new_session' },
+  // Nothing to do here: the turn belongs to the native tool that owns the thread.
+  linked_session_read_only: { primary: null },
   workspace_unavailable: { primary: 'retry', secondary: 'start_new_session' },
   launch_credentials_unavailable: { primary: 'start_new_session' },
   loop_error: { primary: 'retry', secondary: 'start_new_session' }

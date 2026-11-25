@@ -243,6 +243,14 @@ export interface Translations {
     selectedSessionsSkippedActive: string;
     failedToDeleteSelected: string;
     resumeInChat: string;
+    linkedReadonlyBadge: string;
+    /** Optional — English fallback. Shown when the resume target's storage could not be confirmed. */
+    linkedResumeUnverified?: string;
+    linkedReadonlyWarning: string;
+    linkedResumeDisabled: string;
+    linkedHostStore: (label: string, host: string) => string;
+    linkedHostWritable: (label: string) => string;
+    linkedHostUnnamed: string;
     newChat: string;
     workspace: string;
     workspaceDefault: string;

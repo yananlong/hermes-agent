@@ -54,7 +54,8 @@ _CURSOR_MAX_CHARS = 1024
 _INT_MAX = 2 ** 63
 # Reads retried while a page's read transaction ends early (each attempt is one bounded page).
 _STABLE_READS = 4
-TRANSCRIPT_FIELDS = frozenset({'session_id', 'profile', 'subagent_id', 'cursor', 'limit', 'order', 'inline_images'})
+TRANSCRIPT_FIELDS = frozenset({'session_id', 'profile', 'subagent_id', 'codex_subagent_thread_id',
+                               'cursor', 'limit', 'order', 'inline_images'})
 
 
 def handlers(connection):
@@ -482,30 +483,59 @@ def read_transcript(store, target, lineage, binding, held, limit, *, profile_hom
 
 
 def _transcript_params(params):
-    """``(limit, order, inline_images, subagent_id, cursor)`` of a valid request."""
+    """``(limit, order, inline_images, subagent_id, codex_child_id, cursor)`` of a valid request."""
     if set(params) - TRANSCRIPT_FIELDS or not isinstance(params.get('session_id'), str) or not params['session_id']:
         raise AuthorityRefusal('invalid_params')
-    limit, cursor, subagent_id = params.get('limit', 100), params.get('cursor'), params.get('subagent_id')
+    limit, cursor = params.get('limit', 100), params.get('cursor')
+    subagent_id, codex_child_id = params.get('subagent_id'), params.get('codex_subagent_thread_id')
     order, inline_images = params.get('order', 'oldest'), params.get('inline_images', False)
     if (type(limit) is not int or not 1 <= limit <= MAX_PAGE_ROWS or not isinstance(cursor, (str, type(None)))
             or order not in ('oldest', 'latest') or type(inline_images) is not bool
-            or not (subagent_id is None or (isinstance(subagent_id, str) and subagent_id))):
+            or not (subagent_id is None or (isinstance(subagent_id, str) and subagent_id))
+            or not (codex_child_id is None or (isinstance(codex_child_id, str) and 0 < len(codex_child_id) <= 64))
+            or (subagent_id is not None and codex_child_id is not None)):
         raise AuthorityRefusal('invalid_params')
-    return limit, order, inline_images, subagent_id, cursor
+    return limit, order, inline_images, subagent_id, codex_child_id, cursor
 
 
 async def transcript(connection, ref, params):
-    limit, order, inline_images, subagent_id, cursor = _transcript_params(params)
-    binding = (ref.session_id, subagent_id, order)
-    held = None if cursor is None else _decode_cursor(cursor, binding)
+    limit, order, inline_images, subagent_id, codex_child_id, cursor = _transcript_params(params)
+    bound_child = f'codex:{codex_child_id}' if codex_child_id is not None else subagent_id
+    binding = (ref.session_id, bound_child, order)
     if subagent_id is not None:
+        held = None if cursor is None else _decode_cursor(cursor, binding)
         from gateway.session_transcript_subagent import subagent_transcript
         return await subagent_transcript(connection, ref, params, binding, held, limit, inline_images)
     target = _readable_target(connection, ref, params)
     authority = connection.authority
 
+    if codex_child_id is not None:
+        def read_child():
+            from gateway.session_authorities import owner_scope
+            from gateway.session_linked_codex import session_thread_id, subagent_transcript_page
+
+            with owner_scope(authority):
+                root_thread_id = session_thread_id(authority_persistence(authority), target)
+                if root_thread_id is None:
+                    return {'session_id': ref.session_id, 'rows': [], 'next_cursor': None, 'reset': True,
+                            'available': False, 'running': False}
+                page = subagent_transcript_page(
+                    connection, ref.session_id, root_thread_id, codex_child_id, cursor=cursor, limit=limit,
+                    order=order, inline_images=inline_images)
+            return {'session_id': ref.session_id, **page}
+
+        return await asyncio.to_thread(read_child)
+
     def read():
         store = authority_persistence(authority)
+        from gateway.session_linked_codex import linked_thread_id, transcript_page
+        if thread_id := linked_thread_id(store, target):
+            from gateway.session_authorities import owner_scope
+            with owner_scope(authority):
+                return {'session_id': ref.session_id, **transcript_page(
+                    connection, ref.session_id, thread_id, cursor=cursor, limit=limit,
+                    order=order, inline_images=inline_images, owner_session_id=target)}
+        held = None if cursor is None else _decode_cursor(cursor, binding)
         return {'session_id': ref.session_id, **read_transcript(
             store, target, store.lineage.resume_lineage_ids(target), binding, held, limit,
             profile_home=authority.profile_id, inline_images=inline_images)}

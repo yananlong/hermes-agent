@@ -35,6 +35,7 @@ import { Card } from '@nous-research/ui/ui/components/card'
 import { ModelPickerDialog } from '@/components/ModelPickerDialog'
 import { ModelReloadConfirm } from '@/components/ModelReloadConfirm'
 import { ReasoningPicker } from '@/components/ReasoningPicker'
+import { useI18n } from '@/i18n'
 import { GatewayClient, type ConnectionState } from '@/lib/gatewayClient'
 import { EventsFeedClient } from '@/lib/eventsFeedClient'
 import { api } from '@/lib/api'
@@ -112,6 +113,10 @@ interface ChatSidebarProps {
   /** Chat profile from the dashboard switcher / URL scope. */
   profile?: string
   className?: string
+  /** True when the viewed session is a linked foreign (Codex / Claude /
+   *  Mistral pointer) row: read-only in the web dashboard, so model-switch
+   *  actions are suppressed. */
+  readOnly?: boolean
   onDashboardNewSessionRequest?: () => void
   onSessionTitleChange?: (title: string | null) => void
 }
@@ -135,10 +140,12 @@ export function ChatSidebar({
   channel,
   profile,
   className,
+  readOnly = false,
   onDashboardNewSessionRequest,
   onSessionTitleChange
 }: ChatSidebarProps) {
   const navigate = useNavigate()
+  const { t } = useI18n()
   // `version` bumps on reconnect (manual button, profile/channel switch) and
   // re-runs the socket effects. The clients themselves live for the whole
   // component: the shared client keeps per-session seq watermarks and asks
@@ -557,12 +564,13 @@ export function ChatSidebar({
             ghost
             size="sm"
             onClick={() => setModelOpen(true)}
+            disabled={readOnly}
             className={cn(
               'max-w-full min-w-0 px-0 py-0',
               'self-start normal-case tracking-normal text-sm font-medium',
               'hover:underline disabled:no-underline'
             )}
-            title={modelName === '—' ? 'switch model' : modelName}
+            title={readOnly ? t.sessions.linkedResumeDisabled : modelName === '—' ? 'switch model' : modelName}
           >
             <span className="flex min-w-0 max-w-full items-center gap-1">
               <span className="truncate">{modelLabel}</span>
@@ -577,7 +585,7 @@ export function ChatSidebar({
         </Badge>
       </Card>
 
-      {supportsReasoning && (
+      {supportsReasoning && !readOnly && (
         <Card className="py-0">
           <ReasoningPicker
             currentModel={modelName}

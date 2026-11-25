@@ -24,6 +24,7 @@ _WRAPPER_TAG_RE = re.compile(
     r"command-name|command-message|local-command-stdout|system-reminder)\b", re.IGNORECASE)
 
 _TITLE_MAX = 60
+_IMPORT_TOOL_VALUE_MAX = 4000
 _SOURCE_LABELS = {"claude": "Claude Code", "codex": "Codex CLI"}
 _SOURCE_DB_NAMES = {"claude": "claude-code", "codex": "codex-cli"}
 
@@ -150,6 +151,7 @@ def parse_claude_session(path: Path) -> dict[str, Any]:
 def parse_codex_session(path: Path) -> dict[str, Any]:
     """Parse one Codex CLI rollout JSONL into normalized turns + meta."""
     turns: list[tuple[str, str]] = []
+    tool_turns: dict[str, int] = {}
     cwd = session_id = None
     for obj in _read_json_lines(path):
         otype, payload = obj.get("type"), obj.get("payload")
@@ -165,10 +167,55 @@ def parse_codex_session(path: Path) -> dict[str, Any]:
             if ptype == "message" and (turn := _message_turn(payload)):  # developer/system payloads skipped
                 turns.append(turn)
             elif ptype in ("custom_tool_call", "function_call", "local_shell_call"):
-                # Assistant activity; merged into neighbours later. Tool outputs / reasoning skipped.
                 name = payload.get("name") or payload.get("tool") or "tool"
-                turns.append(("assistant", f"[ran tool: {name}]"))
+                text = f"[ran tool: {name}]"
+                if "input" in payload:
+                    input_value = payload["input"]
+                    has_input = True
+                elif "arguments" in payload:
+                    input_value = payload["arguments"]
+                    has_input = True
+                elif "command" in payload:
+                    input_value = {"command": payload["command"]}
+                    has_input = True
+                else:
+                    input_value = None
+                    has_input = False
+                if has_input:
+                    text += f"\nInput:\n{_format_import_tool_value(input_value)}"
+                call_id = payload.get("call_id")
+                if isinstance(call_id, str) and call_id:
+                    tool_turns[call_id] = len(turns)
+                turns.append(("assistant", text))
+            elif ptype in ("custom_tool_call_output", "function_call_output", "local_shell_call_output"):
+                call_id = payload.get("call_id")
+                index = tool_turns.get(call_id) if isinstance(call_id, str) else None
+                if index is not None and "output" in payload:
+                    turns[index] = ("assistant", turns[index][1] +
+                                    f"\nOutput:\n{_format_import_tool_value(payload['output'])}")
+                elif index is not None and "result" in payload:
+                    turns[index] = ("assistant", turns[index][1] +
+                                    f"\nOutput:\n{_format_import_tool_value(payload['result'])}")
     return _parsed(turns, cwd, session_id)
+
+
+def _format_import_tool_value(value: Any) -> str:
+    """Render an imported Codex tool value as bounded readable text, without decoding opaque data."""
+    if isinstance(value, str):
+        rendered = value
+    else:
+        try:
+            rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            rendered = repr(value)
+    try:
+        from agent.redact import redact_sensitive_text
+        rendered = redact_sensitive_text(rendered, force=True)
+    except Exception:  # health: allow BLE001 -- redaction failure must withhold imported tool content
+        return "[content hidden because redaction failed]"
+    if len(rendered) > _IMPORT_TOOL_VALUE_MAX:
+        return rendered[:_IMPORT_TOOL_VALUE_MAX] + "\n… [truncated]"
+    return rendered
 
 
 # source -> (default root under ~, env override var, subdir under the env root, glob pattern,

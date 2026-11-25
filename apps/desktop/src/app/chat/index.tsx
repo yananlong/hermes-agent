@@ -23,6 +23,7 @@ import { useI18n } from '@/i18n'
 import type { ChatMessage } from '@/lib/chat-messages'
 import { NEW_SESSION_TITLE, sessionTitle } from '@/lib/chat-runtime'
 import { useIncrementalExternalStoreRuntime } from '@/lib/incremental-external-store-runtime'
+import { linkedForeignAgent } from '@/lib/linked-session'
 import { useStoreSelector } from '@/lib/use-session-slice'
 import { cn } from '@/lib/utils'
 import { migrateSessionDraft } from '@/store/composer'
@@ -51,11 +52,14 @@ import {
   shouldMigrateComposerScope
 } from '@/store/session'
 import { $focusedStoredSessionId } from '@/store/session-focus'
+import type { SessionOwnerRoute } from '@/store/session-request-router'
 import { $sessionStates, sessionTileDelegate } from '@/store/session-states'
 import { $transcriptTailBySessionId, transcriptTailState } from '@/store/transcript-tail'
 import { isAuxiliaryWindow, isMainWindow } from '@/store/windows'
 
 import { primaryRouteSelectedSessionId, routeSessionId } from '../routes'
+import { agentDisplayName, continueReason, isLinkedThreadWritable } from '../session-import/capability'
+import { useHostCapability } from '../session-import/use-host-capability'
 import { titlebarHeaderBaseClass, titlebarHeaderShadowClass, titlebarHeaderTitleClass } from '../shell/titlebar'
 
 import { ChatDropOverlay } from './chat-drop-overlay'
@@ -603,6 +607,32 @@ const ChatViewContent = memo(function ChatViewContent({
   const sessions = useStore($sessions)
   const resumeExhaustedSessionId = useStore($resumeExhaustedSessionId)
 
+  // A linked foreign session (Codex / Claude / Mistral pointer row) renders its
+  // transcript read-only: the native tool owns the history, so this surface
+  // hides the composer and shows the linked read-only note instead. Derived
+  // from the loaded rows so a flag that arrives on a later refresh flips the
+  // surface without waiting for a resume.
+  const linkedAgent = useStoreSelector($sessions, rows => {
+    const id = selectedSessionId || activeSessionId
+
+    return linkedForeignAgent(id ? rows.find(session => sessionMatchesStoredId(session, id)) : undefined)
+  })
+
+  // Can a send APPEND to that native thread? Only the CONNECTED gateway knows: it owns the
+  // store and spawns the CLI. `undefined` (no owner yet) and an old gateway's -32601 both read
+  // as unknown, which keeps the read-only note and the hidden composer exactly as before.
+  const linkedCapabilityOwner = useMemo<SessionOwnerRoute | undefined>(() => {
+    const connectionId = composerScope.connectionId
+    const profile = composerScope.profile ?? activeGatewayProfile
+
+    return connectionId && profile ? { connectionId, profile } : undefined
+  }, [composerScope.connectionId, composerScope.profile, activeGatewayProfile])
+  const linkedCapability = useHostCapability(linkedAgent ? linkedCapabilityOwner : undefined)
+  const linkedAppendable = Boolean(
+    linkedAgent && isLinkedThreadWritable(linkedCapability, linkedAgent)
+  )
+  const linkedReadOnlyReason = linkedAgent ? continueReason(linkedCapability, linkedAgent) : 'capability_unknown'
+
   // Durable composer/queue scope (lineage root) so auto-compression tip rotation
   // does not wipe an in-progress draft or orphan /queue entries. For the
   // primary view, the route is authoritative over the store selection — the
@@ -706,6 +736,9 @@ const ChatViewContent = memo(function ChatViewContent({
   const threadLoading = threadLoadingState(loadingSession, busy, awaitingResponse, lastVisibleIsUser)
 
   const showChatBar = useShowChatBar({
+    // Read-only is the FALLBACK: a linked thread keeps its hidden composer until the host says a
+    // send would append to the native thread there.
+    linkedReadOnly: Boolean(linkedAgent) && !linkedAppendable,
     loadingSession,
     resumeExhausted,
     routedSessionId,
@@ -845,6 +878,25 @@ const ChatViewContent = memo(function ChatViewContent({
           {/* A session drag hovering an EDGE hands the visual to the zone
               target; the link overlay shows only for the center region. */}
           <ChatDropOverlay kind={overlayKind} />
+          {/* Linked foreign sessions (Codex / Claude / Mistral) are pointer rows on the
+              serving host. Without a writable-capability answer they render read-only: no
+              composer, just the same note the import picker shows. When the host DOES confirm
+              an append, the composer is real and the note says the turn lands in the native
+              thread there — visible to that tool. */}
+          {linkedAgent && (
+            <div
+              className="border-t border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) px-6 py-3 text-xs leading-5 text-(--ui-text-secondary)"
+              data-linked-appendable={linkedAppendable ? 'true' : 'false'}
+              data-linked-reason={linkedReadOnlyReason ?? undefined}
+              role="note"
+            >
+              {linkedAppendable
+                ? t.sessionImport.hostCapabilityWritable(agentDisplayName(linkedAgent))
+                : linkedReadOnlyReason && linkedReadOnlyReason !== 'capability_unknown'
+                  ? t.sessionImport.hostCapabilityReadOnly(agentDisplayName(linkedAgent))
+                  : t.sessionImport.linkedReadonlyWarning}
+            </div>
+          )}
         </div>
         {/* Docked composers overlay their pane; the shared float escapes pane
             clipping through a stable portal host without remounting its editor. */}

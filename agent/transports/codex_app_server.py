@@ -15,6 +15,7 @@ import re
 import subprocess
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 from agent.deadline import kill_process_tree
@@ -91,22 +92,71 @@ class CodexAppServerClient:
     def __init__(
         self, codex_bin: str = "codex", codex_home: Optional[str] = None,
         extra_args: Optional[list[str]] = None, env: Optional[dict[str, str]] = None,
+        *, base_env: Optional[dict[str, str]] = None, inherit_credentials: bool = True,
+        read_only: bool = False, max_response_line_bytes: Optional[int] = None,
     ) -> None:
         self._codex_bin = codex_bin
-        # codex needs LLM provider creds but must not receive Tier-1 Hermes secrets (gateway/GitHub/infra tokens).
-        # codex app-server is a model-driving CLI executor: it runs a model-chosen agentic loop that
-        # executes shell commands, so it legitimately needs LLM provider credentials
-        # (inherit_credentials=True) to authenticate against the model endpoint. But the previous
-        # `os.environ.copy()` also handed it every Tier-1 Hermes secret — gateway bot tokens, GitHub auth,
-        # Modal/Daytona infra tokens, the dashboard session token, AUXILIARY_* side-LLM keys,
-        # GATEWAY_RELAY_* auth — none of which a coding subprocess has any use for. Route through the
-        # centralized helper so Tier-1 + dynamic-internal secrets are always stripped while provider creds
-        # still flow, matching the ACP client (#29157 sibling spawn-site gap).
-        spawn_env = hermes_subprocess_env(inherit_credentials=True)
+        # Model-driving runs need provider credentials, while history-only clients do not. Both route
+        # through the shared sanitizer; callers can supply a profile-curated base environment, and the
+        # read-only mode refuses credential overlays and skips model-worker MCP/kanban setup.
+        if read_only and (inherit_credentials or env):
+            raise ValueError("a read-only Codex client cannot inherit or overlay credentials")
+        if max_response_line_bytes is not None and (type(max_response_line_bytes) is not int
+                                                    or max_response_line_bytes < 1):
+            raise ValueError("max_response_line_bytes must be a positive integer")
+        self._max_response_line_bytes = max_response_line_bytes
+        configured_codex_home: Optional[str] = None
+        routed_profile = False
+        if base_env is None:
+            # A single multiplexed host serves many profiles. Start from the launch env only after
+            # removing the one non-credential Codex setting that could otherwise survive the secret
+            # scrub, then overlay the active profile's own values. HOME intentionally stays the real
+            # OS home: Codex shell children still need git/gh/aws configuration there.
+            from hermes_constants import get_hermes_home
+            from tools.environments.local import _is_routed_home, served_profile_child_env
+
+            profile_home = get_hermes_home()
+            routed_profile = _is_routed_home(profile_home)
+            profile_base = os.environ.copy()
+            if routed_profile:
+                profile_base.pop("CODEX_HOME", None)
+            profile_base = hermes_subprocess_env(
+                inherit_credentials=inherit_credentials, base_env=profile_base,
+            )
+            spawn_env = served_profile_child_env(
+                base=profile_base,
+                target_home=profile_home,
+                inherit_credentials=inherit_credentials,
+            )
+            if routed_profile:
+                # CODEX_HOME is configuration, not a credential, so read-only history clients do
+                # not receive it from served_profile_child_env's credential overlay. Resolve just
+                # this setting from the target profile without adding any other secrets.
+                from agent.secret_scope import build_profile_secret_scope
+
+                configured_codex_home = build_profile_secret_scope(Path(profile_home)).get("CODEX_HOME")
+            else:
+                configured_codex_home = spawn_env.get("CODEX_HOME")
+        else:
+            # Explicit base_env is a caller-curated boundary (the linked-history client supplies one).
+            spawn_env = hermes_subprocess_env(inherit_credentials=inherit_credentials, base_env=base_env)
         if env:
             spawn_env.update(env)
-        if codex_home:
-            spawn_env["CODEX_HOME"] = codex_home
+        if base_env is None and routed_profile and not (codex_home or configured_codex_home):
+            # Do not let a generic env overlay silently choose the launch profile's native Codex
+            # directory for a routed secondary. The dedicated argument or the target profile's
+            # scoped setting must make that choice explicit.
+            raise ValueError("The routed Hermes profile must configure its own CODEX_HOME")
+        requested_codex_home = codex_home or configured_codex_home or spawn_env.get("CODEX_HOME")
+        if requested_codex_home and requested_codex_home.strip():
+            resolved_codex_home = Path(requested_codex_home.strip()).expanduser()
+            if not resolved_codex_home.is_absolute():
+                raise ValueError("CODEX_HOME must resolve to an absolute directory")
+            spawn_env["CODEX_HOME"] = str(resolved_codex_home)
+        else:
+            # Backward-compatible default for the launch profile. Do not invent per-profile homes
+            # or move auth state; routed profiles without an explicit home fail closed above.
+            spawn_env["CODEX_HOME"] = str(Path.home() / ".codex")
 
         cmd = [codex_bin, "app-server", *(extra_args or [])]
         from agent.delegation_context import (
@@ -117,13 +167,21 @@ class CodexAppServerClient:
         # endpoint acts for this worker; grant it scope via its existing per-server
         # environment (the entry the runtime migration registers), never by granting
         # the whole executor process ownership.
-        owned_task = os.environ.get("HERMES_KANBAN_TASK") and is_dispatcher_owned_worker_context()
+        owned_task = (not read_only and os.environ.get("HERMES_KANBAN_TASK")
+                      and is_dispatcher_owned_worker_context())
         if owned_task:
             for key in (*KANBAN_ENV_KEYS, "HERMES_KANBAN_DB", "HERMES_KANBAN_BOARD"):
                 if key in os.environ:
                     cmd += ["-c", f"mcp_servers.{HERMES_TOOLS_MCP_SERVER_NAME}.env.{key}={json.dumps(os.environ[key])}"]
             cmd += ["-c", f'mcp_servers.{HERMES_TOOLS_MCP_SERVER_NAME}.env.{DELEGATED_CHILD_ENV_MARKER}=""']
-        spawn_env = delegated_child_subprocess_env(spawn_env)
+        if read_only:
+            # This process only reads native Codex history; it must not inherit a board identity or
+            # receive the worker MCP overrides that are meaningful only for a model-driving run.
+            for key in (*KANBAN_ENV_KEYS, "HERMES_KANBAN_DB", "HERMES_KANBAN_BOARD",
+                        DELEGATED_CHILD_ENV_MARKER):
+                spawn_env.pop(key, None)
+        else:
+            spawn_env = delegated_child_subprocess_env(spawn_env)
         # Kanban workers must write handoff/status to the board DB outside the
         # workspace: keep the sandbox on, add the Kanban root as writable.
         if owned_task:
@@ -143,9 +201,12 @@ class CodexAppServerClient:
         # See #56747.
         from hermes_cli._subprocess_compat import windows_hide_flags
 
+        # History replies can be multi-megabyte JSON lines. Unbuffered pipe
+        # readline() reads one byte at a time and can exceed the request timeout.
+        # _send() flushes each request, so buffered stdin still sends promptly.
         self._proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            bufsize=0, env=spawn_env, creationflags=windows_hide_flags(),
+            bufsize=-1, env=spawn_env, creationflags=windows_hide_flags(),
         )
         self._next_id = 1
         self._pending: dict[int, queue.Queue] = {}  # request id -> single-slot reply queue
@@ -313,7 +374,14 @@ class CodexAppServerClient:
         if self._proc.stdout is None:
             return
         try:
-            for line in iter(self._proc.stdout.readline, b""):
+            while True:
+                limit = self._max_response_line_bytes
+                line = (self._proc.stdout.readline() if limit is None
+                        else self._proc.stdout.readline(limit + 1))
+                if not line:
+                    break
+                if limit is not None and len(line) > limit:
+                    raise ValueError("codex app-server response exceeded the safe line limit")
                 line = line.strip()
                 if not line:
                     continue

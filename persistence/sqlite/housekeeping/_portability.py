@@ -15,6 +15,8 @@ import time
 from typing import Any, Mapping, Optional, Sequence
 
 from persistence import Conflict, SessionId
+from persistence.conversation.sessions import is_linked_codex_config, is_linked_foreign_config
+from persistence.core.errors import LinkedCodexExportUnavailable
 from persistence.housekeeping.maintenance import (
     IMPORT_MAX_MESSAGES_PER_SESSION, IMPORT_MAX_SESSION_BYTES, IMPORT_MAX_SESSIONS, IMPORT_MAX_TOTAL_BYTES,
     IMPORT_MAX_TOTAL_MESSAGES, ForeignImportResult, ForeignOrigin, ForeignTurn, ImportResult, SessionExport,
@@ -260,6 +262,16 @@ def _normalize_import_session(raw: dict[str, Any], session_id: str, messages: li
     clean_session = dict(raw)
     clean_session["id"] = session_id
     clean_session["model_config"] = _import_json_object_or_none(clean_session.get("model_config"), "model_config")
+    if is_linked_codex_config(clean_session["model_config"]):
+        raise ValueError(
+            "linked Codex sessions cannot be imported because snapshots omit their native history. "
+            "Open the thread in Codex and use 'Link from Codex' in the destination profile."
+        )
+    if is_linked_foreign_config(clean_session["model_config"]):
+        raise ValueError(
+            "linked foreign sessions (Codex/Claude/Mistral) cannot be imported because snapshots "
+            "omit their native history; link them from the native tool instead."
+        )
     for field in ("parent_session_id", *_IMPORT_SESSION_TEXT_FIELDS):
         clean_session[field] = _import_text_or_none(clean_session.get(field), field)
     started_at = clean_session.get("started_at")
@@ -426,6 +438,8 @@ class SessionPortability:
     def _export_session(cls, holder, session_id: SessionId, include_compacted: bool = False,
                         include_inactive: bool = False) -> Optional[SessionExport]:
         session = get_session(holder, session_id)
+        if session and is_linked_foreign_config(session.get("model_config")):
+            raise LinkedCodexExportUnavailable(session_id)
         return cls._with_messages(holder, session, include_compacted, include_inactive) if session else None
 
     def export_session(self, session_id: SessionId, include_compacted: bool = False,
@@ -452,6 +466,9 @@ class SessionPortability:
     def _export_all(cls, holder, source: Optional[str] = None, include_compacted: bool = False,
                     include_inactive: bool = False) -> tuple[SessionExport, ...]:
         sessions = search_sessions(holder, source=source, limit=100000)
+        for session in sessions:
+            if is_linked_foreign_config(session.get("model_config")):
+                raise LinkedCodexExportUnavailable(session["id"])
         if include_compacted:
             return tuple(cls._with_messages(holder, session, True, include_inactive) for session in sessions)
         messages_by_session = {session["id"]: [] for session in sessions}

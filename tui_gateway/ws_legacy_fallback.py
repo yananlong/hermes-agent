@@ -33,6 +33,16 @@ _SESSION_NAMESPACES = ("session.", "prompt.", "message.")
 _SESSION_FALLBACK_ALLOWED = frozenset({
     "session.most_recent", "session.active_list", "session.events.stats",
     "session.foreign.list", "session.foreign.preview", "session.foreign.import",
+    # Host capability for the linked views: a read-only probe of the serving backend's stores and
+    # CLIs. A remote Desktop asks it before offering link/continue, so without it here the
+    # authority's -32601 would look like "unknown capability" on every capable gateway.
+    "session.foreign.status",
+    "session.codex.list", "session.codex.history", "session.codex.link",
+    # The Claude Code / Vibe twins of the Codex verbs above: same read-the-foreign-store shape
+    # (``link`` creates one new pointer row, like ``session.foreign.import``). Leaving them out made
+    # the authority answer -32601 for every linked Claude/Vibe browse on a remote Desktop.
+    "session.claude.list", "session.claude.history", "session.claude.link",
+    "session.mistral.list", "session.mistral.history", "session.mistral.link",
 })
 # Sidecar verbs whose handler acts on PROCESS-global state. In a TUI's own sidecar that state was
 # that TUI's alone; on the shared owner it is every chat's, Desktop window's and served profile's:

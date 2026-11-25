@@ -371,25 +371,25 @@ This is the same migration `/codex-runtime codex_app_server` runs; it is idempot
 
 ## Multi-profile / multi-tenant setups
 
-By default, Hermes points the codex subprocess at `~/.codex/` regardless of which Hermes profile is active. This means `hermes -p work` and `hermes -p personal` share the same Codex auth, plugins, and config. For most users this is the right behavior — it matches what running `codex` CLI directly would do.
+When Hermes runs in its launch profile, the Codex subprocess uses `~/.codex/` unless `CODEX_HOME` is set. A routed secondary profile must set its own `CODEX_HOME`; Hermes refuses to start Codex for that profile without one because the shared home can contain account-wide Codex history. This keeps native Codex threads and credentials scoped to the profile being served.
 
-If you want per-profile Codex isolation (separate auth, separate installed plugins, separate config), set `CODEX_HOME` explicitly per profile. The cleanest way is to point at a directory under your `HERMES_HOME`:
+Set `CODEX_HOME` explicitly for each secondary profile, ideally to a directory under that profile's `HERMES_HOME`:
 
 ```bash
-# Inside the work profile, you might wrap hermes:
-CODEX_HOME=~/.hermes/profiles/work/codex hermes chat
+# Put this in the work profile's .env:
+CODEX_HOME=~/.hermes/profiles/work/codex
 ```
 
-You'll need to re-run `codex login` once with that `CODEX_HOME` set so the OAuth tokens land in the profile-scoped location. After that, `hermes -p work` will operate on isolated Codex state.
+You'll need to run `codex login` once with that `CODEX_HOME` set so OAuth tokens land in the profile-scoped location. After that, Hermes can safely use that profile's Codex state.
 
-We don't auto-scope this because moving an existing user's `~/.codex/` would silently invalidate their Codex CLI auth — anyone who already ran `codex login` would have to re-authenticate. Opt-in feels safer than surprising users.
+Hermes does not create a new Codex home or move existing auth automatically. The launch profile keeps the existing `~/.codex/` behavior; routed profiles require an explicit path so one profile cannot read another profile's Codex threads.
 
 ## HOME environment variable passthrough
 
-Hermes does NOT rewrite `HOME` when spawning the codex app-server subprocess (we use `os.environ.copy()` and only overlay `CODEX_HOME` and `RUST_LOG`). This means:
+Hermes leaves `HOME` unchanged when spawning the codex app-server, so shell commands still use the real OS user's home. The child environment is sanitized and bound to the active Hermes profile: routed profiles receive their own provider credentials and settings, and launch-profile secrets are removed. `CODEX_HOME` comes from that profile when configured; only the launch profile may use the shared `~/.codex/` default. This means:
 
 - Commands codex runs via its `shell` tool see the real user `HOME` and find `~/.gitconfig`, `~/.gh/`, `~/.aws/`, `~/.npmrc`, etc. correctly.
-- Codex's internal state stays isolated through `CODEX_HOME` (which points at `~/.codex/` by default).
+- Codex's internal state follows `CODEX_HOME`; routed profiles fail closed until they set a profile-specific path.
 
 This matches the boundary OpenClaw arrived at after some early experimentation: isolate Codex's state, leave the user's home alone. (Cf. openclaw/openclaw#81562.)
 

@@ -600,6 +600,88 @@ describe('the current model the catalog omits (#57534)', () => {
   })
 })
 
+describe('the Codex app-server picker keeps only base model slugs', () => {
+  const models = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna']
+
+  it('maps a selected -900k alias to its visible base instead of adding an extra row', async () => {
+    getGlobalModelOptions.mockResolvedValue({
+      providers: [
+        {
+          authenticated: true,
+          models,
+          name: 'OpenAI Codex CLI',
+          slug: 'openai',
+          source: 'codex-app-server'
+        }
+      ]
+    })
+
+    renderMenu({ model: 'gpt-6.1-sol-900k', provider: 'openai' })
+
+    await screen.findByText('GPT-6.1-sol')
+
+    const labels = screen
+      .queryAllByRole('menuitem')
+      .map(row => row.textContent ?? '')
+      .filter(text => /GPT-6/i.test(text))
+
+    expect(labels).toHaveLength(4)
+    expect(labels[0]).toContain('GPT-6-astra')
+    expect(labels[1]).toContain('GPT-6.1-sol')
+    expect(labels[2]).toContain('GPT-6.1-terra')
+    expect(labels[3]).toContain('GPT-6-luna')
+    expect(screen.queryByText(/900k/i)).toBeNull()
+  })
+
+  it('does not pin an unsupported current -900k model into the Codex row', async () => {
+    getGlobalModelOptions.mockResolvedValue({
+      providers: [
+        {
+          authenticated: true,
+          models,
+          name: 'OpenAI Codex CLI',
+          slug: 'openai',
+          source: 'codex-app-server'
+        }
+      ]
+    })
+
+    renderMenu({ model: 'gpt-5.4-900k', provider: 'openai' })
+
+    await screen.findByText('GPT-6-astra')
+
+    const labels = screen
+      .queryAllByRole('menuitem')
+      .map(row => row.textContent ?? '')
+      .filter(text => /GPT-/i.test(text))
+
+    expect(labels).toHaveLength(4)
+    expect(screen.queryByText(/900k/i)).toBeNull()
+  })
+
+  it('keeps fallback models selectable while showing that the account catalog could not be verified', async () => {
+    getGlobalModelOptions.mockResolvedValue({
+      providers: [
+        {
+          authenticated: false,
+          models,
+          name: 'OpenAI Codex CLI',
+          slug: 'openai',
+          source: 'codex-app-server',
+          warning: 'Could not verify the Codex account model list; displayed models may be incomplete.'
+        }
+      ]
+    })
+
+    renderMenu({ model: 'gpt-6.1-sol', provider: 'openai' })
+
+    expect((await screen.findByRole('status')).textContent).toBe(
+      'Could not verify the Codex account model list; displayed models may be incomplete.'
+    )
+    expect(screen.getByText('GPT-6.1-sol')).toBeTruthy()
+  })
+})
+
 describe('in-flight local downloads', () => {
   const DOWNLOAD_JOB: LocalRuntimeJob = {
     job_id: 'dl1',

@@ -11,6 +11,7 @@ import {
   MAX_TOOL_RENDER_CHARS,
   prettyJson,
   toolCallFailed,
+  toolCopyPayload,
   type ToolPart,
   toolPreviewOutcome
 } from './fallback-model'
@@ -88,6 +89,29 @@ describe('buildToolView terminal exit-code status', () => {
 
     expect(view.terminalCommand).toBe('npm run check --workspace=apps/desktop')
     expect(view.terminalExitCode).toBe(0)
+  })
+})
+
+describe('Codex native tool copy payload', () => {
+  it('copies complete bounded args and result when the visible payload is truncated', () => {
+    const output = 'native-result-line\n'.repeat(1500)
+
+    const nativePart = part({
+      args: { recipient: 'native-recipient', message: 'native-argument' },
+      result: { output, encrypted_content: 'opaque-native-secret' },
+      toolCallId: 'codex_dynamicToolCall_item-copy',
+      toolName: 'send_message'
+    })
+
+    const view = buildToolView(nativePart, '')
+    const copy = toolCopyPayload(nativePart, view)
+    const painted = clampForDisplay(copy.text)
+
+    expect(copy.text).toContain('native-argument')
+    expect(copy.text).toContain('native-result-line')
+    expect(copy.text.length).toBeGreaterThan(painted.length)
+    expect(painted).toContain('use Copy for the full output')
+    expect(copy.text).not.toContain('opaque-native-secret')
   })
 })
 
