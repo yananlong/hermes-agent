@@ -257,7 +257,8 @@ Chatting against a Hermes instance on another machine instead of the bundled loc
 Two independent font settings live in **Settings → Appearance**, both stored per profile in `config.yaml`:
 
 - **Chat Font** (`desktop.font_family`) — chat and the rest of the app's UI. Readability faces such as OpenDyslexic or Atkinson Hyperlegible work as soon as they are installed on the system; the active theme's stack stays behind your pick so missing glyphs still render. Blank means the theme's font.
-- **Terminal Font** (`terminal.font_family`) — the embedded terminal pane; Nerd Fonts render shell icons here. Blank means the bundled JetBrains Mono.
+- **Terminal Font** (`terminal.font_family`) — the embedded terminal pane; Nerd Fonts render shell icons here. Blank means the bundled Source Code Pro, with JetBrains Mono behind it.
+- **Terminal Font Size** (`terminal.font_size`) — the embedded terminal's size in CSS pixels, shared by the Desktop terminal panes and the web dashboard console. The slider covers 8–32 px and the default is 15.
 
 #### Repository discovery
 

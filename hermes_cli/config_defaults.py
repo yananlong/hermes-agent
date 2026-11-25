@@ -299,6 +299,10 @@ DEFAULT_CONFIG = {
         # monospace"). Empty = built-in default ("'JetBrains Mono', 'Cascadia Code', 'SF Mono',
         # Menlo, Consolas, monospace"). Lets users use a Nerd Font without patching the app.
         "font_family": "",
+        # Font size in CSS pixels for the embedded terminal panes (Desktop and the web
+        # dashboard's console). One key drives both surfaces, so there is one default;
+        # renderers clamp malformed/out-of-range values back to it. Settings exposes 8–32 px.
+        "font_size": 15,
         "timeout": 180,
         # Seconds between SIGTERM and escalated SIGKILL for host process trees (browser daemons). 0
         # = SIGTERM only.
