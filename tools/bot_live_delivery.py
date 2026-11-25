@@ -34,9 +34,10 @@ def _bot_chat_tip(home: Path) -> str | None:
 
     if not store_exists(profile_scope(home=home)):
         return None
+    from persistence.conversation.sessions import is_linked_foreign_config
     with open_persistence_reader(home) as store:
         row = store.sessions.get_by_title('Bot Chat')
-        return store.lineage.tip(row.session_id) if row else None
+        return store.lineage.tip(row.session_id) if row and not is_linked_foreign_config(row.model_config) else None
 
 
 def find_canonical_live_owner(profile_home: Path | str) -> dict[str, Any] | None:

@@ -15,6 +15,7 @@ import { JsonRpcGatewayClient, type ConnectionState, type GatewayEvent, type Gat
 import { buildWsUrl } from '@/lib/api'
 import { maybeReloadForLoopbackWsAuthFailure } from '@/lib/dashboard-auth-reload'
 import { EVENTS_CONNECT_TIMEOUT_MS } from '@/lib/events-reconnect'
+import { noteDashboardConnectionOpened } from '@/lib/gateway-connection-generation'
 
 export type { ConnectionState, GatewayEvent, GatewayEventName }
 
@@ -40,6 +41,17 @@ export class EventsFeedClient extends JsonRpcGatewayClient {
       requestIdPrefix: 'e'
     })
     this.onState(state => {
+      if (state === 'open') {
+        // This is the page's long-lived socket to the dashboard it is served
+        // from, so a (re)opened one means the serving process may be a new
+        // build. Bump the generation the linked-host capability cache keys on,
+        // so an upgraded gateway is asked again instead of staying "unknown"
+        // until a full page reload.
+        noteDashboardConnectionOpened()
+
+        return
+      }
+
       if (state === 'closed' || state === 'error') {
         const code = this.closeCode ?? undefined
         this.closeCode = undefined

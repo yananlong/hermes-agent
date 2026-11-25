@@ -118,6 +118,48 @@ describe('PendingApprovalStack', () => {
     expect(screen.getByText('chmod -R 777 /tmp/x')).toBeTruthy()
   })
 
+  it('shows the command and the working directory and reason before approval', () => {
+    $activeSessionId.set('sess-1')
+    setApprovalRequest({
+      command: 'git status',
+      description: 'Codex requests exec in /home/project — inspect the worktree',
+      requestId: 'apr-codex-exec',
+      sessionId: 'sess-1'
+    })
+    render(<PendingApprovalStack />)
+
+    expect(screen.getByText('git status')).toBeTruthy()
+    expect(screen.getByText('Codex requests exec in /home/project — inspect the worktree')).toBeTruthy()
+  })
+
+  it('shows file change details and requested grant scope before approval', () => {
+    $activeSessionId.set('sess-1')
+    setApprovalRequest({
+      command: 'apply_patch: update /home/project/a.py',
+      description: 'Update implementation; grants write to /home/project',
+      requestId: 'apr-codex-patch',
+      sessionId: 'sess-1'
+    })
+    render(<PendingApprovalStack />)
+
+    expect(screen.getByText('apply_patch: update /home/project/a.py')).toBeTruthy()
+    expect(screen.getByText('Update implementation; grants write to /home/project')).toBeTruthy()
+  })
+
+  it('treats approval descriptions as text, including markup-like file contents', () => {
+    $activeSessionId.set('sess-1')
+    setApprovalRequest({
+      command: 'apply_patch: update /home/project/a.html',
+      description: '<img src=x onerror=alert(1)>',
+      requestId: 'apr-codex-markup',
+      sessionId: 'sess-1'
+    })
+    const { container } = render(<PendingApprovalStack />)
+
+    expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeTruthy()
+    expect(container.querySelector('img')).toBeNull()
+  })
+
   it('falls back to the description when a request carries no command at all', () => {
     setRequest('', undefined, { requestId: 'apr-nocmd' })
     setApprovalRequest({

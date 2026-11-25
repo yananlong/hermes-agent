@@ -104,5 +104,75 @@ def test_failed_command_result_and_error_flag_are_preserved():
     assert calls["tool_complete"][0][3] == "[exit 2]\nboom"
 
 
+def test_current_protocol_summary_parts_keep_readable_boundaries():
+    agent, calls = _recording_agent()
+    bridge = make_codex_app_server_event_bridge(agent)
+    item_id = "reason-parts"
+
+    bridge({"method": "item/started", "params": {"item": {"type": "reasoning", "id": item_id}}})
+    bridge({"method": "item/reasoning/summaryPartAdded",
+            "params": {"itemId": item_id, "summaryIndex": 0}})
+    bridge({"method": "item/reasoning/summaryTextDelta",
+            "params": {"itemId": item_id, "summaryIndex": 0, "delta": "Check the inputs."}})
+    bridge({"method": "item/reasoning/summaryPartAdded",
+            "params": {"itemId": item_id, "summaryIndex": 1}})
+    bridge({"method": "item/reasoning/summaryTextDelta",
+            "params": {"itemId": item_id, "summaryIndex": 1, "delta": "Then verify the result."}})
+    bridge({"method": "item/completed", "params": {"item": {"type": "reasoning", "id": item_id}}})
+
+    assert calls["reasoning"] == ["Check the inputs.\nThen verify the result."]
+    assert calls["stream"] == []
+
+
+def test_reasoning_display_is_not_capped_by_the_tool_output_limit():
+    from agent.transports.codex_event_projector import _MAX_PROJECTED_TOOL_TEXT
+
+    agent, calls = _recording_agent()
+    bridge = make_codex_app_server_event_bridge(agent)
+    text = "reasoning " * (_MAX_PROJECTED_TOOL_TEXT // len("reasoning ") + 1000)
+    item = {"type": "reasoning", "id": "reason-large", "summary": [text], "content": []}
+
+    bridge({"method": "item/completed", "params": {"item": item}})
+
+    assert len(calls["reasoning"][0]) > _MAX_PROJECTED_TOOL_TEXT
+    assert calls["reasoning"][0] == text
+
+
+def test_incomplete_reasoning_is_safely_reported_and_cleared_before_the_next_turn():
+    agent, calls = _recording_agent()
+    bridge = make_codex_app_server_event_bridge(agent)
+    bridge({"method": "item/started", "params": {"item": {"type": "reasoning", "id": "partial"}}})
+    bridge({"method": "item/reasoning/summaryTextDelta",
+            "params": {"itemId": "partial", "delta": "ghp_"}})
+
+    notice = bridge.finish(interrupted=True)
+
+    assert notice is not None and "interrupted" in notice
+    assert calls["reasoning"] == [notice]
+    assert "ghp_" not in notice
+
+    bridge({"method": "item/started", "params": {"item": {"type": "reasoning", "id": "next"}}})
+    bridge({"method": "item/reasoning/summaryTextDelta",
+            "params": {"itemId": "next", "delta": "Readable next-turn reasoning."}})
+    bridge({"method": "item/completed", "params": {"item": {"type": "reasoning", "id": "next"}}})
+
+    assert calls["reasoning"] == [notice, "Readable next-turn reasoning."]
+
+
+def test_turn_completed_reports_reasoning_whose_item_never_completed():
+    agent, calls = _recording_agent()
+    bridge = make_codex_app_server_event_bridge(agent)
+    bridge({"method": "item/started", "params": {"item": {"type": "reasoning", "id": "partial"}}})
+    bridge({"method": "item/reasoning/textDelta",
+            "params": {"itemId": "partial", "delta": "unclosed fragment"}})
+
+    bridge({"method": "turn/completed", "params": {"turn": {"status": "interrupted"}}})
+
+    assert len(calls["reasoning"]) == 1
+    assert "omitted" in calls["reasoning"][0]
+    assert "unclosed fragment" not in calls["reasoning"][0]
+    assert bridge.finish(interrupted=True) is None
+
+
 
 

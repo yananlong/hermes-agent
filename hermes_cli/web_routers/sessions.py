@@ -622,6 +622,14 @@ async def get_session_detail(session_id: str, profile: Optional[str] = None):
         # clients resolve them to whichever gateway happened to be active.
         session["profile"] = _serving_profile(profile)
         session["is_default_profile"] = session["profile"] == "default"
+        # Single-session linked lookup: the dashboard asks THIS row (not a paged list) whether the
+        # id it is about to resume is a native-tool pointer, because a row outside the first page
+        # used to read as an ordinary session and could be spawned into a PTY. Same markers the
+        # list projection stamps, and the native id still stays in model_config (detail reads are
+        # complete by contract).
+        from hermes_cli.web_server_gateway import stamp_linked_capability_markers
+
+        stamp_linked_capability_markers(session)
         # A cron run's liveness is scheduler ownership, not the 300s activity
         # window (#88443): a run inside a long tool call is still owned. A
         # unified-runtime run's local id names no job, so stamp its identity first.
@@ -702,6 +710,71 @@ def _history_profile_home(profile):
     from hermes_cli.config import get_hermes_home
 
     return get_hermes_home()
+
+
+def _linked_foreign_history_source(store, session_id: str):
+    """Resolve a linked Claude/Mistral pointer row to ``(label, native_id, reader)``, else None.
+
+    Codex is handled separately (it has a live app-server); Claude Code and Mistral Vibe are
+    read-oriented stores whose history is paged live from the native transcript, so the reader
+    is ``claude_linked_threads.read_claude_history`` / ``mistral_linked_threads.read_mistral_history``.
+    """
+    from hermes_cli.claude_linked_history import linked_claude_session_id
+    from hermes_cli.mistral_linked_history import linked_mistral_session_id
+    if native_id := linked_claude_session_id(store, session_id):
+        from hermes_cli import claude_linked_threads
+        return "Claude", native_id, claude_linked_threads.read_claude_history
+    if native_id := linked_mistral_session_id(store, session_id):
+        from hermes_cli import mistral_linked_threads
+        return "Mistral", native_id, mistral_linked_threads.read_mistral_history
+    return None
+
+
+# Same windowing the Codex linked-history REST branch uses
+# (``gateway.session_linked_codex.read_display_history_window``): native readers page by cursor
+# with a hard 100-row cap per page, and the walk covers only the requested window instead of
+# draining a huge foreign transcript page by page.
+_LINKED_FOREIGN_PAGE_ROWS = 100
+
+
+def _read_linked_foreign_history(reader, native_id: str, *, limit: int, offset: int,
+                                 latest: bool, profile_home) -> list:
+    """Page one linked foreign transcript into the same row list the Codex branch returns.
+
+    The native readers page by cursor with a hard 100-row cap per page (and re-read the
+    transcript per page), so the walk stops once the requested ``offset + limit`` window is
+    covered — the same cap the Codex windowed reader applies — and never returns more than
+    ``limit`` rows. ``latest`` cursors only move forward, so the walk still runs to the cursor
+    end, but only the trailing ``offset + limit`` rows are retained, keeping the payload
+    bounded for a huge thread. Slicing keeps the same offset/limit/latest semantics as
+    ``gateway.session_linked_codex.read_display_history``.
+    """
+    if limit == 0:
+        return []
+    window = offset + limit
+    rows: list = []
+    cursor = None
+    seen: set = set()
+    while True:
+        page = reader(native_id, cursor=cursor, limit=_LINKED_FOREIGN_PAGE_ROWS,
+                      profile_home=profile_home)
+        page_rows = page.get("messages")
+        if not isinstance(page_rows, list):
+            raise ValueError("The linked native history returned an invalid page")
+        rows.extend(page_rows)
+        if latest and len(rows) > window:
+            del rows[:len(rows) - window]  # retain only the trailing window
+        cursor = page.get("next_cursor")
+        if cursor is None or not isinstance(cursor, str) or cursor in seen:
+            break
+        seen.add(cursor)
+        if not latest and len(rows) >= window:
+            break  # the requested window is covered; stop paging a huge transcript
+    if latest:
+        end = len(rows) - offset
+        start = max(0, end - limit)
+        return rows[start:max(0, end)]
+    return rows[offset:offset + limit]
 
 
 def _session_files_dir(profile) -> Path:
@@ -818,6 +891,45 @@ async def get_session_messages(
         default_page = limit is None
         latest_page = order == "latest" or (order is None and default_page)
         _limit = 500 if default_page else min(limit, 500)
+        # Resolving WHICH linked row this is can itself refuse (a damaged model_config, a flag
+        # without its native id). That refusal belongs inside the endpoint's typed error surface:
+        # outside it, it escaped as a bare 500 and the client had no way to read it as "this
+        # session's history lives in another tool".
+        try:
+            from hermes_cli.codex_linked_history import linked_thread_id
+            thread_id = linked_thread_id(store, sid)
+            foreign = None if thread_id else _linked_foreign_history_source(store, sid)
+        except Exception as exc:
+            _log.warning("Unable to resolve the linked history of session %s: %s", sid, exc)
+            raise HTTPException(
+                status_code=503, detail="Unable to load the linked history of this session") from exc
+        if thread_id:
+            try:
+                from tui_gateway.server import _session_profile_runtime_scope
+                from gateway.session_linked_codex import read_display_history_window
+                owner_row = store.sessions.get(sid)
+                owning_home = _history_profile_home(profile)
+                with _session_profile_runtime_scope({"profile_home": _history_profile_home(profile)}):
+                    # Page the native trace itself so oversized threads can be loaded
+                    # window by window instead of failing the full-read byte budget.
+                    messages = read_display_history_window(
+                        thread_id, session_id=sid, model=owner_row.model if owner_row is not None else None, profile_home=owning_home,
+                        limit=_limit, offset=offset, latest=latest_page, session_db=store,
+                        platform=owner_row.source if owner_row else "")
+            except Exception as exc:
+                _log.warning("Unable to load linked Codex history for session %s: %s", sid, exc)
+                raise HTTPException(status_code=503, detail="Unable to load linked Codex history") from exc
+            return sid, _limit, messages
+        if foreign:
+            label, native_id, reader = foreign
+            try:
+                messages = _read_linked_foreign_history(
+                    reader, native_id, limit=_limit, offset=offset, latest=latest_page,
+                    profile_home=_history_profile_home(profile))
+            except Exception as exc:
+                _log.warning("Unable to load linked %s history for session %s: %s", label, sid, exc)
+                raise HTTPException(status_code=503, detail=f"Unable to load linked {label} history") from exc
+            return sid, _limit, messages
         # Include compression-ancestor messages so the REST transcript
         # matches the gateway's session.resume (which uses
         # include_ancestors=True). Without this, the desktop's REST
@@ -877,6 +989,14 @@ async def get_session_timeline(
 
     def _read(store):
         sid = _timeline_session_id(store, session_id, owner)
+        # One fail-closed check for all three agents: a pointer row's timeline lives in the native
+        # tool, and a row whose configuration cannot be validated is refused rather than walked as
+        # if it were an ordinary Hermes transcript.
+        from hermes_cli.foreign_linked_store import linked_foreign_kind, linked_foreign_label
+        if kind := linked_foreign_kind(store, sid):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Timeline navigation is unavailable for linked {linked_foreign_label(kind)} threads")
         timeline = store.messages.read_session_timeline(sid, limit=limit, after_row_id=after_row_id)
         return {"session_id": sid, "profile": owner,
                 "entries": [{"row_id": e.row_id, "preview": e.preview, "timestamp": e.timestamp}
@@ -898,6 +1018,14 @@ async def get_session_messages_around(
 
     def _read(store):
         sid = _timeline_session_id(store, session_id, owner)
+        # One fail-closed check for all three agents: a pointer row's timeline lives in the native
+        # tool, and a row whose configuration cannot be validated is refused rather than walked as
+        # if it were an ordinary Hermes transcript.
+        from hermes_cli.foreign_linked_store import linked_foreign_kind, linked_foreign_label
+        if kind := linked_foreign_kind(store, sid):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Timeline navigation is unavailable for linked {linked_foreign_label(kind)} threads")
         page = store.messages.read_prompt_page(sid, row_id, limit=limit)
         if page is None:
             raise HTTPException(status_code=404, detail="Prompt not found")
@@ -1021,6 +1149,16 @@ async def export_session_endpoint(session_id: str, profile: Optional[str] = None
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
 
     sid, session = prepared
+    from persistence.conversation.sessions import is_linked_codex_config, is_linked_foreign_config
+    from persistence.core.errors import LinkedCodexExportUnavailable
+    if is_linked_codex_config(session.get("model_config")):
+        raise HTTPException(status_code=409, detail=str(LinkedCodexExportUnavailable(sid)))
+    if is_linked_foreign_config(session.get("model_config")):
+        # Linked Claude/Mistral pointer rows: the native tool owns the transcript, so there is no
+        # Hermes snapshot to export (same read-only rule as the Codex branch above).
+        raise HTTPException(status_code=409, detail=(
+            f"Session '{sid}' is linked to a foreign session, so its history is not in the Hermes "
+            "session store and cannot be exported as a complete snapshot."))
 
     def _stream_export():
         with _profile_store(profile, read_only=True) as store:

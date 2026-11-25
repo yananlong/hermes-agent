@@ -270,15 +270,15 @@ class CLIChatTurnMixin:
             return message
         text = message if isinstance(message, str) else ""
         try:
-            from agent.image_routing import build_native_content_parts, decide_image_input_mode
+            from agent.image_routing import build_native_content_parts, decide_image_input_mode_for_agent
             from hermes_cli.config import load_config
 
             _img_model = (_split_model_config_default(self.model)[0]
                           if isinstance(self.model, dict) else str(self.model or ""))
             _img_provider = (_split_model_config_default(self.provider)[1]
                              if isinstance(self.provider, dict) else str(self.provider or ""))
-            _img_mode = decide_image_input_mode(
-                _img_provider.strip(), _img_model.strip(), load_config(),
+            _img_mode = decide_image_input_mode_for_agent(
+                self.agent, _img_provider.strip(), _img_model.strip(), load_config(),
                 requested_provider=(self.requested_provider or "").strip(),
             )
         except Exception as _img_exc:

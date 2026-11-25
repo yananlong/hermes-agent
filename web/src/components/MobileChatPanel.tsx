@@ -21,11 +21,13 @@ interface MobileChatPanelProps {
   resumeParam: string | null;
   workspaceCwd: string;
   setWorkspaceCwd: (value: string) => void;
+  /** A linked foreign thread the host cannot append to: the model picker refuses. */
+  readOnly: boolean;
 }
 
 export function MobileChatPanel({ isActive, narrow, portalRoot, mobilePanelOpen, closeMobilePanel,
   modelToolsLabel, channel, scopedProfile, startFreshDashboardChat, handleSessionTitleChange,
-  resumeParam, workspaceCwd, setWorkspaceCwd }: MobileChatPanelProps) {
+  resumeParam, workspaceCwd, setWorkspaceCwd, readOnly }: MobileChatPanelProps) {
   const { t } = useI18n();
   if (!isActive || !narrow || !portalRoot) return null;
   return createPortal(
@@ -94,6 +96,7 @@ export function MobileChatPanel({ isActive, narrow, portalRoot, mobilePanelOpen,
               <ChatSidebar
                 channel={channel}
                 profile={scopedProfile}
+                readOnly={readOnly}
                 onDashboardNewSessionRequest={startFreshDashboardChat}
                 onSessionTitleChange={handleSessionTitleChange}
               />

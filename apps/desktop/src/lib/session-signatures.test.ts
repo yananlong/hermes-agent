@@ -54,6 +54,28 @@ describe('sameCronSignature', () => {
     const b = [session('a', 't', { archived: true })]
     expect(sameCronSignature(a, b)).toBe(false)
   })
+
+  it('is false when linked-Codex workspace capability arrives on refresh', () => {
+    const before = [session('a', 't')]
+    const after = [session('a', 't', { codex_linked: true })]
+
+    expect(sameCronSignature(before, after)).toBe(false)
+  })
+
+  it.each(['claude_linked', 'mistral_linked'] as const)('is false when %s arrives on refresh', flag => {
+    const before = [session('a', 't')]
+    const after = [session('a', 't', { [flag]: true })]
+
+    expect(sameCronSignature(before, after)).toBe(false)
+    expect(sameCronSignature(after, [session('a', 't', { [flag]: true })])).toBe(true)
+  })
+
+  it('is false when a linked flag flips between foreign agents', () => {
+    const codex = [session('a', 't', { codex_linked: true })]
+    const claude = [session('a', 't', { claude_linked: true })]
+
+    expect(sameCronSignature(codex, claude)).toBe(false)
+  })
 })
 
 describe('sessionMessagesSignature', () => {

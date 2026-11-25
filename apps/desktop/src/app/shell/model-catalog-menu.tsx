@@ -1,12 +1,5 @@
 import type { ModelOptionProvider, ModelOptionsResult, ModelPricing } from '@hermes/shared'
-import {
-  DEFAULT_REASONING_EFFORT,
-  planBlocks,
-  sectionAt,
-  splitRecommended,
-  usageLevel,
-  usageTag
-} from '@hermes/shared'
+import { DEFAULT_REASONING_EFFORT, planBlocks, sectionAt, splitRecommended, usageLevel, usageTag } from '@hermes/shared'
 import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -21,6 +14,7 @@ import {
   useState
 } from 'react'
 
+import { CodexCatalogWarning } from '@/components/codex-catalog-warning'
 import { PlanLimitLine, UsageLevelTag } from '@/components/model-picker'
 import { ProviderStatusChip } from '@/components/provider-status-chip'
 import { Badge } from '@/components/ui/badge'
@@ -45,7 +39,7 @@ import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { isSubmitEnter } from '@/lib/ime'
 import { catalogProviderMatches, modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
-import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
+import { displayModelName, modelBaseId, modelDisplayParts } from '@/lib/model-status-label'
 import { accountResetMs, formatReset, modelResetMs } from '@/lib/provider-limit'
 import { reasoningEffortLabel } from '@/lib/reasoning-effort'
 import { foldIncludes, normalize } from '@/lib/text'
@@ -77,6 +71,19 @@ import type { LocalModelLoadProgress, LocalRuntimeJob } from '@/types/hermes'
 
 import { type DaybreakControl, type FastControl, ModelEditSubmenu, resolveFastControl } from './model-edit-submenu'
 import { ModelMenuRowIcon, useModelMenuRowDecoration } from './model-menu-row-decorations'
+
+function CatalogWarningSection({ hidden, providers }: { hidden: boolean; providers?: ModelOptionProvider[] }) {
+  const codexProvider = providers?.find(
+    provider => provider.source === 'codex-app-server' && provider.authenticated === false
+  )
+
+  return (
+    <>
+      {!hidden && <DropdownMenuSeparator className="mx-0" />}
+      <CodexCatalogWarning className="px-2 pb-1" hidden={hidden} provider={codexProvider} />
+    </>
+  )
+}
 
 // Lets the host dropdown (model-pill, a kanban field trigger, …) hand the panel
 // a way to dismiss itself so clicking a model row commits + closes, while the
@@ -736,7 +743,7 @@ export function ModelCatalogMenu({
         value={search}
       />
 
-      {!hideCatalog && <DropdownMenuSeparator className="mx-0" />}
+      <CatalogWarningSection hidden={hideCatalog} providers={providers} />
 
       {hideCatalog ? null : loading ? (
         <DropdownMenuGroup className="py-1">
@@ -1391,16 +1398,17 @@ function groupModels(
 
   for (const provider of providers) {
     let allFamilies = collapseModelFamilies(provider.models ?? [])
+    const currentModel = codexPickerCurrentModel(provider, current)
 
     // Keep the OpenRouter/custom fallback (#57534), but don't synthesize
     // Codex choices the backend omitted. The composer still shows the current model.
     if (
       (provider.slug !== 'openai-codex' || provider.is_user_defined) &&
       catalogProviderMatches(provider, current.provider) &&
-      current.model &&
-      !allFamilies.some(family => family.id === current.model || family.fastId === current.model)
+      currentModel &&
+      !allFamilies.some(family => family.id === currentModel || family.fastId === currentModel)
     ) {
-      allFamilies = recommendedFirst(provider, [{ fastId: null, id: current.model }, ...allFamilies])
+      allFamilies = recommendedFirst(provider, [{ fastId: null, id: currentModel }, ...allFamilies])
     }
 
     if (allFamilies.length === 0) {
@@ -1431,8 +1439,8 @@ function groupModels(
     // stable curated order, so selecting a model can't shuffle the list. While
     // SEARCHING the pin is skipped: a query means "show me matches".
     const activeId =
-      !q && catalogProviderMatches(provider, current.provider) && current.model
-        ? allFamilies.find(family => family.id === current.model || family.fastId === current.model)?.id
+      !q && catalogProviderMatches(provider, current.provider) && currentModel
+        ? allFamilies.find(family => family.id === currentModel || family.fastId === currentModel)?.id
         : undefined
 
     // Favorites already paint in the Favorites section, so drop them here:
@@ -1452,6 +1460,19 @@ function groupModels(
   groups.sort((a, b) => a.provider.name.localeCompare(b.provider.name))
 
   return groups
+}
+
+/** The Codex app-server picker exposes only account-visible base slugs. A pre-existing Hermes
+ * `-900k` selection is a context alias that maps to its visible base model; it must not be pinned
+ * back into this picker as an extra row. Other providers keep the general missing-current behavior. */
+function codexPickerCurrentModel(provider: ModelOptionProvider, current: { model: string; provider: string }): string {
+  if (provider.source !== 'codex-app-server' || !catalogProviderMatches(provider, current.provider)) {
+    return current.model
+  }
+
+  const base = modelBaseId(current.model).replace(/-900k$/i, '')
+
+  return (provider.models ?? []).find(model => model.toLowerCase() === base.toLowerCase()) ?? ''
 }
 
 // The Nous row: the only one the menu re-reads on open or while its pricing warms (window-plan labels).
@@ -1480,7 +1501,10 @@ function nousPricingPoll(data: ModelOptionsResult | undefined, updates: number):
 // current-model pin above, so a pinned custom model lands under "Other models" instead of taking the
 // first pick's "Recommended" heading.
 function recommendedFirst(provider: ModelOptionProvider, families: ModelFamily[]): ModelFamily[] {
-  const split = splitRecommended(provider, families.map(family => family.id))
+  const split = splitRecommended(
+    provider,
+    families.map(family => family.id)
+  )
 
   if (!split) {
     return families

@@ -17,6 +17,7 @@ from persistence.authority.bindings import api_generation_id, generation_request
 from persistence.authority.runtime import (
     ApiGenerations,
     ChatPickParams,
+    ColdLinkedWorkspaceRequest,
     DeferredPick,
     DeleteFootprint,
     GenerationChain,
@@ -36,7 +37,7 @@ from persistence.authority.vocabulary import OwnerRule
 from persistence.core.identity import SessionId
 
 from .._backend import SQLiteStore, register_repository
-from . import _mutation, _runtime_ends, _runtime_guards, _runtime_picks, _runtime_retirement
+from . import _cold_linked_workspace, _mutation, _native_codex_compaction, _runtime_ends, _runtime_guards, _runtime_picks, _runtime_retirement
 from ._runtime import refused
 
 __all__ = ["SQLiteSessionRuntimeRepository"]
@@ -86,13 +87,13 @@ class SQLiteSessionRuntimeRepository:
 
     def prepare_mutation(self, epoch: int, *, principal_id: str, session_id: str, request_id: str, expected_revision: int,
                          command: MutationCommand, expected_generation: int | None = None,
-                         live_guard: GateRefusal | None = None) -> LocalSnapshot | MutationOutcome:
+                         live_guard: GateRefusal | None = None, require_idle_target: bool = False) -> LocalSnapshot | MutationOutcome:
         holder = self._store.holder()
         with refused(holder, session_id):
             result, _gone, replayed = _mutation.mutate_runtime_session(
                 holder, epoch=epoch, principal_id=principal_id, session_id=session_id, request_id=request_id,
                 expected_revision=expected_revision, expected_generation=expected_generation, live_guard=live_guard,
-                prepare_only=True, **_mutation_call(command))
+                prepare_only=True, require_idle_target=require_idle_target, **_mutation_call(command))
         if replayed:
             return MutationOutcome(result=result, replayed=True, gone=None)
         snapshot = result["snapshot"]
@@ -110,6 +111,42 @@ class SQLiteSessionRuntimeRepository:
                 history=history, prepared=_legacy_prepared(prepared), media_root=media_root, owner=owner,
                 **_mutation_call(command))
         return MutationOutcome(result=result, replayed=replayed, gone=gone)
+
+    def mutate_cold_linked_workspace(
+        self, epoch: int, request: ColdLinkedWorkspaceRequest, *, thread_id: str,
+        target_cwd: str | None = None, intent: Mapping[str, Any] | None = None,
+        branch: str | None = None, repo_root: str | None = None,
+        history: HistoryWrite | None = None, owner: OwnerRule | None = None,
+    ) -> dict[str, Any]:
+        holder = self._store.holder()
+        with refused(holder, request.session_id):
+            return _cold_linked_workspace.mutate_cold_linked_workspace(
+                holder, epoch, request, thread_id=thread_id, target_cwd=target_cwd, intent=intent,
+                branch=branch, repo_root=repo_root, history=history, owner=owner)
+
+    def resume_completed_native_codex_compaction(self, **values):
+        with refused():
+            return _native_codex_compaction.resume_completed_native_codex_compaction(self._store.holder(), **values)
+
+    def begin_native_codex_compaction(self, **values):
+        with refused():
+            return _native_codex_compaction.begin_native_codex_compaction(self._store.holder(), **values)
+
+    def complete_native_codex_compaction(self, **values):
+        with refused():
+            return _native_codex_compaction.complete_native_codex_compaction(self._store.holder(), **values)
+
+    def clear_unsubmitted_native_codex_compaction(self, **values):
+        with refused():
+            return _native_codex_compaction.clear_unsubmitted_native_codex_compaction(self._store.holder(), **values)
+
+    def pending_native_codex_compaction(self, target_session_id):
+        with refused():
+            return _native_codex_compaction.pending_native_codex_compaction(self._store.holder(), target_session_id)
+
+    def resolve_native_codex_compaction(self, **values):
+        with refused():
+            return _native_codex_compaction.resolve_native_codex_compaction(self._store.holder(), **values)
 
     def defer_model_pick(self, epoch: int, *, key: str, digest: str, session_id: str, pick: DeferredPick) -> dict[str, Any]:
         with refused():

@@ -9,7 +9,7 @@ from pydantic import RootModel
 from .base import JsonValue, Params, Result
 from .common import CanonicalClientIdentity, ProfileParams, TranscriptMessage
 from .connectors_operation import ConnectionRequestPayload
-from .sessions import OpenRequestEntry, TodoState
+from .sessions import OpenRequestEntry, SessionCompressParams, SessionCompressResult, TodoState
 from .canonical import (AdmissionStatus, CanonicalClientLabel, CanonicalSessionRef, PromptResponseResult,
                         SessionInventoryFields)
 from .registry import canonical_method
@@ -365,6 +365,9 @@ for _name, _params, _result in (
     ('approval.respond', CanonicalApprovalParams, PromptResponseResult),
 ):
     canonical_method(_name, params=_params, result=_result)
+
+canonical_method('session.compress', params=SessionCompressParams, result=SessionCompressResult,
+                 doc="Manual /compress of an idle session through the owner mutation fence; linked Codex threads use native compaction.")
 
 canonical_method('prompt.steer_queued', params=CanonicalSteerQueuedParams, result=AdmissionStatus,
                  doc="Hand a still-queued admission's text to the running turn's agent as a steer. "

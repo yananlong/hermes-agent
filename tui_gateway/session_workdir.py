@@ -6,11 +6,36 @@ install time (method_ctx.bind_module), so they reference server.py globals bare.
 from __future__ import annotations
 
 import contextlib
+import os
 from typing import Any
 
 from tui_gateway import git_probe
 
 from .method_ctx import bind_module
+
+
+class LinkedCodexWorkspaceError(RuntimeError):
+    """A linked native thread could not be safely re-homed and synchronized."""
+
+
+class LinkedCodexWorkspaceBusy(LinkedCodexWorkspaceError):
+    """Codex's per-thread writer lock is held by another client."""
+
+
+class LinkedCodexWorkspacePersistError(LinkedCodexWorkspaceError):
+    """Codex changed cwd, but the Hermes row could not be verified afterward."""
+
+
+class LinkedCodexWorkspacePreSpawnError(LinkedCodexWorkspaceError):
+    """The configured Codex executable was absent before an app-server child could be created."""
+
+    def __init__(self, codex_bin: str) -> None:
+        self.codex_bin = codex_bin
+        super().__init__(f"Codex executable {codex_bin!r} was not found before startup")
+
+
+class LinkedCodexWorkspaceExternalChange(LinkedCodexWorkspaceError):
+    """A native-side workspace change superseded a pending Hermes request."""
 
 
 def _normalize_completion_path(path_part: str) -> str:
@@ -132,6 +157,17 @@ def _is_remote_cwd_shape(raw: str) -> bool:
 def _is_container_path(raw: str) -> bool:
     """An absolute POSIX path, the only shape a container backend's working directory takes."""
     return raw.startswith("/") and not raw.startswith("//")
+
+
+def _is_absolute_host_path(raw: str, path_api=None) -> bool:
+    """Whether *raw* is absolute according to the gateway host's filesystem syntax.
+
+    Linked Codex workspaces are local to the gateway. On Windows, that includes drive paths;
+    slash-prefix checks accidentally rejected them. ``path_api`` is exposed for focused tests
+    of both host path dialects while production always uses ``os.path``.
+    """
+    path_api = os.path if path_api is None else path_api
+    return isinstance(raw, str) and path_api.isabs(raw)
 
 
 def _sandbox_workspace_cwd(profile_home) -> str | None:
@@ -810,6 +846,15 @@ def _write_submit_user_row(session: dict, text: Any, display_kind: str | None,
         if persistence is None:
             return None
         target = _submit_row_target_key(session)
+        # A linked row is a POINTER: the native tool owns the transcript and the turn appends to it
+        # there (agent/linked_foreign_turn.py answers with agent_persisted=True for the same
+        # reason). Writing the user row here would leave a Hermes message on a row whose display
+        # re-reads the native store, so the turn's text would exist twice — once unseen. Fail
+        # closed: a row whose model_config cannot be validated counts as linked.
+        from hermes_cli.foreign_linked_store import linked_foreign_kind
+
+        if linked_foreign_kind(persistence, target):
+            return None
         try:
             staged["_row_id"] = persistence.messages.append(target, NewMessage(
                 role="user", content=text, display_kind=display_kind, timestamp=staged["timestamp"],
@@ -922,6 +967,9 @@ def _rewind_active_session_history(
         with _session_db(session) as db, _persistence_for(db) as persistence:
             if persistence is None:
                 raise RuntimeError("session database is unavailable")
+            from hermes_cli.codex_linked_history import linked_thread_id
+            if linked_thread_id(persistence, session_key):
+                raise ValueError("Undo and retry are unavailable for linked Codex threads")
             from persistence.core.errors import PersistenceError
             try:
                 outcome = persistence.messages.rewind_user_turn(
@@ -1001,6 +1049,370 @@ def _persist_session_cwd_and_schedule_git_meta(session: dict, cwd: str, *, db=No
         return None
     _persist_session_git_meta(session, cwd, generation)
     return generation
+
+
+def _install_session_cwd(session: dict, cwd: str) -> None:
+    """Publish a cwd already committed to the owning session row."""
+    session.update(cwd=cwd, explicit_cwd=True, cwd_pinned=True, cwd_from_settle=False)
+    _register_session_cwd(session)
+    with contextlib.suppress(Exception):
+        from tools.terminal_tool_lifecycle import cleanup_vm
+        cleanup_vm(session["session_key"])
+
+
+@contextlib.contextmanager
+def _linked_codex_resume(thread_id: str, cwd: str, profile_home, *, override: bool, accept_native: bool = False):
+    """Hold Codex's per-thread writer lock for one same-ID resume and its caller's durable work."""
+    scope = {"profile_home": str(profile_home) if profile_home else None}
+    with _session_profile_runtime_scope(scope):
+        from agent.transports.codex_app_server import CodexAppServerError
+        from agent.transports.codex_app_server_session import CodexAppServerSession, CodexThreadResumeError
+        from hermes_cli.codex_runtime_switch import get_configured_codex_binary
+        from hermes_cli.config import load_config
+
+        codex_bin = get_configured_codex_binary(load_config())
+        codex_session = CodexAppServerSession(
+            cwd=cwd, codex_bin=codex_bin, resume_thread_id=thread_id,
+            preserve_thread_settings=True, resume_cwd_override=override,
+            allow_native_cwd_mismatch=accept_native,
+        )
+        try:
+            try:
+                resumed_thread_id = codex_session.ensure_started()
+            except FileNotFoundError as exc:
+                if _codex_executable_missing_before_spawn(exc, codex_bin, codex_session):
+                    raise LinkedCodexWorkspacePreSpawnError(codex_bin) from exc
+                raise
+            except CodexThreadResumeError:
+                raise
+            except (CodexAppServerError, OSError, TimeoutError) as exc:
+                raise LinkedCodexWorkspaceError("Could not open the linked thread's Codex app-server") from exc
+            if resumed_thread_id != thread_id:
+                raise LinkedCodexWorkspaceError("Codex did not resume the linked thread")
+            yield codex_session
+        finally:
+            codex_session.close()
+
+
+def _codex_executable_missing_before_spawn(exc: FileNotFoundError, codex_bin: str, codex_session) -> bool:
+    """Recognize Popen's executable-not-found error only before a client owns a child process."""
+    import os
+
+    filename = exc.filename
+    return (
+        getattr(codex_session, "_client", None) is None
+        and isinstance(filename, str)
+        and os.path.normcase(os.path.normpath(filename)) == os.path.normcase(os.path.normpath(codex_bin))
+    )
+
+
+def _linked_codex_pending_intent(db, session_id: str) -> dict | None:
+    intent = db.sessions.get_model_config_value(session_id, "codex_pending_cwd")
+    if intent is None:
+        return None
+    if (not isinstance(intent, dict)
+            or not all(isinstance(intent.get(key), str) and intent[key] for key in ("thread_id", "from", "to"))):
+        raise LinkedCodexWorkspaceError("Linked Codex workspace change has invalid recovery data")
+    return intent
+
+
+def _linked_codex_local_cwd(cwd: str, profile_home) -> str:
+    """Resolve a selected workspace that the local Codex app-server can actually open."""
+    from pathlib import Path
+
+    if _cwd_is_remote(profile_home):
+        raise LinkedCodexWorkspaceError("Linked Codex threads require a local working directory")
+    target = _workspace_cwd(profile_home, cwd)
+    if not Path(target).is_dir():
+        raise LinkedCodexWorkspaceError("Linked Codex threads require an existing local directory")
+    return target
+
+
+def _linked_codex_commit_cwd(db, session_id: str, thread_id: str, intent: dict, cwd: str,
+                             live_session: dict | None = None) -> dict:
+    """Persist effective cwd, verify the committed intent, then consume it and publish live state."""
+    import sqlite3
+    from hermes_cli.codex_linked_history import linked_thread_id
+
+    branch, repo_root = git_probe.branch(cwd), git_probe.common_repo_root(cwd)
+    committed = {**intent, "phase": "committed", "effective": cwd}
+    try:
+        db.sessions.finish_linked_codex_workspace_change(session_id, intent, cwd, branch, repo_root)
+        after = db.sessions.get(session_id)
+        synchronized = ((after.cwd if after is not None else None) == cwd
+                        and linked_thread_id(db, session_id) == thread_id
+                        and db.sessions.get_model_config_value(session_id, "codex_pending_cwd") == committed)
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
+        synchronized = False
+        failure = exc
+    else:
+        failure = RuntimeError("session row readback did not match the committed native Codex workspace")
+    if not synchronized:
+        raise LinkedCodexWorkspacePersistError(
+            "Codex accepted the workspace change, but Hermes could not verify the stored result. "
+            "A recovery request was kept when storage allowed it; retry the workspace picker to reconcile."
+        ) from failure
+    try:
+        if not db.sessions.clear_linked_codex_workspace_change(session_id, committed):
+            raise RuntimeError("committed workspace intent changed before it could be cleared")
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
+        raise LinkedCodexWorkspacePersistError(
+            "Codex and the Hermes workspace row match, but Hermes could not clear its recovery marker. "
+            "Retry the workspace picker to finish reconciliation."
+        ) from exc
+    if live_session is not None:
+        _install_session_cwd(live_session, cwd)
+    return {"cwd": cwd, "branch": branch, "git_repo_root": repo_root}
+
+
+def _linked_codex_clear_intent(db, session_id: str, intent: dict, expected_cwd: str) -> None:
+    try:
+        db.sessions.clear_linked_codex_workspace_change(session_id, intent)
+        row = db.sessions.get(session_id)
+        cleared = ((row.cwd if row is not None else None) == expected_cwd
+                   and db.sessions.get_model_config_value(session_id, "codex_pending_cwd") is None)
+    except Exception as exc:
+        raise LinkedCodexWorkspacePersistError(
+            "Codex workspace did not change, but Hermes could not clear its recovery request. "
+            "Retry the workspace picker after storage is available."
+        ) from exc
+    if not cleared:
+        raise LinkedCodexWorkspacePersistError("Hermes could not verify the linked Codex recovery state")
+
+
+@contextlib.contextmanager
+def _linked_codex_workspace_operation_lock(db, thread_id: str):
+    """Serialize Hermes workspace intents across RPC threads and gateway processes.
+
+    This lock is separate from Codex's native writer lock. It covers pending-intent inspection,
+    recovery, claim, native resume, and Hermes commit so a second picker cannot recover/clear the
+    first pick's intent before the first operation reaches Codex.
+    """
+    import errno
+    import hashlib
+    import os
+    from pathlib import Path
+
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+    try:
+        import msvcrt
+    except ImportError:
+        msvcrt = None
+
+    lock_dir = db.scope.profile_dir / ".codex-workspace-locks"
+    try:
+        lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(lock_dir, 0o700)
+        lock_path = lock_dir / (hashlib.sha256(thread_id.encode("utf-8")).hexdigest() + ".lock")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(lock_path, flags, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        handle = os.fdopen(fd, "r+b")
+        if fcntl is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                handle.close()
+                if exc.errno in (errno.EACCES, errno.EAGAIN, getattr(errno, "EWOULDBLOCK", errno.EAGAIN)):
+                    raise LinkedCodexWorkspaceBusy(
+                        "Another Hermes workspace change for this linked Codex thread is in progress. Retry shortly."
+                    ) from exc
+                raise
+        elif msvcrt is not None:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                handle.close()
+                if exc.errno in (errno.EACCES, errno.EDEADLK, errno.EAGAIN,
+                                 getattr(errno, "EWOULDBLOCK", errno.EAGAIN)):
+                    raise LinkedCodexWorkspaceBusy(
+                        "Another Hermes workspace change for this linked Codex thread is in progress. Retry shortly."
+                    ) from exc
+                raise
+        else:
+            handle.close()
+            raise LinkedCodexWorkspaceError("No cross-process lock backend is available for linked Codex workspaces")
+    except LinkedCodexWorkspaceError:
+        raise
+    except OSError as exc:
+        raise LinkedCodexWorkspaceError(f"Could not create the linked Codex workspace lock: {exc}") from exc
+
+    try:
+        yield
+    finally:
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            elif msvcrt is not None:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        finally:
+            handle.close()
+
+
+def _recover_linked_codex_workspace(db, session_id: str, thread_id: str, profile_home,
+                                   live_session: dict | None = None) -> dict | None:
+    """Resolve a durable intent by reading native cwd under the writer lock, never overriding a later native choice."""
+    from agent.transports.codex_app_server_session import CodexThreadResumeError
+    from hermes_cli.codex_linked_history import linked_thread_id
+
+    intent = _linked_codex_pending_intent(db, session_id)
+    if intent is None:
+        return None
+    if intent["thread_id"] != thread_id or linked_thread_id(db, session_id) != thread_id:
+        raise LinkedCodexWorkspaceError("Linked Codex workspace intent no longer matches this thread")
+    try:
+        with _linked_codex_resume(thread_id, intent["to"], profile_home, override=False, accept_native=True) as native:
+            effective = native.effective_cwd
+            if not _is_absolute_host_path(effective):
+                raise LinkedCodexWorkspaceError("Codex did not report its current local workspace")
+            effective = _linked_codex_local_cwd(effective, profile_home)
+            phase = intent.get("phase")
+            if phase == "committed":
+                expected_effective = intent.get("effective")
+                row = db.sessions.get(session_id)
+                if not _is_absolute_host_path(expected_effective):
+                    raise LinkedCodexWorkspaceError("Linked Codex committed recovery data is invalid")
+                if (os.path.realpath(effective) == os.path.realpath(expected_effective)
+                        and (row.cwd if row is not None else None) == expected_effective):
+                    _linked_codex_clear_intent(db, session_id, intent, expected_effective)
+                    if live_session is not None:
+                        _install_session_cwd(live_session, effective)
+                    return {"cwd": effective, "branch": git_probe.branch(effective),
+                            "git_repo_root": git_probe.common_repo_root(effective)}
+                effective = _linked_codex_local_cwd(effective, profile_home)
+                result = _linked_codex_commit_cwd(db, session_id, thread_id, intent, effective, live_session)
+                if os.path.realpath(effective) == os.path.realpath(intent["to"]):
+                    return result
+                raise LinkedCodexWorkspaceExternalChange(
+                    f"Codex changed its workspace to {effective} while Hermes had a pending request. "
+                    "Hermes synced to the native workspace; choose the desired folder again."
+                )
+            if phase not in (None, "pending"):
+                raise LinkedCodexWorkspaceError("Linked Codex workspace intent has an unknown recovery phase")
+            if os.path.realpath(effective) == os.path.realpath(intent["to"]):
+                return _linked_codex_commit_cwd(db, session_id, thread_id, intent, effective, live_session)
+            if os.path.realpath(effective) == os.path.realpath(intent["from"]):
+                _linked_codex_clear_intent(db, session_id, intent, intent["from"])
+                return {"cwd": intent["from"], "branch": git_probe.branch(intent["from"]),
+                        "git_repo_root": git_probe.common_repo_root(intent["from"])}
+            effective = _linked_codex_local_cwd(effective, profile_home)
+            _linked_codex_commit_cwd(db, session_id, thread_id, intent, effective, live_session)
+            raise LinkedCodexWorkspaceExternalChange(
+                f"Codex changed its workspace to {effective} while Hermes had a pending request. "
+                "Hermes synced to the native workspace; choose the desired folder again."
+            )
+    except FileNotFoundError as exc:
+        raise LinkedCodexWorkspaceError(
+            "Could not read the linked Codex workspace for recovery. Its existing intent is preserved because "
+            f"startup state is uncertain. ({exc})"
+        ) from exc
+    except CodexThreadResumeError as exc:
+        if "active writer" in str(exc).lower():
+            raise LinkedCodexWorkspaceBusy(
+                "The linked Codex thread is active in another Codex client. Close it there and retry."
+            ) from exc
+        raise LinkedCodexWorkspaceError(
+            f"Could not read the linked Codex workspace for recovery. Its intent is preserved. ({exc})"
+        ) from exc
+
+
+def _move_linked_codex_workspace(db, session_id: str, cwd: str, profile_home=None,
+                                 live_session: dict | None = None) -> dict:
+    """Apply an explicit workspace pick under a Hermes operation lock and Codex writer fence."""
+    from hermes_cli.codex_linked_history import linked_thread_id
+
+    thread_id = linked_thread_id(db, session_id)
+    if not thread_id:
+        raise LinkedCodexWorkspaceError("Linked Codex thread identity is unavailable")
+    with _linked_codex_workspace_operation_lock(db, thread_id):
+        if linked_thread_id(db, session_id) != thread_id:
+            raise LinkedCodexWorkspaceError("Linked Codex thread identity changed during workspace selection")
+        return _move_linked_codex_workspace_locked(db, session_id, cwd, profile_home, live_session, thread_id)
+
+
+def _move_linked_codex_workspace_locked(db, session_id: str, cwd: str, profile_home,
+                                        live_session: dict | None, thread_id: str) -> dict:
+    """Apply an explicit workspace pick to the same native thread, with durable recovery and writer fencing."""
+    from agent.transports.codex_app_server_session import CodexThreadResumeError
+    from hermes_cli.codex_linked_history import linked_thread_id
+    from hermes_constants import translate_cwd_for_wsl_backend
+
+    before = db.sessions.get(session_id)
+    if linked_thread_id(db, session_id) != thread_id:
+        raise LinkedCodexWorkspaceError("Linked Codex thread identity changed during workspace selection")
+    if not before:
+        raise LinkedCodexWorkspaceError("Linked Codex session was not found")
+    target = _linked_codex_local_cwd(translate_cwd_for_wsl_backend(cwd), profile_home)
+
+    existing = _linked_codex_pending_intent(db, session_id)
+    if existing is not None:
+        # Canonical session.mutate owns intents carrying a request identity. The
+        # sidecar workspace RPC must leave those receipts recoverable by retrying
+        # the original canonical request instead of committing around its fence.
+        if existing.get("request_id") or existing.get("principal_id"):
+            raise LinkedCodexWorkspaceBusy(
+                "A canonical linked Codex workspace request is in progress. Retry it through the session workspace action."
+            )
+        recovered = _recover_linked_codex_workspace(db, session_id, thread_id, profile_home, live_session)
+        if recovered and os.path.realpath(recovered["cwd"]) == os.path.realpath(target):
+            return recovered
+        if existing["thread_id"] != thread_id:
+            raise LinkedCodexWorkspaceError("Linked Codex workspace intent no longer matches this thread")
+        before = db.sessions.get(session_id)
+
+    original = (before.cwd if before is not None else None)
+    if not _is_absolute_host_path(original):
+        raise LinkedCodexWorkspaceError("Linked Codex session has no valid current workspace")
+    intent = {"thread_id": thread_id, "from": original, "to": target}
+    if not db.sessions.claim_linked_codex_workspace_change(session_id, intent):
+        raise LinkedCodexWorkspaceBusy("Another linked Codex workspace change is already in progress. Retry shortly.")
+
+    try:
+        with _linked_codex_resume(thread_id, target, profile_home, override=True) as native:
+            effective = native.effective_cwd
+            if not isinstance(effective, str) or not os.path.isabs(effective):
+                raise LinkedCodexWorkspaceError("Codex did not report the selected local workspace")
+            effective = _linked_codex_local_cwd(effective, profile_home)
+            if os.path.realpath(effective) != os.path.realpath(target):
+                _linked_codex_commit_cwd(db, session_id, thread_id, intent, effective, live_session)
+                raise LinkedCodexWorkspaceExternalChange(
+                    f"Codex kept its workspace at {effective}; Hermes synchronized to that native directory."
+                )
+            return _linked_codex_commit_cwd(db, session_id, thread_id, intent, effective, live_session)
+    except LinkedCodexWorkspacePreSpawnError as exc:
+        _linked_codex_clear_intent(db, session_id, intent, original)
+        raise LinkedCodexWorkspaceError(
+            f"Codex executable {exc.codex_bin!r} is missing. No native child was started, and the workspace "
+            f"stayed at {original}. Install Codex or set model.codex_bin, then retry."
+        ) from exc
+    except FileNotFoundError as exc:
+        raise LinkedCodexWorkspaceError(
+            "Could not confirm the linked Codex workspace change. Its recovery request is preserved because "
+            f"native startup state is uncertain. ({exc})"
+        ) from exc
+    except CodexThreadResumeError as exc:
+        if "active writer" in str(exc).lower():
+            _linked_codex_clear_intent(db, session_id, intent, original)
+            raise LinkedCodexWorkspaceBusy(
+                "The linked Codex thread is active in another Codex client. Close it there and retry."
+            ) from exc
+        raise LinkedCodexWorkspaceError(
+            f"Could not confirm the linked Codex workspace change. Its recovery request is saved; "
+            f"retry the workspace picker. ({exc})"
+        ) from exc
 
 
 def _set_session_cwd(session: dict, cwd: str) -> str:

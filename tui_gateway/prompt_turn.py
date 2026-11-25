@@ -217,14 +217,12 @@ def _route_turn_images(agent, prompt: Any, images: list[str]) -> Any:
     references the agent analyzes in-loop (never blocking submit on vision calls).
     Decision table: agent/image_routing.py."""
     try:
-        from agent.image_routing import build_native_content_parts, decide_image_input_mode
+        from agent.image_routing import build_native_content_parts, decide_image_input_mode_for_agent
         from hermes_cli.config import load_config as _tui_load_config
         _provider, _model = _active_image_routing_identity(agent)
-        mode = decide_image_input_mode(
-            _provider, _model, _tui_load_config(),
+        mode = decide_image_input_mode_for_agent(
+            agent, _provider, _model, _tui_load_config(),
             requested_provider=getattr(agent, "requested_provider", ""))
-        if getattr(agent, "api_mode", "") == "codex_app_server":
-            mode = "text"
     except Exception as _img_exc:
         print(f"[tui_gateway] image_routing decision failed, defaulting to text: {_img_exc}",
               file=sys.stderr)

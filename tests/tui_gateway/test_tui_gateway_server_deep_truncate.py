@@ -15,7 +15,8 @@ _NO_LEDGER_WORK = types.SimpleNamespace(pending_ledger_status=lambda _key: None)
 def _use_messages(monkeypatch, messages):
     """Route the gateway's store through a handle whose transcript verbs are ``messages``."""
     monkeypatch.setattr(server, "_get_db", lambda: object())
-    persistence = types.SimpleNamespace(messages=messages, runtime=_NO_LEDGER_WORK)
+    persistence = types.SimpleNamespace(messages=messages, runtime=_NO_LEDGER_WORK,
+                                        sessions=types.SimpleNamespace(get=lambda key: None))
     monkeypatch.setattr(server, "_persistence_for", lambda _db: contextlib.nullcontext(persistence))
 
 

@@ -113,6 +113,63 @@ def test_codex_app_server_native_auto_mode_leaves_thread_compaction_to_codex():
     assert agent.events == []
 
 
+def test_manual_compaction_opens_linked_thread_before_first_turn(monkeypatch):
+    import agent.codex_runtime as runtime
+
+    agent = DummyAgent(TurnResult(thread_id="linked-thread", turn_id="compact-turn", compacted=True))
+    linked_session = agent._codex_session
+    agent._codex_session = None
+    agent._session_db = SimpleNamespace(get_session_model_config_value=lambda _sid, key: {
+        "codex_linked_thread": True, "codex_thread_id": "linked-thread"
+    }.get(key))
+    opened = []
+
+    def open_linked(candidate, messages):
+        opened.append(messages)
+        candidate._codex_session = linked_session
+
+    monkeypatch.setattr(runtime, "_ensure_codex_session", open_linked)
+    monkeypatch.setattr(runtime, "_start_codex_thread", lambda candidate: opened.append("linked-thread"))
+    messages = [{"role": "user", "content": "hello"}]
+    compress_context(agent, messages, "system", force=True)
+    assert opened == [messages, "linked-thread"]
+    assert linked_session.calls == 1
+    assert linked_session.closed is True and agent._codex_session is None
+
+
+def test_manual_compaction_releases_linked_writer_when_startup_fails(monkeypatch):
+    import agent.codex_runtime as runtime
+
+    agent = DummyAgent(TurnResult(thread_id="linked-thread"))
+    linked_session = agent._codex_session
+    agent._codex_session = None
+    agent._session_db = SimpleNamespace(get_session_model_config_value=lambda _sid, key: {
+        "codex_linked_thread": True, "codex_thread_id": "linked-thread"
+    }.get(key))
+    monkeypatch.setattr(runtime, "_ensure_codex_session", lambda candidate, _messages: setattr(candidate, "_codex_session", linked_session))
+    def fail_start(_candidate):
+        raise RuntimeError("could not resume")
+    monkeypatch.setattr(runtime, "_start_codex_thread", fail_start)
+    with pytest.raises(RuntimeError, match="could not resume"):
+        compress_context(agent, [], "system", force=True)
+    assert linked_session.closed is True and agent._codex_session is None
+
+
+@pytest.mark.parametrize("result", [
+    TurnResult(thread_id="linked-thread", error="native compact failed"),
+    TurnResult(thread_id="linked-thread", interrupted=True),
+    TurnResult(thread_id="linked-thread", compacted=False),
+    TurnResult(thread_id="different-thread", compacted=True),
+])
+def test_linked_compaction_rejects_failures_and_unconfirmed_or_wrong_thread(result):
+    agent = DummyAgent(result)
+    agent._session_db = SimpleNamespace(get_session_model_config_value=lambda _sid, key: {
+        "codex_linked_thread": True, "codex_thread_id": "linked-thread"
+    }.get(key))
+    with pytest.raises(RuntimeError):
+        compress_context(agent, [], "system", force=True)
+
+
 def test_codex_app_server_compaction_heartbeat_refreshes_activity_while_waiting():
     agent = DummyAgent(
         TurnResult(thread_id="thread-1", turn_id="compact-turn-1")

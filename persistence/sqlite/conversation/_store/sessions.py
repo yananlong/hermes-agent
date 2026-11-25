@@ -104,6 +104,11 @@ def _where_sql(clauses: list[str], lead: str = "") -> str:
     return f"{lead}WHERE {' AND '.join(clauses)}" if clauses else ""
 
 
+def _foreign_link():
+    from persistence.sqlite.conversation._store import foreign_link
+    return foreign_link
+
+
 def _session_filter_where(
     *, exclude_children: bool = False, source: str | None = None, sources: list[str] | None = None,
     session_key: str | None = None, exclude_sources: list[str] | None = None, cwd_prefix: str | None = None,
@@ -137,7 +142,9 @@ def _session_filter_where(
         (f"s.source NOT IN ({_session_ids_placeholders(exclude_sources or ())})", exclude_sources or []),
         (_cwd_prefix_clause(cwd_prefix) if cwd_prefix else ("", [])),
         (_workspace_key_clause(workspace_key) if workspace_key else ("", [])),
-        ("s.message_count >= ?", [min_message_count] if min_message_count > 0 else []),
+        # Include an empty pointer in the sidebar because the transcript is in the native
+        # tool (Codex/Claude/Mistral).
+        _foreign_link().linked_foreign_message_count_filter(min_message_count),
     ):
         if values:
             where.append(clause)

@@ -30,6 +30,7 @@ import {
   Archive,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { isLinkedForeignSession } from "@/lib/linked-session";
 import { formatSessionPruneResult } from "@/lib/session-prune";
 import { shouldRefreshSessions } from "@/lib/session-refresh";
 import {
@@ -453,21 +454,32 @@ function SessionRow({
         {session.source ? sourceLabel(session.source) : "local"}
       </Badge>
 
-      {resumeInChatEnabled && (
-        <Button
-          ghost
-          size="icon"
-          className="text-muted-foreground hover:text-success"
-          aria-label={t.sessions.resumeInChat}
-          title={t.sessions.resumeInChat}
-          onClick={(e) => {
-            e.stopPropagation();
-            navigate(`/chat?resume=${encodeURIComponent(session.id)}`);
-          }}
-        >
-          <Play />
-        </Button>
-      )}
+      {resumeInChatEnabled &&
+        (isLinkedForeignSession(session) ? (
+          // Linked foreign rows (Codex / Claude / Mistral) are read-only in
+          // the web dashboard — no resume-into-chat affordance.
+          <Badge
+            tone="outline"
+            className="text-xs"
+            title={t.sessions.linkedResumeDisabled}
+          >
+            {t.sessions.linkedReadonlyBadge}
+          </Badge>
+        ) : (
+          <Button
+            ghost
+            size="icon"
+            className="text-muted-foreground hover:text-success"
+            aria-label={t.sessions.resumeInChat}
+            title={t.sessions.resumeInChat}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/chat?resume=${encodeURIComponent(session.id)}`);
+            }}
+          >
+            <Play />
+          </Button>
+        ))}
 
       <Button
         ghost

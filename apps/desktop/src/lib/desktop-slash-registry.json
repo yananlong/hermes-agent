@@ -54,6 +54,8 @@
   "/kanban": "advanced",
   "/learn": null,
   "/learning": null,
+  "/link": "terminal",
+  "/link-thread": "terminal",
   "/login": "settings",
   "/loop": null,
   "/memory": null,

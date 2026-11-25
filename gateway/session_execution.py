@@ -164,6 +164,9 @@ class GatewaySessionAgentMixin:
         from gateway.session_policy import policy_for_source
         from gateway.session_worker_construct import session_prefill
         policy = policy_for_source(runner, src)
+        store = getattr(runner, "persistence", None)
+        from gateway.session_linked_codex import linked_session_cwd
+        linked_cwd = linked_session_cwd(store, ctx.session_id)
         return ctx.AIAgent(
             model=turn_route["model"], **turn_route["runtime"], **_checkpoint_agent_kwargs(ctx.user_config),
             max_iterations=max_iterations, quiet_mode=not bool(policy and policy.verbose), verbose_logging=False,
@@ -179,7 +182,13 @@ class GatewaySessionAgentMixin:
             session_id=ctx.session_id, platform=platform_key,
             user_id=src.user_id, user_id_alt=src.user_id_alt, user_name=src.user_name,
             chat_id=src.chat_id, chat_name=src.chat_name, chat_type=src.chat_type, thread_id=src.thread_id,
-            gateway_session_key=ctx.session_key, persistence=getattr(runner, "persistence", None),
+            gateway_session_key=ctx.session_key, persistence=store,
+            # Both handles the agent reads its own row through: the no-fork gate
+            # (``agent/linked_foreign_turn.py``) resolves either, and a surface that binds only
+            # ``persistence`` must still be able to tell a linked row from an ordinary one.
+            session_db=store,
+            # A linked native thread resumes in its own persisted workspace.
+            **({"cwd": linked_cwd} if linked_cwd is not None else {}),
             # Reload from disk — do not reuse the startup snapshot.
             # See #60955.
             fallback_model=None if api_runtime_locked() else self._runner._refresh_fallback_model(),

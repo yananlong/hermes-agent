@@ -401,6 +401,47 @@ def _lookup_supports_vision(
     return None
 
 
+def _codex_runtime_accepts_native_images(agent: Any) -> bool:
+    """Whether the agent runs the Codex app-server transport, whose wire carries images.
+
+    ``codex_app_server`` speaks app-server-protocol v2 ``UserInput`` natively
+    (``{type: image, url}`` / ``{type: localImage, path}``, #51053), and the daemon-joined
+    transport is the same wire, so a chat-bar attachment reaches the model as a real image
+    input there even when no catalog has a vision verdict for the codex slug. Only the
+    transport's presence is decided here — capability verdicts stay with the lookups.
+    """
+    return getattr(agent, "api_mode", "") == "codex_app_server"
+
+
+def decide_image_input_mode_for_agent(
+    agent: Any,
+    provider: str,
+    model: str,
+    cfg: Optional[dict[str, Any]],
+    *,
+    requested_provider: str = "",
+) -> str:
+    """Image-input routing for one live agent (transport-aware, config first).
+
+    The Codex transports send OpenAI-style parts straight onto ``turn/start``; for them
+    an UNKNOWN catalog verdict (codex slugs are often absent from models.dev) resolves
+    to native instead of collapsing to an auxiliary-vision text description, matching
+    what the native CLI does with the same thread. An explicit config override and a
+    known-false verdict still win, so `force` never overrides a real "cannot see".
+    """
+    mode_cfg = _coerce_mode(_dict_or_empty(_dict_or_empty(cfg).get("agent")).get("image_input_mode"))
+    if mode_cfg != "auto":
+        return mode_cfg
+    if _explicit_aux_vision_override(cfg):  # auto: an explicit auxiliary.vision backend wins
+        return "text"
+    verdict = _lookup_supports_vision(provider, model, cfg, requested_provider=requested_provider)
+    if verdict is not None:
+        return "native" if verdict else "text"
+    if _codex_runtime_accepts_native_images(agent):
+        return "native"
+    return "text"
+
+
 def decide_image_input_mode(
     provider: str,
     model: str,
