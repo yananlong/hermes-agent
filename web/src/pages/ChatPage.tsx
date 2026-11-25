@@ -23,20 +23,21 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@nous-research/ui/ui/components/button";
-import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { cn } from "@/lib/utils";
 import { PanelRight, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router";
 
+import { ByotTerminalControls } from "@/components/ByotTerminalControls";
 import { ChatSidebar } from "@/components/ChatSidebar";
+import { MobileChatPanel } from "@/components/MobileChatPanel";
 import { ChatSessionList } from "@/components/ChatSessionList";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
 import { readStoredWorkspace } from "@/lib/chat-workspaces";
 import { useProfileWorkspace } from "@/hooks/useProfileWorkspace";
+import { parseByotControlMessage, withByotTarget } from "@/lib/byot";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { readChatPanelCollapsed, toggleChatPanelCollapsed } from "@/lib/chat-panel-collapsed";
 import { copyTextToClipboard } from "@/lib/clipboard";
@@ -160,6 +161,10 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     setHasActivated((prev) => latchChatActivation(prev, isActive));
   }, [isActive]);
   const [searchParams, setSearchParams] = useSearchParams();
+  // BYOT (bring your own terminal): `?byot=<id>` attaches the Chat tab to an
+  // external terminal bridged via `hermes byot` (`/api/byot/host`) instead of
+  // spawning the embedded PTY — the connect effect dials `/api/pty?byot=<id>`.
+  const byotParam = searchParams.get("byot");
   // Lazy-init: the missing-token check happens at construction so the effect
   // body doesn't have to setState (React 19's set-state-in-effect rule).
   // In gated (OAuth) mode the server intentionally omits the session token —
@@ -254,6 +259,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     const next = new URLSearchParams(searchParams);
 
     next.delete("resume");
+    next.delete("byot");
     forceFreshPtyRef.current = true;
     reconnectAttemptRef.current = 0;
     clearReconnectTimer();
@@ -266,6 +272,20 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     setReconnectGaveUp(false);
     setPtyState("connecting");
     setReconnectNonce((n) => n + 1);
+  }, [clearReconnectTimer, searchParams, setSearchParams]);
+  const switchByot = useCallback((id: string | null) => {
+    const next = withByotTarget(searchParams, id);
+    forceFreshPtyRef.current = false;
+    reconnectAttemptRef.current = 0;
+    clearReconnectTimer();
+    blockedInputNoticeRef.current = false;
+    ptyInputLineRef.current = "";
+    mobileReplacementInputUntilRef.current = 0;
+    setBanner(null);
+    setBannerAction(null);
+    setReconnectGaveUp(false);
+    setPtyState("connecting");
+    setSearchParams(next, { replace: true });
   }, [clearReconnectTimer, searchParams, setSearchParams]);
   // Clear mobile-input tracking refs when the tab is hidden so stale state
   // from a previous /chat visit doesn't cause the mobile-replacement logic
@@ -328,17 +348,20 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // Sessions page relies on `/chat?resume=<id>` changing at runtime, so we must
   // treat the current resume target as part of the PTY identity and rebuild the
   // terminal session when it changes.
-  const resumeParam = searchParams.get("resume");
+  const embeddedResume = searchParams.get("resume");
+  const resumeParam = byotParam ? null : embeddedResume;
   // Profile-scoped chat: spawn the PTY under the globally selected
   // management profile. Changing it remounts the terminal (key below /
   // effect dep) so the user explicitly starts a fresh scoped session.
   const { profile: scopedProfile } = useProfileScope();
   const appearanceRef = useEmbeddedTerminalAppearance(scopedProfile, termRef, hostRef, syncMetricsRef, true);
   const [workspaceCwd, setWorkspaceCwd] = useProfileWorkspace(scopedProfile);
-  const channel = useMemo(
-    () => generateChannelId(`${resumeParam ?? ""}\0${scopedProfile}`),
-    [resumeParam, scopedProfile],
+  const embeddedChannel = useMemo(
+    () => generateChannelId(`${embeddedResume ?? ""}\0${scopedProfile}`),
+    [embeddedResume, scopedProfile],
   );
+  const externalChannel = useMemo(() => generateChannelId(byotParam ?? ""), [byotParam]);
+  const channel = byotParam ? externalChannel : embeddedChannel;
   const learnHandoff = useLearnHandoff(isActive, channel);
   const titleScope = `${channel}\0${reconnectNonce}`;
   const sessionTitle =
@@ -1177,20 +1200,26 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     void (async () => {
       if (unmounting) return;
       const params: Record<string, string> = { channel };
-      if (resumeParam) params.resume = resumeParam;
-      if (forceFresh) params.fresh = "1";
-      // Picked workspace: only meaningful for a fresh chat (a resumed session
-      // keeps its own cwd); the server validates the directory exists.
-      const pickedWorkspace = resumeParam ? "" : readStoredWorkspace(scopedProfile);
-      if (pickedWorkspace) params.cwd = pickedWorkspace;
-      // Keep-alive identity: reattach to this tab's living PTY across
-      // refresh/transient drops. A forced-fresh start rotates the token so
-      // the previous keep-alive PTY is not reattached (registry reaps it).
-      params.attach = await ptyAttachToken(forceFresh);
-      // Profile-scoped chat: the PTY child gets HERMES_HOME pointed at the
-      // selected profile, so the conversation runs with that profile's model,
-      // skills, memory, and sessions (see web_server._resolve_chat_argv).
-      if (scopedProfile) params.profile = scopedProfile;
+      if (byotParam) {
+        // BYOT: attach to the external terminal instead of spawning a PTY —
+        // no resume/workspace/attach semantics apply to the embedded child.
+        params.byot = byotParam;
+      } else {
+        if (resumeParam) params.resume = resumeParam;
+        if (forceFresh) params.fresh = "1";
+        // Picked workspace: only meaningful for a fresh chat (a resumed session
+        // keeps its own cwd); the server validates the directory exists.
+        const pickedWorkspace = resumeParam ? "" : readStoredWorkspace(scopedProfile);
+        if (pickedWorkspace) params.cwd = pickedWorkspace;
+        // Keep-alive identity: reattach to this tab's living PTY across
+        // refresh/transient drops. A forced-fresh start rotates the token so
+        // the previous keep-alive PTY is not reattached (registry reaps it).
+        params.attach = await ptyAttachToken(forceFresh);
+        // Profile-scoped chat: the PTY child gets HERMES_HOME pointed at the
+        // selected profile, so the conversation runs with that profile's model,
+        // skills, memory, and sessions (see web_server._resolve_chat_argv).
+        if (scopedProfile) params.profile = scopedProfile;
+      }
 
       ticketTimer = setTimeout(() => {
         ticketTimer = null;
@@ -1309,6 +1338,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           beginResumeReplay();
           return;
         }
+        if (parseByotControlMessage(ev.data)) return;
       }
       const text =
         typeof ev.data === "string"
@@ -1575,6 +1605,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     clearReconnectTimer,
     learnHandoff,
     resumeParam,
+    byotParam,
     scopedProfile,
     reconnectNonce,
   ]);
@@ -1748,99 +1779,17 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     ptyState,
     hydrating: resumeHydrating,
   });
-  const mobileModelToolsPortal =
-    isActive &&
-    narrow &&
-    portalRoot &&
-    createPortal(
-      <>
-        {mobilePanelOpen && (
-          <Button
-            ghost
-            aria-label={t.app.closeModelTools}
-            onClick={closeMobilePanel}
-            className={cn(
-              "fixed inset-0 z-[55] p-0 block",
-              "bg-black/60",
-            )}
-          />
-        )}
 
-        <div
-          id="chat-side-panel"
-          role="complementary"
-          aria-label={modelToolsLabel}
-          className={cn(
-            "font-mondwest fixed top-0 right-0 z-[60] flex h-dvh max-h-dvh w-64 min-w-0 flex-col antialiased",
-            "border-l border-current/20 text-midground",
-            "bg-background-base/95",
-            "transition-transform duration-200 ease-out",
-            "[background:var(--component-sidebar-background,var(--background-base))]",
-            "[clip-path:var(--component-sidebar-clip-path)]",
-            "[border-image:var(--component-sidebar-border-image)]",
-            mobilePanelOpen
-              ? "translate-x-0"
-              : "pointer-events-none translate-x-full",
-          )}
-        >
-          <div
-            className={cn(
-              "flex h-14 shrink-0 items-center justify-between gap-2 border-b border-current/20 px-5",
-            )}
-          >
-            <Typography
-              mondwest
-              className="text-display font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
-            >
-              {t.app.modelToolsSheetTitle}
-              <br />
-              {t.app.modelToolsSheetSubtitle}
-            </Typography>
-
-            <Button
-              ghost
-              size="icon"
-              onClick={closeMobilePanel}
-              aria-label={t.app.closeModelTools}
-              className="text-text-secondary hover:text-midground"
-            >
-              <X />
-            </Button>
-          </div>
-
-          <div
-            className={cn(
-              "min-h-0 flex-1 overflow-y-auto overflow-x-hidden",
-              "border-t border-current/10",
-            )}
-          >
-            <div className="border-b border-current/10 px-1 py-2">
-              <ChatSidebar
-                channel={channel}
-                profile={scopedProfile}
-                onDashboardNewSessionRequest={startFreshDashboardChat}
-                onSessionTitleChange={handleSessionTitleChange}
-              />
-            </div>
-            <ChatSessionList
-              activeSessionId={resumeParam}
-              isActive={isActive}
-              profile={scopedProfile}
-              onPicked={closeMobilePanel}
-              onNewChat={startFreshDashboardChat}
-              workspaceCwd={workspaceCwd}
-              onWorkspaceChange={setWorkspaceCwd}
-            />
-          </div>
-        </div>
-      </>,
-      portalRoot,
-    );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <PluginSlot name="chat:top" />
-      {mobileModelToolsPortal}
+      <ByotTerminalControls isActive={isActive} currentId={byotParam} onSelect={switchByot} />
+      <MobileChatPanel isActive={isActive} narrow={narrow} portalRoot={portalRoot}
+        mobilePanelOpen={mobilePanelOpen} closeMobilePanel={closeMobilePanel} modelToolsLabel={modelToolsLabel}
+        channel={channel} scopedProfile={scopedProfile} startFreshDashboardChat={startFreshDashboardChat}
+        handleSessionTitleChange={handleSessionTitleChange} resumeParam={resumeParam}
+        workspaceCwd={workspaceCwd} setWorkspaceCwd={setWorkspaceCwd} />
 
       {visibleBanner && (
         <div
@@ -1935,7 +1884,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
               </div>
               <div className="flex flex-wrap justify-center gap-2">
                 <Button
-                  onClick={startFreshPty}
+                  onClick={byotParam ? startFreshDashboardChat : startFreshPty}
                   prefix={<RotateCcw className="h-4 w-4" />}
                   aria-label="Start a new chat session"
                 >

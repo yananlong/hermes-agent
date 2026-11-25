@@ -2,7 +2,7 @@
  "counts": {
   "http": {
    "keep-host-wide": 1,
-   "undecided": 353
+   "undecided": 355
   },
   "rpc": {
    "authority": 113,
@@ -10,7 +10,7 @@
    "undecided": 181
   },
   "websocket": {
-   "undecided": 10
+   "undecided": 11
   }
  },
  "decisions": [
@@ -56,6 +56,7 @@
   {"current_path": "hermes_cli.web_routers.audio:get_voice_live_status", "decision": "undecided", "handler": "GET /api/audio/voice-live/status", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.dashboard_auth.routes:api_auth_me", "decision": "undecided", "handler": "GET /api/auth/me", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.dashboard_auth.routes:api_auth_providers", "decision": "undecided", "handler": "GET /api/auth/providers", "kind": "http", "ref": ""},
+  {"current_path": "hermes_cli.web_routers.byot:list_byot_sessions", "decision": "undecided", "handler": "GET /api/byot/sessions", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.chat_workspaces:get_chat_workspaces", "decision": "undecided", "handler": "GET /api/chat/workspaces", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.status:list_cloud_agents", "decision": "undecided", "handler": "GET /api/cloud/agents", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.config_env:get_config", "decision": "undecided", "handler": "GET /api/config", "kind": "http", "ref": ""},
@@ -191,6 +192,7 @@
   {"current_path": "hermes_cli.web_routers.tools:get_toolset_models", "decision": "undecided", "handler": "GET /api/tools/toolsets/{name}/models", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.ui_preferences:get_ui_preferences; surface: ui_preferences", "decision": "undecided", "handler": "GET /api/ui-preferences", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.webapp_access:webapp_access_status; surface: web_access", "decision": "undecided", "handler": "GET /api/webapp-access/status", "kind": "http", "ref": ""},
+  {"current_path": "hermes_cli.web_routers.webapp:terminal_context; surface: host_terminal", "decision": "undecided", "handler": "GET /api/webapp/terminal-context", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.ops:list_webhooks", "decision": "undecided", "handler": "GET /api/webhooks", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.dashboard_auth.routes:auth_callback", "decision": "undecided", "handler": "GET /auth/callback", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.dashboard_auth.routes:auth_login", "decision": "undecided", "handler": "GET /auth/login", "kind": "http", "ref": ""},
@@ -378,6 +380,7 @@
   {"current_path": "hermes_cli.web_routers.ops:set_webhook_enabled", "decision": "undecided", "handler": "PUT /api/webhooks/{name}/enabled", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.audio:speak_stream_ws", "decision": "undecided", "handler": "WS /api/audio/speak-stream", "kind": "websocket", "ref": ""},
   {"current_path": "hermes_cli.web_routers.audio:transcribe_stream_ws", "decision": "undecided", "handler": "WS /api/audio/transcribe-stream", "kind": "websocket", "ref": ""},
+  {"current_path": "hermes_cli.web_routers.byot:byot_host_ws", "decision": "undecided", "handler": "WS /api/byot/host", "kind": "websocket", "ref": ""},
   {"current_path": "hermes_cli.web_routers.chat_ws:console_ws", "decision": "undecided", "handler": "WS /api/console", "kind": "websocket", "ref": ""},
   {"current_path": "hermes_cli.web_routers.display:display_ws", "decision": "undecided", "handler": "WS /api/display/ws", "kind": "websocket", "ref": ""},
   {"current_path": "hermes_cli.web_routers.chat_ws:events_ws", "decision": "undecided", "handler": "WS /api/events", "kind": "websocket", "ref": ""},

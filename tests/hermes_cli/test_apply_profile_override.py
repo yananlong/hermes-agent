@@ -95,6 +95,32 @@ def test_unexpected_profile_lookup_failure_exits_nonzero(
     assert "profile override failed" in capsys.readouterr().err
 
 
+def test_named_profile_lookup_failure_never_runs_in_the_launch_profile(
+    tmp_path, monkeypatch, capsys,
+):
+    """A multiplexing gateway launches with HERMES_HOME on the default root and serves named
+    profiles beside it. If resolving the NAMED profile blows up, continuing with HERMES_HOME
+    still on the launch root silently serves ``default`` — every read and write (config, .env,
+    state.db) lands in the wrong profile. The run must abort instead (#152716)."""
+    import hermes_cli.profiles as profiles_mod
+
+    def _broken_lookup(_name):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(profiles_mod, "resolve_profile_env", _broken_lookup)
+    root = tmp_path / ".hermes"
+    with pytest.raises(SystemExit) as exc:
+        _run_apply_profile_override(
+            tmp_path, monkeypatch, hermes_home=str(root), active_profile="worker",
+            argv=["hermes", "-p", "worker", "gateway", "run"],
+        )
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "profile override failed" in err
+    assert "using default" not in err  # the launch-profile fallback PR #2 introduced
+    assert os.environ.get("HERMES_HOME") == str(root)  # never re-pointed to another home
+
+
 def test_broken_profile_lookup_ignored_when_no_profile_requested(
     tmp_path, monkeypatch,
 ):

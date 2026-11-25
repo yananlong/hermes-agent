@@ -579,3 +579,16 @@ def test_the_record_of_native_sign_ins_is_user_only(gated, tmp_path):
     record = tmp_path / ".hermes" / RECORD_PATH
     assert record.stat().st_mode & 0o777 == 0o600
     assert record.parent.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.parametrize("sign_in", SIGN_INS)
+def test_terminal_handoff_context_requires_current_webapp_login(gated, sign_out, sign_in):
+    browser = gated.browser()
+    _signed_out(browser.get("/api/webapp/terminal-context"))
+    SIGN_INS[sign_in](browser)
+    response = browser.get("/api/webapp/terminal-context")
+    assert response.status_code == 200
+    assert response.json()["hermes_home"]
+    assert set(response.json()["shells"]) == {"bash", "zsh"}
+    sign_out()
+    _signed_out(browser.get("/api/webapp/terminal-context"))

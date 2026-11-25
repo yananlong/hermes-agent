@@ -211,6 +211,13 @@ re-pointing the saved connection ends its terminals. The remote `serve --isolate
 need Webapp enabled. For an HTTP gateway connection, the remote must itself provide the
 Webapp host-terminal service; a plain `serve` or gateway listener does not expose host shells.
 
+To resume a Webapp chat in an external terminal, open its session actions and choose **Resume on
+Hermes host**. Exit the browser TUI and wait for it to end, then connect to the same host and OS
+account over SSH (for example from iTerm on macOS) and paste the generated command. The dialog
+lists the SSH login shell and any `zsh` or `bash` found on the host. It pins the session's profile
+and Hermes home; the chosen shell applies only to that launch. Older servers offer the login shell
+when they cannot report shell availability.
+
 The bundle's npm dependencies install into `.build/webapp-workspace` in the checkout, separately from
 the native Desktop, and reinstall only when the lockfile changes. With lazy installs disabled, a plain
 `hermes webapp` does not install them; `--build-only` or `--force-build` does.

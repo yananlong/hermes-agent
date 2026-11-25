@@ -83,6 +83,8 @@ def _cmd_dashboard_password(args):
 def build_dashboard_parser(
     subparsers, *, cmd_dashboard: Callable, cmd_dashboard_register: Callable) -> None:
     """Attach ``dashboard`` (browser UI) and ``serve`` (headless backend the desktop spawns)."""
+    from hermes_cli.subcommands.byot import build_byot_parser
+    build_byot_parser(subparsers)
     dashboard_parser = subparsers.add_parser(
         "dashboard", help="Start the web UI dashboard",
         description="Launch the Hermes Agent web dashboard for managing config, API keys, and sessions",

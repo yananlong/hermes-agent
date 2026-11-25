@@ -483,6 +483,16 @@ async def pty_ws(ws: WebSocket) -> None:
     await ws.accept()
     _log.info("pty accepted peer=%s mode=%s cred=%s", peer, mode, cred)
 
+    byot_id = (ws.query_params.get("byot") or "").strip()
+    if byot_id:
+        # BYOT (bring your own terminal): proxy this socket to an external
+        # terminal registered via /api/byot/host (``hermes byot`` in iTerm &co.)
+        # instead of spawning the embedded PTY. Handled before the POSIX-bridge
+        # check so it also works on native Windows.
+        from hermes_cli.web_routers.byot import handle_byot_viewer
+        await handle_byot_viewer(ws, byot_id)
+        return
+
     # Native Windows can't import the POSIX PTY bridge: say so and close cleanly.
     if not _PTY_BRIDGE_AVAILABLE:
         await ws.send_text(
@@ -525,12 +535,7 @@ async def pty_ws(ws: WebSocket) -> None:
 
     try:
         argv, cwd, env = await _resolve_chat_argv_async(**resolve_kwargs)
-    except HTTPException as exc:  # unknown/invalid profile
-        if not marker_preexisting:
-            _discard_active_session_file(ws.app, channel, active_session_file)
-        await _pty_fail(ws, exc)
-        return
-    except SystemExit as exc:  # _make_tui_argv sys.exit(1)s when node/npm is missing
+    except (HTTPException, SystemExit) as exc:  # invalid profile or unavailable TUI runtime
         if not marker_preexisting:
             _discard_active_session_file(ws.app, channel, active_session_file)
         await _pty_fail(ws, exc)
