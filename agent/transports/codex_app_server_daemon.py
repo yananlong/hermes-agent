@@ -356,6 +356,7 @@ async def _read_peer_frames(peer: "CodexDaemonPeerClient") -> None:
         # transport dead so the session loop retires on the next poll.
         if not peer._closed:
             peer._connection_open = False
+            peer._note_diagnostic("<peer connection closed> the codex daemon control socket dropped")
         peer._fail_pending_requests("codex daemon peer connection closed")
 
 
@@ -377,7 +378,11 @@ def connect_daemon_peer(codex_home: Path | str, *,
         return None
     if socket_path is None:
         return None
-    peer = CodexDaemonPeerClient(socket_path=socket_path)
+    try:
+        peer = CodexDaemonPeerClient(socket_path=socket_path)
+    except Exception as exc:  # a stale socket file is the common "daemon gone" shape
+        logger.debug("codex daemon control socket refused a peer (%s); spawning instead", exc)
+        return None
     try:
         peer.initialize(client_name="hermes", client_title="Hermes Agent", client_version=client_version)
         logger.info("joined the codex app-server daemon: socket=%s", socket_path)

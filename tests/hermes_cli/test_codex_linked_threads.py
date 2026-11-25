@@ -2,6 +2,9 @@
 
 from contextlib import contextmanager
 import json
+import os
+import secrets
+from pathlib import Path
 
 import pytest
 
@@ -275,3 +278,83 @@ def test_link_and_discovery_never_use_raw_preview_as_a_title(tmp_path, monkeypat
         assert db.sessions.get(linked_session["session_id"]).title == "Codex thread"
     finally:
         db.close()
+def _scoped_launch_home(monkeypatch, tmp_path, codex_home):
+    """Bind HERMES_HOME to a temp launch home whose secret scope names ``codex_home``."""
+    from agent.secret_scope import (
+        reset_multiplex_context, reset_secret_scope, set_multiplex_context, set_secret_scope,
+    )
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    launch_home = tmp_path / "launch"
+    launch_home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    home_token = set_hermes_home_override(launch_home)
+    secret_token = set_secret_scope({"CODEX_HOME": str(codex_home)}, profile_home=str(launch_home))
+    multiplex_token = set_multiplex_context(True)
+
+    class _Cleanup:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            reset_multiplex_context(multiplex_token)
+            reset_secret_scope(secret_token)
+            reset_hermes_home_override(home_token)
+            return False
+
+    return _Cleanup()
+
+
+def test_history_reads_join_a_running_daemon_instead_of_spawning(tmp_path, monkeypatch):
+    """The linked read path (thread/list, history paging, link) prefers the shared
+    daemon: no read-only child process is spawned when the daemon answers.
+
+    Covers the daemon-present half of the read client's selection; the daemon-absent
+    half is the spawn-path contract the other tests in this file already pin.
+    """
+    import asyncio
+    import secrets
+    import threading
+    import websockets.asyncio.server  # noqa: F401 - registers the asyncio subpackage
+    from websockets.asyncio.server import serve
+
+    # AF_UNIX socket paths cap at ~108 bytes, so the fake CODEX_HOME sits at a shallow
+    # OS-tmp root with the daemon's real app-server-control/ layout.
+    codex_home = Path(os.environ.get("TMPDIR", "/tmp")) / f"cx-read-{secrets.token_hex(6)}"
+    control = codex_home / "app-server-control"
+    control.mkdir(parents=True)
+    socket_path = control / "app-server-control.sock"
+    ready = threading.Event()
+
+    async def handler(ws):
+        async for raw in ws:
+            msg = json.loads(raw)
+            if "id" not in msg or "method" not in msg:
+                continue
+            if msg["method"] == "initialize":
+                await ws.send(json.dumps({"id": msg["id"], "result": {"userAgent": "codex-tui/0-test"}}))
+            elif msg["method"] == "thread/list":
+                await ws.send(json.dumps({"id": msg["id"], "result": {
+                    "data": [{"id": CHILD, "name": "A child", "cwd": "/home", "source": "cli"}],
+                    "nextCursor": None}}))
+            else:
+                await ws.send(json.dumps({"id": msg["id"], "result": {}}))
+
+    async def run_server():
+        async with serve(handler, path=str(socket_path), unix=True) as server:
+            ready.set()
+            await server.serve_forever()
+
+    server_thread = threading.Thread(target=asyncio.run, args=(run_server(),), daemon=True)
+    server_thread.start()
+    assert ready.wait(timeout=10), "fake daemon did not start"
+
+    monkeypatch.delenv("HERMES_TEST_ISOLATION", raising=False)
+    spawned = []
+    monkeypatch.setattr("agent.transports.codex_app_server.CodexAppServerClient",
+                        lambda **kwargs: spawned.append(kwargs))
+    with _scoped_launch_home(monkeypatch, tmp_path, codex_home):
+        listed = linked.list_codex_threads(limit=5)
+    assert listed["threads"][0]["id"] == CHILD
+    assert not spawned, "a reachable daemon must serve the read; no child spawn"
