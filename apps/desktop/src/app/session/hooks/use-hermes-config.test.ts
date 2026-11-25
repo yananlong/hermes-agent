@@ -2,7 +2,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $terminalFontFamily, setTerminalFontFamilyFromConfig } from '@/app/right-sidebar/terminal/terminal-font'
+import { $terminalFontFamily, $terminalFontSize, setTerminalFontFamilyFromConfig, setTerminalFontSizeFromConfig } from '@/app/right-sidebar/terminal/terminal-font'
 import { getHermesConfig } from '@/hermes'
 import { persistString } from '@/lib/storage'
 import { $showReasoning, setShowReasoningFromConfig } from '@/store/reasoning-disclosure'
@@ -47,6 +47,7 @@ describe('useHermesConfig refreshHermesConfig', () => {
     setCurrentReasoningEffort('')
     setDefaultReasoningEffort('')
     setTerminalFontFamilyFromConfig('')
+    setTerminalFontSizeFromConfig(undefined)
     persistString(WORKSPACE_CWD_KEY, null)
   })
 
@@ -232,15 +233,16 @@ describe('useHermesConfig refreshHermesConfig', () => {
       refreshC = result.current.refreshHermesConfig(true)
     })
 
-    profileC.resolve({ terminal: { font_family: 'Hack Nerd Font' } })
+    profileC.resolve({ terminal: { font_family: 'Hack Nerd Font', font_size: 23 } })
     await act(async () => {
       await refreshC
     })
-    profileB.resolve({ terminal: { font_family: 'MesloLGS NF' } })
+    profileB.resolve({ terminal: { font_family: 'MesloLGS NF', font_size: 12 } })
     await act(async () => {
       await refreshB
     })
 
     expect($terminalFontFamily.get()).toBe('Hack Nerd Font')
+    expect($terminalFontSize.get()).toBe(23)
   })
 })

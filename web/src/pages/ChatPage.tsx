@@ -35,7 +35,8 @@ import { ChatSessionList } from "@/components/ChatSessionList";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
-import { readStoredWorkspace, writeStoredWorkspace } from "@/lib/chat-workspaces";
+import { readStoredWorkspace } from "@/lib/chat-workspaces";
+import { useProfileWorkspace } from "@/hooks/useProfileWorkspace";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { readChatPanelCollapsed, toggleChatPanelCollapsed } from "@/lib/chat-panel-collapsed";
 import { copyTextToClipboard } from "@/lib/clipboard";
@@ -93,10 +94,8 @@ import {
   type PtyBannerAction,
 } from "@/lib/pty-close-copy";
 import { ptyAttachToken } from "@/lib/pty-attach-token";
-import {
-  refitWhenTerminalFontLoads,
-  TERMINAL_FONT_FAMILY,
-} from "@/lib/terminal-font-refit";
+import { refitWhenTerminalFontLoads } from "@/lib/terminal-font-refit";
+import { useEmbeddedTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { generateChannelId } from "@/lib/chat-channel-id";
 import { sendCopyLastCommand } from "@/lib/chat-copy-last";
 import { CopyLastButton } from "@/lib/chat-copy-last-button";
@@ -332,27 +331,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // management profile. Changing it remounts the terminal (key below /
   // effect dep) so the user explicitly starts a fresh scoped session.
   const { profile: scopedProfile } = useProfileScope();
-  // Workspace a FRESH chat starts in (`/api/pty?cwd=`), persisted per
-  // management profile (a phone remembers the repo it drives). The connect
-  // effect reads storage directly, so changing the picker never respawns the
-  // live PTY: it applies on the next "New chat".
-  const [workspaceCwd, setWorkspaceCwdState] = useState(() =>
-    readStoredWorkspace(scopedProfile),
-  );
-  const setWorkspaceCwd = useCallback(
-    (next: string) => {
-      writeStoredWorkspace(scopedProfile, next);
-      setWorkspaceCwdState(next);
-    },
-    [scopedProfile],
-  );
-  // Profile switch: show that profile's remembered workspace (state, not an
-  // effect, so no cascading render).
-  const [workspaceProfile, setWorkspaceProfile] = useState(scopedProfile);
-  if (workspaceProfile !== scopedProfile) {
-    setWorkspaceProfile(scopedProfile);
-    setWorkspaceCwdState(readStoredWorkspace(scopedProfile));
-  }
+  const appearanceRef = useEmbeddedTerminalAppearance(scopedProfile, termRef, hostRef, syncMetricsRef, true);
+  const [workspaceCwd, setWorkspaceCwd] = useProfileWorkspace(scopedProfile);
   const channel = useMemo(
     () => generateChannelId(`${resumeParam ?? ""}\0${scopedProfile}`),
     [resumeParam, scopedProfile],
@@ -518,8 +498,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     const term = new Terminal({
       allowProposedApi: true,
       cursorBlink: true,
-      fontFamily: TERMINAL_FONT_FAMILY,
-      fontSize: terminalFontSizeForWidth(tierW0),
+      fontFamily: appearanceRef.current.fontFamily,
+      fontSize: terminalFontSizeForWidth(tierW0, appearanceRef.current.fontSize),
       lineHeight: terminalLineHeightForWidth(tierW0),
       letterSpacing: 0,
       fontWeight: "400",
@@ -925,7 +905,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         return;
       }
       const w = terminalTierWidthPx(host);
-      const nextSize = terminalFontSizeForWidth(w);
+      const nextSize = terminalFontSizeForWidth(w, appearanceRef.current.fontSize);
       const nextLh = terminalLineHeightForWidth(w);
       const fontChanged =
         term.options.fontSize !== nextSize ||
@@ -1054,9 +1034,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       });
     });
 
-    // The rAF fits above still measure the fallback font if JetBrains Mono
-    // hasn't swapped in yet (#92899).
-    const stopFontRefit = refitWhenTerminalFontLoads(term, syncTerminalMetrics);
+    // The rAF fits above may still measure a fallback while the selected
+    // font loads (#92899).
+    const stopFontRefit = refitWhenTerminalFontLoads(term, syncTerminalMetrics, undefined, appearanceRef.current.fontFamily);
 
     // WebSocket. In gated mode (``window.__HERMES_AUTH_REQUIRED__``) this
     // awaits a single-use ticket via /api/auth/ws-ticket before opening;
@@ -1601,6 +1581,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       }
     };
   }, [
+    appearanceRef,
     hasActivated,
     channel,
     clearReconnectTimer,

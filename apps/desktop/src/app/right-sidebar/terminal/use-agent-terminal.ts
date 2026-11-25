@@ -248,6 +248,7 @@ export function useAgentTerminal({ active, id, procId }: { active: boolean; id: 
       }
 
       term.options.fontFamily = fontFamily
+      term.options.fontSize = latestFontSizeRef.current
       mount()
     })
 

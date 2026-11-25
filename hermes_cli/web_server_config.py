@@ -94,6 +94,12 @@ _SCHEMA_OVERRIDES: dict[str, dict[str, Any]] = {
         "Legacy Vercel Sandbox runtime (deprecated by Vercel; a pinned runtime overrides the image; clear to use the image)",
         "node24", "node22", "python3.13", clearable=True),
     "terminal.modal_mode": _select("Modal sandbox mode", "sandbox", "function"),
+    "terminal.font_family": {
+        "description": "Embedded terminal font family or CSS stack; blank uses bundled Source Code Pro",
+    },
+    "terminal.font_size": {
+        "description": "Embedded terminal font size in pixels (8–32, default 15); chat scales on narrow screens",
+    },
     "proxy.enabled": {
         "type": "boolean",
         "description": (

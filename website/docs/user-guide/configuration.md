@@ -269,8 +269,8 @@ terminal:
   backend: local    # local | docker | ssh | modal | daytona | vercel_sandbox | <plugin backend>
   cwd: "."          # Gateway/cron working directory (CLI always uses launch dir)
   temp_dir: ""      # Session temp root; empty = TMPDIR, else ~/.hermes/cache/terminal
-  font_family: ""   # Desktop terminal font; e.g. "MesloLGS NF"
-  font_size: 15     # Embedded terminal size in px (Desktop + web console); 8–32
+  font_family: ""   # Desktop and dashboard terminal font; e.g. "MesloLGS NF"
+  font_size: 15     # Embedded terminal size in px (Desktop + dashboard); 8–32
   timeout: 180      # Per-command timeout in seconds
   home_mode: auto   # auto | real | profile — subprocess HOME policy
   env_passthrough: []  # Env var names to forward to sandboxed execution (terminal + execute_code)
@@ -327,7 +327,7 @@ warns about directories over 1 GB elsewhere under `cache/` that no pruner covers
 
 `desktop.font_family` sets the font for chat and the rest of the Hermes Desktop interface (the terminal pane has its own key above). Give it one installed family name (for example, `OpenDyslexic` or `Atkinson Hyperlegible`) or a CSS font stack; Hermes keeps the active theme's own stack behind it so CJK and emoji glyphs still resolve, and an empty value uses the theme's font. Edit it in **Settings → Appearance → Chat Font**.
 
-`terminal.font_family` controls the embedded terminal in Hermes Desktop. It accepts either one locally installed family name (for example, `MesloLGS NF`) or a CSS font stack. Hermes appends its bundled JetBrains Mono stack as a fallback, and an empty value keeps the default. You can edit the same profile-scoped setting in **Settings → Appearance → Terminal Font**; no Google Fonts download or system-font permission is required.
+`terminal.font_family` and `terminal.font_size` control the embedded terminals in Desktop and the dashboard's Chat and Console. The family accepts an installed font name (for example, `MesloLGS NF`) or a CSS font stack; an empty value uses bundled Source Code Pro. The size is 8–32 CSS pixels and defaults to 15; dashboard Chat scales it down on narrow screens. Set these per profile in Desktop's **Settings → Appearance** or the dashboard's **Config → Terminal**. Saving in the dashboard updates open terminals without restarting their sessions.
 
 For cloud sandboxes such as Modal, Daytona, Vercel Sandbox, and Sprites, `container_persistent: true` means Hermes will try to preserve filesystem state across sandbox recreation. It does not promise that the same live sandbox, PID space, or background processes will still be running later.
 
