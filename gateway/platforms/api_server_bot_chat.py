@@ -119,8 +119,10 @@ def bot_chat_tip(authority, session_id):
     """The canonical Bot Chat's tip row when *session_id* is in its lineage, else None."""
     store = authority_store(authority)
     row = store.sessions.get_by_title('Bot Chat')
-    from persistence.conversation.sessions import is_linked_codex_config
-    if row is None or is_linked_codex_config(row.model_config):
+    from persistence.conversation.sessions import is_linked_foreign_config
+    # Any native pointer (Codex, Claude Code, Mistral Vibe) is excluded: its transcript is not a
+    # Bot Chat conversation this surface could adopt, rename or deliver into.
+    if row is None or is_linked_foreign_config(row.model_config):
         return None
     tip = store.lineage.tip(row.session_id)
     if not tip or store.lineage.tip(session_id) != tip:

@@ -108,7 +108,7 @@ import { useForeignCapability } from "@/lib/use-foreign-capability";
 import {
   linkedForeignAgent,
   linkedResumeBlocked as linkedResumeBlockedFor,
-  type LinkedForeignAgent,
+  linkedResumeOverlay,
   type LinkedResumeCheck,
 } from "@/lib/linked-session";
 import { sendCopyLastCommand } from "@/lib/chat-copy-last";
@@ -424,6 +424,11 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const linkedResumeCheckPending = Boolean(
     resumeParam && linkedResumeCheck?.id !== resumeParam,
   );
+  // The gate blocks on a pending lookup, but "blocked" is two different screens:
+  // until the answer lands there is no notice to show, so covering the canvas
+  // with the verdict panel would flash an empty overlay with a lone "New chat"
+  // on every resume. `linkedResumeOverlay` decides between them in one place.
+  const resumeOverlay = linkedResumeOverlay(linkedResumeCheck, resumeParam);
   // The linked row itself lives on the gateway host, so the dashboard asks THAT
   // host what it can serve (`session.foreign.status`) instead of assuming. An
   // older gateway answers -32601 → undefined, and every line below keeps the
@@ -1961,11 +1966,28 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
             </div>
           )}
 
+          {/* The linked-flag lookup for this ?resume= target is still running:
+              nothing is known about the row yet, so show progress rather than
+              the verdict panel (which would be empty) or a terminal (which
+              might be a pointer row's). */}
+          {resumeOverlay === "loading" && (
+            <div
+              className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+              role="status"
+              aria-live="polite"
+              aria-label={PTY_RESUME_LOADING_MESSAGE}
+            >
+              <div className="max-w-[min(28rem,calc(100vw-3rem))] border border-current/30 bg-black/80 px-4 py-3 text-center text-xs tracking-wide text-white/85 shadow-lg">
+                {PTY_RESUME_LOADING_MESSAGE}
+              </div>
+            </div>
+          )}
+
           {/* Linked foreign sessions (Codex / Claude / Mistral pointer rows)
               get no PTY — a pointer row has no Hermes transcript for one to
               attach to — and neither does a resume target the gateway could
-              not confirm (fail closed). */}
-          {linkedResumeBlocked && (
+              not confirm (fail closed). Only rendered for an answer we have. */}
+          {resumeOverlay === "blocked" && (
             <div
               role="alert"
               className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/70 p-4"

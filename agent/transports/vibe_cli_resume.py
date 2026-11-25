@@ -75,8 +75,12 @@ DEFAULT_OUTPUT_FORMAT = "json"
 #: ``json`` emits the turn's entries as one document, ``streaming`` as newline-delimited ones;
 #: :func:`parse_vibe_output` accepts either shape for both.
 SUPPORTED_OUTPUT_FORMATS = ("json", "streaming")
-#: A prompt rides in argv (``-p``), so keep it inside a conservative ARG_MAX budget.
-MAX_PROMPT_CHARS = 384 * 1024
+#: A prompt rides in argv (``-p``) with ``stdin=DEVNULL`` and no fallback path, so the binding limit
+#: is the kernel's PER-ARGUMENT cap, not ``ARG_MAX``: Linux refuses any single argv string longer
+#: than ``MAX_ARG_STRLEN`` (128 KiB) with E2BIG however much total room is left, and the child's
+#: environment plus the rest of this argv come out of the same budget. 96 KiB keeps a 32 KiB margin
+#: inside that hard limit; the old 384 KiB passed this check and then died in ``execvp``.
+MAX_PROMPT_CHARS = 96 * 1024
 
 _POLL_SLICE_SECONDS = 0.2
 _TERM_GRACE_SECONDS = 5.0

@@ -220,8 +220,11 @@ def displaceable_bot_chat(authority, row, subject=None):
     Else None: a bound local chat and kept history are never moved. *row* is a ``SessionRecord`` or a
     ``sessions`` row mapping."""
     row = _row_fields(row)
-    from persistence.conversation.sessions import is_linked_codex_config
-    if is_linked_codex_config(row.get('model_config')):
+    from persistence.conversation.sessions import is_linked_foreign_config
+    # Every native pointer (Codex, Claude Code, Mistral Vibe), not just Codex: a linked row can
+    # never be adopted, renamed, or renamed over, so it must be displaced rather than refused
+    # for good.
+    if is_linked_foreign_config(row.get('model_config')):
         return row['id']
     if str(row.get('chat_id') or '').startswith('local-'):
         return None  # every delivery asks: a bound local chat answers from its own row, with no read

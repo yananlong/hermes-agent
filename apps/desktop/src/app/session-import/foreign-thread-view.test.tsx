@@ -12,7 +12,12 @@ const hostCapability = vi.hoisted(() => ({ current: undefined as HostCapability 
 
 vi.mock('./api', () => ({ linkedThreadRequest: vi.fn() }))
 vi.mock('./use-host-capability', () => ({ useHostCapability: () => hostCapability.current }))
-vi.mock('@/store/session', () => ({ setSessionOwnerHint: vi.fn() }))
+vi.mock('@/store/session', async () => {
+  // use-host-capability reads the connection state to re-probe after a reconnect.
+  const { atom } = await import('nanostores')
+
+  return { $gatewayState: atom('open'), setSessionOwnerHint: vi.fn() }
+})
 vi.mock('../overlays/overlay-view', () => ({
   OverlayView: ({ children }: { children: React.ReactNode }) => <div>{children}</div>
 }))

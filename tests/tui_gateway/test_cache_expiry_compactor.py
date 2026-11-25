@@ -345,3 +345,41 @@ def test_a_reaper_close_of_a_chat_queued_behind_busy_slots_waits_for_its_compact
     assert [c["trigger"] for c in agent.calls] == ["cache_expiry"]
     assert order == [("closed", 2)]  # compacted first, then closed
     assert agent._prompt_cache_warmer.claims == [False]  # the queued claim stands; no second claim
+
+
+# ── linked native rows: only Codex compacts through Hermes ────────────────────────────────────
+
+
+def test_a_linked_claude_row_is_never_compacted_by_the_cache_edge(server, monkeypatch):
+    """The reaper's cache-edge compaction is a Hermes summarizer, so a pointer row must skip it.
+
+    A linked Claude Code / Mistral Vibe row keeps its transcript in the native CLI and holds none
+    here: running the choke point would summarize a projection nobody persists and split a session
+    that has no transcript. Codex is the exception (next test): its app-server thread compacts
+    through Hermes.
+    """
+    agent = _Agent()
+    session = _session(agent)
+    monkeypatch.setattr(server, "_sessions", {"linked": session})
+    monkeypatch.setattr(server, "_session_linked_foreign_agent", lambda _session: "claude")
+
+    for job in server._cache_expiry_tick():
+        job.result(timeout=10)
+
+    assert agent.calls == [], "the local summarizer must not run for a linked native row"
+    assert len(session["history"]) == 8 and session["history_version"] == 3
+    assert session["running"] is False  # the claim is still released
+
+
+@pytest.mark.parametrize("kind", ["codex"])
+def test_a_linked_codex_row_still_compacts_on_the_cache_edge(server, monkeypatch, kind):
+    agent = _Agent()
+    session = _session(agent)
+    monkeypatch.setattr(server, "_sessions", {"linked": session})
+    monkeypatch.setattr(server, "_session_linked_foreign_agent", lambda _session: kind)
+
+    for job in server._cache_expiry_tick():
+        job.result(timeout=10)
+
+    assert [(c["trigger"], c["force"]) for c in agent.calls] == [("cache_expiry", False)]
+    assert len(session["history"]) == 2

@@ -14,8 +14,8 @@ import {
   useState
 } from 'react'
 
-import { PlanLimitLine, UsageLevelTag } from '@/components/model-picker'
 import { CodexCatalogWarning } from '@/components/codex-catalog-warning'
+import { PlanLimitLine, UsageLevelTag } from '@/components/model-picker'
 import { ProviderStatusChip } from '@/components/provider-status-chip'
 import { Badge } from '@/components/ui/badge'
 import { Codicon } from '@/components/ui/codicon'

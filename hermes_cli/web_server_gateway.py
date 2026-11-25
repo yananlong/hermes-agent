@@ -807,8 +807,14 @@ def stamp_linked_capability_markers(session: dict[str, Any]) -> dict[str, Any]:
     Shared by the list (``_strip_session_list_rows``) and the single-session detail endpoint, so a
     client that cannot see the row in a paged list still gets the same answer for one id.
 
+    The marker follows the LINK FLAG alone, never the presence of the native id. A pointer whose id
+    is missing or truncated is damaged, not ordinary: the turn path already refuses it
+    (``session_import_state``/``linked_*_native_id`` raise a typed refusal), but a surface that saw
+    no marker would treat it as an unlinked Hermes row and offer a PTY resume for a conversation
+    that cannot be resumed here — the exact fork the linked design forbids.
+
     Unreadable/absent configuration stamps NOTHING: this projection must not turn a damaged row into
-    a crash, and the turn path itself refuses an unreadable linked row (fail closed there instead).
+    a crash, and a row with no flags is genuinely ordinary.
     """
     config = session.get("model_config")
     if isinstance(config, str):
@@ -816,9 +822,8 @@ def stamp_linked_capability_markers(session: dict[str, Any]) -> dict[str, Any]:
             config = json.loads(config)
         except (TypeError, ValueError):
             config = {}
-    for flag, native_id_key, marker in _LINKED_CAPABILITY_FLAGS:
-        if (isinstance(config, dict) and config.get(flag) is True
-                and isinstance(config.get(native_id_key), str) and config[native_id_key]):
+    for flag, _native_id_key, marker in _LINKED_CAPABILITY_FLAGS:
+        if isinstance(config, dict) and config.get(flag) is True:
             session[marker] = True
         else:
             session.pop(marker, None)

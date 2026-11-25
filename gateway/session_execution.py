@@ -183,6 +183,10 @@ class GatewaySessionAgentMixin:
             user_id=src.user_id, user_id_alt=src.user_id_alt, user_name=src.user_name,
             chat_id=src.chat_id, chat_name=src.chat_name, chat_type=src.chat_type, thread_id=src.thread_id,
             gateway_session_key=ctx.session_key, persistence=store,
+            # Both handles the agent reads its own row through: the no-fork gate
+            # (``agent/linked_foreign_turn.py``) resolves either, and a surface that binds only
+            # ``persistence`` must still be able to tell a linked row from an ordinary one.
+            session_db=store,
             # A linked native thread resumes in its own persisted workspace.
             **({"cwd": linked_cwd} if linked_cwd is not None else {}),
             # Reload from disk — do not reuse the startup snapshot.

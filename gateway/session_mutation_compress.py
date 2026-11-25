@@ -40,8 +40,22 @@ async def prepare_compress(authority, live, payload, prepared):
     from utils import is_truthy_value
     request = compress_request(payload)
     snapshot = prepared['snapshot']
+    from agent.linked_foreign_turn import (
+        LINKED_FOREIGN_COMPACTION_OWNED, linked_native_compaction_message)
     from gateway.session_linked_codex import linked_thread_id
-    linked_id = linked_thread_id(authority_persistence(authority), snapshot['target'])
+    from hermes_cli.foreign_linked_store import linked_foreign_kind
+    store = authority_persistence(authority)
+    # The Kind decides, not "is it linked": Codex exposes a native compact Hermes drives (below),
+    # while a linked Claude Code / Mistral Vibe row can only be compacted inside its own CLI. Letting
+    # one fall through to the local summarizer would bill a summary of a transcript Hermes does not
+    # own and split a Hermes session the row never had.
+    kind = linked_foreign_kind(store, snapshot['target'])
+    if kind in LINKED_FOREIGN_COMPACTION_OWNED:
+        raise AuthorityRefusal('unsupported_compress_options', field='session_id',
+                               detail=linked_native_compaction_message(kind))
+    # An unreadable pointer ("foreign") still reaches this wrapper, which refuses it as
+    # storage_unavailable instead of compressing a row it cannot identify.
+    linked_id = linked_thread_id(store, snapshot['target']) if kind is not None else None
     if linked_id:
         return await _prepare_linked_codex_compress(authority, live, request, prepared, linked_id)
     policy = restore_policy(snapshot['receipt']['policy'])
@@ -52,7 +66,6 @@ async def prepare_compress(authority, live, payload, prepared):
     model, runtime = authority.runner._resolve_session_agent_runtime(source=live.source, session_key=live.route)
     if runtime.get('api_mode') == 'codex_app_server':
         raise AuthorityRefusal('runtime_coordination_required')
-    store = authority_persistence(authority)
     history = [m.as_openai_message() for m in store.messages.read_conversation(snapshot['target'])]
     messages = [m for m in history if m.get('role') in {'user', 'assistant', 'tool'}]
     head, tail = messages, []

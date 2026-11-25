@@ -417,9 +417,18 @@ def _compress_live_with_feedback(sid: str, session: dict, agent, arg: str, *, sn
         AGGRESSIVE_UNSUPPORTED, compress_now, parse_compress_args, render_compress_result)
     from agent.manual_compression_feedback import describe_compression_lock_skip, summarize_manual_compression
     from agent.model_metadata import estimate_request_tokens_rough
-    linked = _session_is_codex_linked(session)
-    if linked and arg.strip():
-        return "Linked Codex threads support /compress without arguments"
+    linked_kind = _session_linked_foreign_agent(session)
+    linked = linked_kind is not None
+    if linked:
+        # Only a Codex thread exposes a compaction Hermes can drive; a linked Claude Code / Mistral
+        # Vibe row compacts in its own CLI, so it never reaches the summarizer at all.
+        from agent.linked_foreign_turn import linked_compaction_refusal
+
+        refusal = linked_compaction_refusal(linked_kind)
+        if refusal is not None:
+            return refusal
+        if arg.strip():
+            return "Linked Codex threads support /compress without arguments"
     request = parse_compress_args(arg)
     if request.aggressive:
         return AGGRESSIVE_UNSUPPORTED

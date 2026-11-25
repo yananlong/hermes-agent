@@ -64,7 +64,7 @@ def test_list_pages_sessions_newest_first_without_previews(store):
 
 
 def test_history_reads_live_jsonl_as_safe_rows(store):
-    _, cwd = store
+    _, _cwd = store
     page = linked.read_claude_history(SESSION_ID, limit=10)
     assert [row["role"] for row in page["messages"]] == ["user", "assistant"]
     assert page["messages"][1]["content"] == "Done, see the diff."
@@ -103,7 +103,7 @@ def test_link_rejects_unknown_session_and_missing_cwd(tmp_path, store, monkeypat
     try:
         with pytest.raises(ValueError):
             linked.link_claude_thread("9c8d7e6f-5a4b-4c3d-8e2f-1a0b9c8d7e6f", db, "default")
-        projects, cwd = store
+        projects, _cwd = store
         missing = tmp_path / "gone"
         _write_session(projects, OTHER_ID, str(missing), _lines(str(missing)))
         with pytest.raises(ValueError, match="working directory"):

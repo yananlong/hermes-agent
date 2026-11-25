@@ -23,6 +23,10 @@
  * affordance whose RPC the gateway has already told us cannot work here.
  */
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
+import {
+  isHostCapabilityUnsupported,
+  markHostCapabilityUnsupported
+} from '@/store/host-capability-cache'
 import type { SessionOwnerRoute } from '@/store/session-request-router'
 
 import {
@@ -41,12 +45,10 @@ export type HostCapability =
   | { state: 'error'; message: string }
 
 /** Serving scopes whose gateway answered -32601 for the capability method. Module-level so every
- *  linked view in the window shares the verdict; cleared only by a test or a reconnect. */
-const UNSUPPORTED_SCOPES = new Set<string>()
-
-export function resetHostCapabilityCache(): void {
-  UNSUPPORTED_SCOPES.clear()
-}
+ *  linked view in the window shares the verdict; `store/gateway.ts` clears it whenever a socket
+ *  opens, so an upgraded gateway is asked again instead of staying "unknown" until relaunch.
+ *  Re-exported here because this is the module every caller (and test) already imports. */
+export { resetHostCapabilityCache } from '@/store/host-capability-cache'
 
 /** The scope a capability answer belongs to: one gateway backend serving one profile. */
 export function hostCapabilityScope(owner: SessionOwnerRoute): string {
@@ -59,7 +61,7 @@ export async function readHostCapability(
 ): Promise<HostCapability> {
   const scope = hostCapabilityScope(owner)
 
-  if (UNSUPPORTED_SCOPES.has(scope)) {
+  if (isHostCapabilityUnsupported(scope)) {
     return { state: 'unknown' }
   }
 
@@ -71,7 +73,7 @@ export async function readHostCapability(
     }
 
     if (isMissingRpcMethod(cause)) {
-      UNSUPPORTED_SCOPES.add(scope)
+      markHostCapabilityUnsupported(scope)
 
       return { state: 'unknown' }
     }

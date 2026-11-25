@@ -157,7 +157,7 @@ def read_display_history_window(thread_id: str, *, session_id: str, model: str |
     from hermes_cli.codex_linked_history import (display_native_turns, linked_turn_display_overlays,
                                                  native_turn_record, truncate_record_tail, _next_cursor)
     from hermes_cli.codex_linked_threads import _codex_client, read_codex_history
-    from hermes_constants import get_hermes_home, hermes_home_key
+    from hermes_constants import get_hermes_home
 
     if (not isinstance(session_id, str) or not session_id or type(offset) is not int or offset < 0
             or type(limit) is not int or limit < 0 or not isinstance(latest, bool)
@@ -168,7 +168,6 @@ def read_display_history_window(thread_id: str, *, session_id: str, model: str |
     owning_home = profile_home if profile_home is not None else get_hermes_home()
     direction = "desc" if latest else "asc"
     try:
-        cache_profile = hermes_home_key(owning_home)
         with (_codex_client(profile_home=owning_home) if client is None else nullcontext(client)) as active_client:
             pages, cursor, seen = [], None, set()
             skipped, collected, total_bytes = 0, 0, 0

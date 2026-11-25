@@ -120,8 +120,10 @@ def legacy_launch_params(row):
 def bot_chat_row(row):
     """Main's Bot Chat rule for a stored row: the ``follow_profile_config`` marker, or, for a row
     written before the marker existed, the exact title ``Bot Chat``. False for no row (None)."""
-    from persistence.conversation.sessions import is_linked_codex_config
-    if row is None or is_linked_codex_config(row.model_config):
+    from persistence.conversation.sessions import is_linked_foreign_config
+    # Any linked native row (Codex, Claude Code, Mistral Vibe) is not a Bot Chat: its runtime and
+    # transcript belong to the native tool, not to this profile's config.
+    if row is None or is_linked_foreign_config(row.model_config):
         return False
     return parse_model_config(row.model_config).get('follow_profile_config') is True or str(row.title or '').strip() == 'Bot Chat'
 

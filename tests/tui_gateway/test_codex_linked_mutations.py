@@ -4,6 +4,8 @@ from contextlib import contextmanager
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from persistence_assembly import open_persistence, profile_scope
 from tests.fixtures.storage_read import transcript_rows
 from tests.fixtures.storage_seed import seed_messages, seed_session
@@ -75,11 +77,13 @@ def test_linked_runtime_and_workspace_controls_are_not_misleading(tmp_path, monk
         db.close()
 
 
-def test_linked_compression_runs_even_when_local_mirror_is_empty(monkeypatch):
+@pytest.mark.parametrize("kind", ["codex"])
+def test_linked_codex_compression_runs_even_when_local_mirror_is_empty(kind, monkeypatch):
+    """A linked CODEX row compacts natively through Hermes, whatever its local mirror holds."""
     import agent.conversation_compression_manual as manual
 
     called = []
-    monkeypatch.setattr(server, "_session_is_codex_linked", lambda _session: True)
+    monkeypatch.setattr(server, "_session_linked_foreign_agent", lambda _session: kind)
     monkeypatch.setattr(server, "_set_session_context", lambda *a, **k: None)
     monkeypatch.setattr(server, "_clear_session_context", lambda *_: None)
     monkeypatch.setattr(server, "_get_usage", lambda *_: {})
@@ -89,3 +93,55 @@ def test_linked_compression_runs_even_when_local_mirror_is_empty(monkeypatch):
                "history_lock": threading.Lock(), "agent": object()}
     server._compress_session_history(session)
     assert called == [[]]
+
+
+@pytest.mark.parametrize("kind, label", [("claude", "Claude Code"), ("mistral", "Mistral Vibe")])
+def test_linked_claude_and_mistral_compression_never_reaches_the_summarizer(
+        kind, label, monkeypatch):
+    """Only Codex compacts through Hermes: the other two compact in their own CLI.
+
+    A linked Claude/Mistral row's Hermes transcript is a pointer with no messages, so the generic
+    summarizer would be a billable LLM call over a projection nobody keeps plus a SQLite session
+    split of a row that has no transcript. The refusal is a plain ValueError the compress RPC/slash
+    error paths already render ("compress failed: …"), and ``compress_now`` must never be called.
+    """
+    import agent.conversation_compression_manual as manual
+
+    monkeypatch.setattr(server, "_session_linked_foreign_agent", lambda _session: kind)
+    monkeypatch.setattr(manual, "compress_now", lambda *_a, **_k: pytest.fail(
+        "the generic summarizer must never run for a linked native row"))
+    session = {"session_key": "linked", "cwd": "/home", "history": [], "history_version": 0,
+               "history_lock": threading.Lock(), "agent": object()}
+
+    with pytest.raises(ValueError) as caught:
+        server._compress_session_history(session)
+
+    assert label in str(caught.value)
+    assert "compact in" in str(caught.value)
+    # The MIN_MESSAGES guard must not be what stops it: the refusal is the linked KIND, not the
+    # empty mirror (a long native thread with an empty local projection is the normal linked shape).
+    assert session["history"] == []
+
+
+def test_linked_compression_kind_is_read_from_every_agent_flag(tmp_path, monkeypatch):
+    """The TUI reads the row's own flag for all three tools, not just Codex's."""
+    db = open_persistence(profile_scope(home=tmp_path))
+    try:
+        for i, (flag, native) in enumerate((
+                ("codex_linked_thread", "codex_thread_id"),
+                ("claude_linked_thread", "claude_session_id"),
+                ("mistral_linked_thread", "mistral_session_id"))):
+            sid = f"row-{i}"
+            seed_session(db, sid, "desktop",
+                         model_config={flag: True, native: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"})
+
+        @contextmanager
+        def owner_db(_session):
+            yield db
+
+        monkeypatch.setattr(server, "_session_db", owner_db)
+        assert server._session_linked_foreign_agent({"session_key": "row-0"}) == "codex"
+        assert server._session_linked_foreign_agent({"session_key": "row-1"}) == "claude"
+        assert server._session_linked_foreign_agent({"session_key": "row-2"}) == "mistral"
+    finally:
+        db.close()

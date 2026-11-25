@@ -21,17 +21,31 @@ def test_session_list_marks_linked_codex_without_exposing_native_thread_id():
     assert "private-native-thread-id" not in repr(result)
 
 
-def test_session_list_does_not_mark_an_unlinked_or_damaged_config():
+def test_session_list_does_not_mark_an_unlinked_or_unreadable_config():
     rows = [
         {"id": "plain", "model_config": json.dumps({"provider": "openai"})},
         {"id": "damaged", "model_config": "not-json"},
-        {"id": "missing-thread", "model_config": json.dumps({"codex_linked_thread": True})},
     ]
 
     result = _strip_session_list_rows(rows)
 
     assert all("codex_linked" not in row for row in result)
     assert all("model_config" not in row for row in result)
+
+
+def test_session_list_marks_a_pointer_whose_native_id_is_missing():
+    """Flag set, id gone: still a pointer.
+
+    A damaged pointer is not an ordinary Hermes row. Withholding the marker made the dashboard
+    offer a PTY resume for a conversation the turn path refuses (``linked_*_native_id`` raises),
+    i.e. exactly the fork the linked design exists to prevent.
+    """
+    rows = [{"id": "missing-thread", "model_config": json.dumps({"codex_linked_thread": True})}]
+
+    result = _strip_session_list_rows(rows)
+
+    assert result[0]["codex_linked"] is True
+    assert "model_config" not in result[0]
 
 
 def test_session_list_marks_linked_claude_and_mistral_without_exposing_native_ids():
@@ -61,12 +75,10 @@ def test_session_list_marks_linked_claude_and_mistral_without_exposing_native_id
     assert all("model_config" not in row for row in result)
 
 
-def test_session_list_omits_claude_and_mistral_flags_for_unlinked_or_damaged_configs():
+def test_session_list_omits_claude_and_mistral_flags_for_unlinked_or_unreadable_configs():
     rows = [
         {"id": "plain", "model_config": json.dumps({"provider": "openai"})},
         {"id": "damaged", "model_config": "not-json"},
-        {"id": "claude-missing-id", "model_config": json.dumps({"claude_linked_thread": True})},
-        {"id": "mistral-missing-id", "model_config": json.dumps({"mistral_linked_thread": True})},
         {"id": "claude-flag-off", "model_config": json.dumps({
             "claude_linked_thread": False, "claude_session_id": "some-uuid"})},
     ]
@@ -76,3 +88,20 @@ def test_session_list_omits_claude_and_mistral_flags_for_unlinked_or_damaged_con
     assert all("claude_linked" not in row for row in result)
     assert all("mistral_linked" not in row for row in result)
     assert all("codex_linked" not in row for row in result)
+
+
+def test_session_list_marks_claude_and_mistral_pointers_whose_native_ids_are_missing():
+    """Same rule as codex: the flag marks the row, a missing id only makes it unresumable."""
+    rows = [
+        {"id": "claude-missing-id", "model_config": json.dumps({"claude_linked_thread": True})},
+        {"id": "mistral-missing-id", "model_config": json.dumps({"mistral_linked_thread": True})},
+        {"id": "mistral-empty-id", "model_config": json.dumps({
+            "mistral_linked_thread": True, "mistral_session_id": ""})},
+    ]
+
+    result = _strip_session_list_rows(rows)
+
+    assert result[0]["claude_linked"] is True
+    assert result[1]["mistral_linked"] is True
+    assert result[2]["mistral_linked"] is True
+    assert "codex_linked" not in result[0] and "codex_linked" not in result[1]

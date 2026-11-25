@@ -68,3 +68,28 @@ export function linkedResumeBlocked(check: LinkedResumeCheck | null, resumeId: s
 
   return check.agent !== null || !check.verified
 }
+
+/**
+ * What the canvas should cover for a `?resume=<id>` target.
+ *
+ * The gate above fails closed, but "blocked" is not one visual state: a target whose linked-flag
+ * lookup has not landed yet has nothing to SAY (no agent, no verdict), so covering the screen with
+ * the blocked notice renders an empty panel with a stray "New chat" button on every resume. That
+ * window gets a loading state; the verdict panel is reserved for an answer we actually have.
+ */
+export type LinkedResumeOverlay = 'none' | 'loading' | 'blocked'
+
+export function linkedResumeOverlay(
+  check: LinkedResumeCheck | null,
+  resumeId: string | null | undefined
+): LinkedResumeOverlay {
+  if (!resumeId) {
+    return 'none'
+  }
+
+  if (!check || check.id !== resumeId) {
+    return 'loading'
+  }
+
+  return linkedResumeBlocked(check, resumeId) ? 'blocked' : 'none'
+}
