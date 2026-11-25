@@ -149,9 +149,9 @@ def _probe_version(binary: str, timeout: float = _VERSION_PROBE_TIMEOUT) -> str 
     probe combined, and a status surface that runs on mount must stay a stat/``which``.
     """
     try:
-        proc = subprocess.run([binary, "--version"], capture_output=True, text=True,
+        proc = subprocess.run([binary, "--version"], capture_output=True, stdin=subprocess.DEVNULL,
                               timeout=max(0.5, float(timeout)), check=False,
-                              stdin=subprocess.DEVNULL)
+                              text=True, encoding="utf-8", errors="replace")
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
     for stream in (proc.stdout, proc.stderr):

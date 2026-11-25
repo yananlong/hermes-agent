@@ -94,7 +94,7 @@ def _session_dirs(root: Path) -> list[tuple[float, Path, str]]:
 def _read_meta(session_dir: Path) -> dict:
     meta_path = session_dir / "meta.json"
     try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta = json.loads(meta_path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
     return meta if isinstance(meta, dict) else {}

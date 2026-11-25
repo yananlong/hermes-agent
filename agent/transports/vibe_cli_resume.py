@@ -377,7 +377,7 @@ def _terminate(proc: subprocess.Popen) -> tuple[str, str]:
 def _signal_group(proc: subprocess.Popen, sig: int) -> None:
     with suppress(ProcessLookupError, PermissionError, OSError, AttributeError):
         if os.name == "posix":
-            os.killpg(os.getpgid(proc.pid), sig)
+            os.killpg(os.getpgid(proc.pid), sig)  # windows-footgun: ok -- gated on os.name == "posix" above
         elif sig == getattr(signal, "SIGKILL", None):  # pragma: no cover - windows
             proc.kill()
         else:  # pragma: no cover - windows

@@ -98,6 +98,18 @@ LINKED_FOREIGN_FIXES = {
     "claude_cancelled": "send again",
     "claude_not_linked": "re-link the session from the foreign session list",
     "claude_linked_store_unavailable": "check the profile's ~/.claude scope on the gateway host",
+    "claude_peer_not_live": "the live Claude session is no longer running — send again",
+    "claude_peer_socket_missing": "the live Claude session closed its messaging socket — send again",
+    "claude_peer_connect_failed": "the live Claude session is not accepting messages right now",
+    # A held message is a DELIVERABLE state, not an error the user must fix: the receiving
+    # session's own user is asked to approve it. The refusal text names that (the receipt's
+    # ``reason`` sentence is shown as the turn's detail when present).
+    "claude_peer_held": "the receiving Claude session is holding the message for its user's "
+                        "approval — approve it in Claude Code",
+    "claude_peer_refused": "the receiving Claude session refused the message — open it in Claude Code",
+    "claude_peer_dropped": "the receiving Claude session's queue was full — send again later",
+    "claude_peer_no_reply_socket": "Hermes could not bind its Claude reply socket on this host",
+    "claude_peer_send_failed": "send again — the peer delivery did not complete",
     "vibe_binary_missing": "install the Vibe CLI on the gateway host (or set model.vibe_bin)",
     "vibe_linked_unavailable": "reopen the thread in Vibe — its store or workspace is unavailable",
     "vibe_linked_conflict": "close this thread in the other client and send again",

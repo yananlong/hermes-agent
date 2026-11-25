@@ -30,6 +30,7 @@ import contextlib
 import hashlib
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Mapping
@@ -49,6 +50,12 @@ CLAUDE_LINKED_BUSY = "claude_linked_busy"
 CLAUDE_WRITER_CONFLICT = "claude_native_writer_conflict"
 CLAUDE_NOT_RECORDED = "claude_linked_turn_not_recorded"
 CLAUDE_FORK_DETECTED = "claude_linked_fork_detected"
+#: The live-session transport this module owns: waiting for a prompt to be cancelled mid-poll.
+CLAUDE_CANCELLED = "claude_cancelled"
+#: The native session is LIVE in Claude Code's own registry: the sequential ``-p --resume`` path
+#: would fork its transcript (anthropics/claude-code#97833), so the turn goes through the peer
+#: messaging socket instead (``hermes_cli/claude_peer_messaging.py``).
+CLAUDE_LIVE_TURN = "claude_live_peer_turn"
 
 _PREFIX_BYTES = 64 * 1024
 _MAX_PHANTOM_NAMES = 3
@@ -98,6 +105,10 @@ class LinkedClaudeTurn:
     bytes_appended: int = 0
     slug_verified: bool = False
     turn: Any = None
+    #: ``"peer"`` — delivered through the live session's messaging socket while that session ran
+    #: (``run_linked_claude_turn`` never spawns a second ``claude --resume`` against it);
+    #: ``"resume"`` — the sequential headless resume used when the session is not live.
+    transport: str = "resume"
 
 
 @dataclass(frozen=True)
@@ -426,7 +437,10 @@ def run_linked_claude_turn(
 ) -> LinkedClaudeTurn:
     """Append *prompt* to the linked Claude thread and return the rows to display.
 
-    The entry point a turn loop calls.
+    The entry point a turn loop calls. A session that is LIVE in Claude Code's registry is
+    continued through its messaging socket (concurrent, no second CLI process — see
+    :func:`_run_live_peer_turn`); only a session with no live process falls through to the
+    sequential headless ``claude -p --resume`` transport.
 
     Args:
         prompt: the user's message; passed to the CLI as ``-p``'s value, or on stdin when it starts
@@ -461,9 +475,6 @@ def run_linked_claude_turn(
     target = resolve_linked_claude_target(store=store, session_id=session_id,
                                           native_session_id=native_session_id, cwd=cwd,
                                           profile_home=profile_home)
-    from agent.transports.claude_cli_resume import (
-        DEFAULT_TURN_TIMEOUT_SECONDS, ClaudeCliError, run_claude_resume_turn,
-    )
 
     if config is None and claude_bin is None:
         # A gateway/service launch has a bare PATH; `model.claude_bin` is the operator's override
@@ -472,27 +483,166 @@ def run_linked_claude_turn(
 
         config = load_config()
 
-    env_overrides = {"CLAUDE_CONFIG_DIR": str(target.projects_root.parent)}
     with native_thread_lock(target.native_session_id, timeout=lock_timeout):
-        before = _snapshot_or_refuse(target)
-        projects_before = project_session_files(target.projects_root)
-        try:
-            turn = run_claude_resume_turn(
-                prompt, native_session_id=target.native_session_id, cwd=target.cwd,
-                claude_bin=claude_bin, config=config,
-                timeout=DEFAULT_TURN_TIMEOUT_SECONDS if timeout is None else timeout,
-                cancel_event=cancel_event, on_event=on_event, env_overrides=env_overrides)
-        except ClaudeCliError as exc:
-            raise _transport_failure(exc, target, projects_before) from exc
-        # A second transcript is the headline failure, so it is checked before "did ours grow":
-        # a turn that wrote the thread somewhere else also left this file untouched.
-        _assert_single_transcript(target, projects_before)
-        after = verify_native_append(before, target.native_session_id)
+        live = _live_peer_target(target, profile_home)
+        if live is not None:
+            return _run_live_peer_turn(prompt, target, live, timeout=timeout,
+                                       cancel_event=cancel_event)
+        return _run_sequential_resume_turn(
+            prompt, target, claude_bin=claude_bin, config=config, timeout=timeout,
+            cancel_event=cancel_event, on_event=on_event)
+
+
+def _run_sequential_resume_turn(prompt, target, *, claude_bin, config, timeout, cancel_event,
+                                on_event) -> LinkedClaudeTurn:
+    """The headless ``claude -p --resume`` path, for a session with NO live process."""
+    from agent.transports.claude_cli_resume import (
+        DEFAULT_TURN_TIMEOUT_SECONDS, ClaudeCliError, run_claude_resume_turn,
+    )
+
+    env_overrides = {"CLAUDE_CONFIG_DIR": str(target.projects_root.parent)}
+    before = _snapshot_or_refuse(target)
+    projects_before = project_session_files(target.projects_root)
+    try:
+        turn = run_claude_resume_turn(
+            prompt, native_session_id=target.native_session_id, cwd=target.cwd,
+            claude_bin=claude_bin, config=config,
+            timeout=DEFAULT_TURN_TIMEOUT_SECONDS if timeout is None else timeout,
+            cancel_event=cancel_event, on_event=on_event, env_overrides=env_overrides)
+    except ClaudeCliError as exc:
+        raise _transport_failure(exc, target, projects_before) from exc
+    # A second transcript is the headline failure, so it is checked before "did ours grow":
+    # a turn that wrote the thread somewhere else also left this file untouched.
+    _assert_single_transcript(target, projects_before)
+    after = verify_native_append(before, target.native_session_id)
     return LinkedClaudeTurn(
         native_session_id=target.native_session_id, session_path=target.session_path,
         cwd=target.cwd, prompt=prompt, rows=turn.rows, final_text=turn.final_text,
         output_format=turn.output_format, argv=turn.argv,
         bytes_appended=after.size - before.size, slug_verified=target.slug_verified, turn=turn)
+
+
+def _live_peer_target(target: LinkedClaudeTarget, profile_home: Any):
+    """The live registry row for this native session, or ``None`` when it is not live.
+
+    Registry access failures are TRANSPORT failures for a live send only when they prove
+    liveness; a missing registry (older claude, another platform) just means "not live", and the
+    sequential resume path decides the rest. This is the #97833 fork boundary: a live row here is
+    the ONLY thing that reroutes the turn away from the resume transport.
+    """
+    from hermes_cli.claude_peer_messaging import live_claude_session
+
+    return live_claude_session(target.native_session_id, profile_home)
+
+
+#: How long a live peer turn may wait for the native session to write our prompt (the receiving
+#: claude answers its queue after its current turn; a long current turn is still "live delivery").
+_LIVE_TURN_PROMPT_TIMEOUT_S = 90.0
+#: Poll cadence while waiting for the native file to grow (a bound, never a fixed sleep).
+_LIVE_TURN_POLL_S = 0.5
+
+
+def _run_live_peer_turn(prompt: str, target: LinkedClaudeTarget, live,
+                        *, timeout: float | None, cancel_event: Any) -> LinkedClaudeTurn:
+    """Deliver *prompt* through the live session's messaging socket and prove it landed.
+
+    The live claude is the ONLY writer: we read the transcript before and after and never spawn
+    a second CLI against the session (that is the #97833 fork). Rows for display are projected
+    from the records the live session itself appended.
+    """
+    from hermes_cli import claude_peer_messaging as peer
+
+    before = _snapshot_or_refuse(target)
+    try:
+        peer.send_peer_prompt(target.native_session_id, prompt, cancel_event=cancel_event)
+    except peer.ClaudePeerError as exc:
+        raise LinkedClaudeError(exc.code, exc.detail, target.native_session_id) from None
+    deadline = time.monotonic() + (timeout if timeout is not None else _LIVE_TURN_PROMPT_TIMEOUT_S)
+    appended = _wait_for_native_append(before, target, deadline, cancel_event)
+    rows, final_text = _project_live_append(prompt, appended)
+    if not rows and not final_text:
+        raise LinkedClaudeError(
+            CLAUDE_NOT_RECORDED,
+            "the live Claude session accepted the message but has not written the turn yet "
+            "(it may still be finishing its current task); send again in a moment",
+            target.native_session_id)
+    return LinkedClaudeTurn(
+        native_session_id=target.native_session_id, session_path=target.session_path,
+        cwd=target.cwd, prompt=prompt, rows=rows, final_text=final_text,
+        output_format="live-peer", argv=(live.socket_path,),
+        bytes_appended=len(json.dumps(appended, default=str).encode()) if appended else 0,
+        slug_verified=target.slug_verified, transport="peer")
+
+
+def _wait_for_native_append(before: NativeSnapshot, target: LinkedClaudeTarget,
+                            deadline: float, cancel_event: Any) -> list[dict]:
+    """Read-only poll until the live session wrote new records (or the bound expires)."""
+    appended: list[dict] = []
+    while time.monotonic() < deadline:
+        if cancel_event is not None and callable(getattr(cancel_event, "is_set", None)) \
+                and cancel_event.is_set():
+            raise LinkedClaudeError(CLAUDE_CANCELLED, "the live turn was cancelled",
+                                   target.native_session_id)
+        try:
+            after = native_snapshot(target.session_path)
+            if after.size > before.size:
+                appended = _read_appended_records(before, after)
+                if appended:
+                    return appended
+        except OSError:
+            pass  # a live writer may stat mid-append; the next poll re-reads
+        time.sleep(_LIVE_TURN_POLL_S)
+    return appended
+
+
+def _read_appended_records(before: NativeSnapshot, after: NativeSnapshot) -> list[dict]:
+    """Parse the bytes the live session appended, tolerating a torn in-flight tail."""
+    records: list[dict] = []
+    with before.path.open("rb") as handle:
+        handle.seek(before.size)
+        chunk = handle.read(after.size - before.size)
+    for raw in chunk.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line.decode("utf-8", errors="strict"))
+        except (ValueError, UnicodeDecodeError):
+            continue  # a live writer may be mid-line; only complete records count
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
+def _project_live_append(prompt: str, records: list[dict]) -> tuple[list[dict], str]:
+    """Display rows from the records the LIVE session wrote for this turn.
+
+    The receiving session writes its own user row for the delivered prompt, then its assistant
+    reply. Both are projected (redacted) for display; nothing is written to the Hermes transcript.
+    A turn still running (no assistant text yet) shows the user row, so the surface sees delivery
+    instead of an invented failure.
+    """
+    from hermes_cli.claude_linked_history import _timestamp
+    from hermes_cli.foreign_sessions import _message_turn
+    from hermes_cli.foreign_linked_store import safe_native_text
+
+    rows: list[dict] = []
+    for obj in records:
+        if obj.get("type") not in ("user", "assistant"):
+            continue
+        if obj.get("isSidechain") or obj.get("isMeta"):
+            continue
+        turn = _message_turn(obj.get("message"))
+        if turn is None:
+            continue
+        role, text = turn
+        rows.append({"role": role, "content": safe_native_text(text), "timestamp": _timestamp(obj)})
+    final_text = ""
+    for row in reversed(rows):
+        if row.get("role") == "assistant" and row.get("content"):
+            final_text = row["content"]
+            break
+    return rows, final_text
 
 
 def _snapshot_or_refuse(target: LinkedClaudeTarget) -> NativeSnapshot:

@@ -302,7 +302,7 @@ def _turn_lock(lock_dir: Path | None, lease_key: str, wait_seconds: float) -> It
 def _native_lease_owner_info(store_root: Path, lease_key: str) -> dict:
     path = Path(store_root) / "active" / f"{lease_key}.lock.json"
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
