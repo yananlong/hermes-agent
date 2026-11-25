@@ -9,9 +9,11 @@ export const TERMINAL_FONT_FAMILY =
 /** Default embedded-terminal font size (px). */
 export const DEFAULT_TERMINAL_FONT_SIZE = 15;
 
-const BUNDLED_FACES = ["400", "700", "italic 400"].map(
-  (descriptor) => `${descriptor} 1em 'Source Code Pro'`,
-);
+function facesFor(family: string): string[] {
+  return ["400", "700", "italic 400"].map(
+    (descriptor) => `${descriptor} 1em ${family}`,
+  );
+}
 
 type TerminalFontSet = Pick<FontFaceSet, "check" | "load">;
 
@@ -31,17 +33,19 @@ function browserFontSet(): TerminalFontSet | undefined {
  * fontFamily/fontSize *change* or the grid resizes. When the bundled font
  * swaps in later, the grid keeps fallback-font metrics (and the WebGL atlas
  * keeps fallback glyphs) until something resizes the host, e.g. toggling the
- * sidebar (#92899). Once the bundled faces load, force a re-measure, refit,
+ * sidebar (#92899). Once the chosen faces load, force a re-measure, refit,
  * and redraw. Returns a cleanup that drops a still-pending load.
  */
 export function refitWhenTerminalFontLoads(
   term: RemeasurableTerminal,
   fit: () => void,
   fontSet: TerminalFontSet | undefined = browserFontSet(),
+  family = TERMINAL_FONT_FAMILY,
 ): () => void {
   if (!fontSet?.load) return () => undefined;
+  const faces = facesFor(family);
   try {
-    if (BUNDLED_FACES.every((face) => fontSet.check(face))) {
+    if (faces.every((face) => fontSet.check(face))) {
       return () => undefined;
     }
   } catch {
@@ -50,7 +54,7 @@ export function refitWhenTerminalFontLoads(
 
   let cancelled = false;
   void Promise.allSettled(
-    BUNDLED_FACES.map((face) => Promise.resolve().then(() => fontSet.load(face))),
+    faces.map((face) => Promise.resolve().then(() => fontSet.load(face))),
   ).then((results) => {
     if (cancelled) return;
     const loaded = results.some(

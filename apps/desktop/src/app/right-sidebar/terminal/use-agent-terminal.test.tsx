@@ -202,6 +202,20 @@ describe('useAgentTerminal', () => {
     expect(terminalInstances.at(-1)?.options.fontFamily).toContain('monospace')
   })
 
+  it('opens with the latest size when it changes during font preparation', async () => {
+    render(<Harness />)
+    await waitFor(() => expect(globalThis.document.fonts.load).toHaveBeenCalled())
+
+    act(() => setTerminalFontSizeFromConfig(23))
+    await act(async () => {
+      resolveFontLoad([])
+      await Promise.resolve()
+    })
+
+    await waitFor(() => expect(xterm.open).toHaveBeenCalled())
+    expect(terminalInstances.at(-1)?.options.fontSize).toBe(23)
+  })
+
   it('retries the mount once a host rendered disconnected joins the document', async () => {
     // The #118004 strand: the pane shell can render the host before it is
     // connected to the document, so the font wait's isCurrent() goes false at

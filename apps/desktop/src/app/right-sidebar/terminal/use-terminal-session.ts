@@ -516,6 +516,7 @@ export function useTerminalSession({
       }
 
       term.options.fontFamily = fontFamily
+      term.options.fontSize = latestFontSizeRef.current
       mount()
     })
 

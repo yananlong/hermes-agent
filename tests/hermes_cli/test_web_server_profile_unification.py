@@ -63,6 +63,20 @@ def _write_jobs(home, jobs):
 
 class TestProfileScopedConfig:
 
+    def test_terminal_font_settings_round_trip_only_in_selected_profile(self, client, isolated_profiles):
+        fields = client.get("/api/config/schema").json()["fields"]
+        assert fields["terminal.font_family"]["type"] == "string"
+        assert fields["terminal.font_size"]["type"] == "number"
+        response = client.put(
+            "/api/config?profile=worker_beta",
+            json={"config": {"terminal": {"font_family": "MesloLGS NF", "font_size": 23}}},
+        )
+        assert response.status_code == 200
+        worker = client.get("/api/config?profile=worker_beta").json()["terminal"]
+        default = client.get("/api/config?profile=default").json()["terminal"]
+        assert (worker["font_family"], worker["font_size"]) == ("MesloLGS NF", 23)
+        assert (default["font_family"], default["font_size"]) == ("", 15)
+        assert "terminal" not in _cfg(isolated_profiles["default"])
 
     def test_config_query_param_equivalent_to_body(self, client, isolated_profiles):
         """The SPA's fetchJSON injects ?profile= — must scope like body.profile."""

@@ -30,6 +30,7 @@ class FakeWebglAddon {
 }
 
 class FakeTerminal {
+  static instances: FakeTerminal[] = [];
   options: Record<string, unknown>;
   rows = 24;
   cols = 80;
@@ -40,6 +41,7 @@ class FakeTerminal {
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
+    FakeTerminal.instances.push(this);
   }
 
   attachCustomKeyEventHandler() {
@@ -96,6 +98,7 @@ class FakeTerminal {
 const maybeReloadForLoopbackWsAuthFailure = vi.fn(() => false);
 const apiMocks = vi.hoisted(() => ({
   buildWsUrl: vi.fn(async () => "ws://localhost/api/pty?channel=chat-1"),
+  getConfig: vi.fn(async (): Promise<Record<string, unknown>> => ({})),
 }));
 const uploadChatImage = vi.hoisted(() =>
   vi.fn(async () => ({ path: "/tmp/pasted.png" })),
@@ -214,6 +217,8 @@ async function render(ui: ReactNode) {
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
+  FakeTerminal.instances = [];
+  apiMocks.getConfig.mockReset().mockResolvedValue({});
   webglInstances.length = 0;
   maybeReloadForLoopbackWsAuthFailure.mockClear();
   apiMocks.buildWsUrl.mockReset();
@@ -691,6 +696,25 @@ describe("ChatPage side panel collapse", () => {
 // strands on "connecting" with no retry. Mirrors the ChatSidebar events-feed
 // coverage in src/components/ChatSidebar.test.tsx.
 describe("ChatPage bundled font swap-in", () => {
+  it("applies profile font changes to the live terminal without reconnecting", async () => {
+    apiMocks.getConfig.mockResolvedValue({ terminal: { font_family: "MesloLGS NF", font_size: 23 } });
+    const { default: ChatPage } = await import("./ChatPage");
+    const { notifyTerminalConfigSaved } = await import("@/hooks/useTerminalAppearance");
+    await render(<MemoryRouter initialEntries={["/chat"]}><ChatPage isActive /></MemoryRouter>);
+
+    const term = FakeTerminal.instances[0];
+    const socket = FakeWebSocket.instances[0];
+    expect(term.options.fontFamily).toContain("'MesloLGS NF'");
+    expect(term.options.fontSize).toBe(23);
+
+    apiMocks.getConfig.mockResolvedValue({ terminal: { font_family: "Hack Nerd Font", font_size: 19 } });
+    await act(async () => { notifyTerminalConfigSaved(""); });
+    expect(term.options.fontFamily).toContain("'Hack Nerd Font'");
+    expect(term.options.fontSize).toBe(19);
+    expect(FakeTerminal.instances).toEqual([term]);
+    expect(FakeWebSocket.instances).toEqual([socket]);
+  });
+
   it("redraws the terminal with the bundled font once it finishes loading", async () => {
     let releaseFont!: () => void;
     const fontGate = new Promise<void>((resolve) => {
