@@ -1,11 +1,15 @@
 import { atom } from 'nanostores'
 
-export const DEFAULT_TERMINAL_FONT_FAMILY = "'JetBrains Mono', 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace"
-export const DEFAULT_TERMINAL_FONT_SIZE = 11
+// 'Source Code Pro' is bundled (src/fonts/, @font-face in src/styles.css) so the embedded
+// terminal renders identically without a system font; the rest stay installed-font fallbacks.
+export const DEFAULT_TERMINAL_FONT_FAMILY =
+  "'Source Code Pro', 'JetBrains Mono', 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace"
+export const DEFAULT_TERMINAL_FONT_SIZE = 15
 export const MIN_TERMINAL_FONT_SIZE = 8
 export const MAX_TERMINAL_FONT_SIZE = 32
 
 export const TERMINAL_FONT_SUGGESTIONS = [
+  'Source Code Pro',
   'MesloLGS NF',
   'JetBrainsMono Nerd Font',
   'CaskaydiaCove Nerd Font',

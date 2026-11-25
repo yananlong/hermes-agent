@@ -1036,6 +1036,10 @@ export const deOverrides = {
       terminalFontPlaceholder: 'MesloLGS NF oder ein CSS-Font-Stack',
       terminalFontPreview: 'Glyph-Vorschau',
       terminalFontReset: 'Standard verwenden',
+      terminalFontSizeTitle: 'Terminalschriftgröße',
+      terminalFontSizeDesc:
+        'Legt die Größe des eingebetteten Terminals in Pixeln fest. Gilt für die Terminalbereiche der Desktop-App und die Web-Konsole; 8 bis 32.',
+      terminalFontSizeReset: 'Standardgröße verwenden',
       chatFontTitle: 'Chat-Schrift',
       chatFontDesc:
         'Wählen Sie eine installierte Schrift für den Chat und den Rest der App. Praktisch für Lesbarkeitsschriften wie OpenDyslexic; lassen Sie das Feld leer, um die Schrift des Themes zu verwenden.',

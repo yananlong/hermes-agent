@@ -1,6 +1,7 @@
 import { act, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { DEFAULT_TERMINAL_FONT_SIZE, setTerminalFontSizeFromConfig } from './terminal-font'
 import { useAgentTerminal } from './use-agent-terminal'
 
 const xterm = vi.hoisted(() => ({
@@ -24,6 +25,8 @@ const terminalRegistrations = vi.hoisted(() => ({
 
 const webglContextLossHandlers = vi.hoisted(() => [] as Array<() => void>)
 
+const terminalInstances = vi.hoisted(() => [] as Array<{ options: Record<string, unknown> }>)
+
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     readonly buffer = { active: {} }
@@ -33,6 +36,7 @@ vi.mock('@xterm/xterm', () => ({
 
     constructor(options: Record<string, unknown>) {
       this.options = { ...options }
+      terminalInstances.push(this)
     }
 
     attachCustomKeyEventHandler = xterm.attachCustomKeyEventHandler
@@ -136,6 +140,8 @@ describe('useAgentTerminal', () => {
     vi.clearAllMocks()
     vi.unstubAllGlobals()
     Reflect.deleteProperty(globalThis.document, 'fonts')
+    terminalInstances.length = 0
+    setTerminalFontSizeFromConfig(DEFAULT_TERMINAL_FONT_SIZE)
   })
 
   it('unmounts safely while initial font preparation is pending', async () => {
@@ -178,6 +184,22 @@ describe('useAgentTerminal', () => {
     const handler = webglContextLossHandlers[webglContextLossHandlers.length - 1]
     expect(() => handler()).not.toThrow()
     expect(xterm.refresh).toHaveBeenCalledWith(0, 23)
+  })
+
+  it('builds xterm with the configured size, not a literal', async () => {
+    // The constructor used to hardcode 11 while the profile setting drove
+    // everything after mount, so a saved size only showed up after a resize.
+    setTerminalFontSizeFromConfig(20)
+    render(<Harness />)
+
+    await act(async () => {
+      resolveFontLoad([])
+      await Promise.resolve()
+    })
+
+    expect(xterm.open).toHaveBeenCalled()
+    expect(terminalInstances.at(-1)?.options.fontSize).toBe(20)
+    expect(terminalInstances.at(-1)?.options.fontFamily).toContain('monospace')
   })
 
   it('retries the mount once a host rendered disconnected joins the document', async () => {
