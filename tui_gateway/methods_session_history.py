@@ -6,8 +6,26 @@ _registry = HandlerRegistry()
 
 # Display names for the linked foreign agents, used in log and error messages.
 _LINKED_AGENT_LABELS = {"codex": "Codex", "claude": "Claude", "mistral": "Mistral"}
-# Where the user must change the model for each linked agent (read-only pointer rows).
+# Where the user must change the model for each linked agent: a linked row's model belongs to the
+# native tool's own thread, so Hermes can only report it, never override it.
 _LINKED_AGENT_MODEL_TOOL = {"codex": "Codex", "claude": "Claude Code", "mistral": "Mistral Vibe"}
+
+#: ``session.history`` / ``session.resume`` refusal for a row whose stored pointer cannot be read.
+#: Distinct from ``-32603`` ("internal error"), which is what an uncaught read became: the store is
+#: healthy and the server is fine — THIS row's configuration is unusable, and the user's fix is to
+#: re-link the session. ``data.reason`` is the stable wire reason, as the 4090 refusals carry theirs.
+LINKED_CONFIG_UNREADABLE_CODE = 4095
+LINKED_CONFIG_UNREADABLE_REASON = "LINKED_CONFIG_UNREADABLE"
+
+
+def _linked_config_unreadable_error(rid) -> dict:
+    """The typed refusal for a linked row whose ``model_config`` cannot be read or validated."""
+    return _err(
+        rid, LINKED_CONFIG_UNREADABLE_CODE,
+        "This session's linked-thread configuration cannot be read — re-link the session from the "
+        "foreign session list",
+        {"reason": LINKED_CONFIG_UNREADABLE_REASON},
+    )
 
 
 def _linked_foreign_target(store, key: str):
@@ -111,7 +129,9 @@ def _session_linked_foreign_agent(session: dict) -> str | None:
 
 
 def _session_is_codex_linked(session: dict) -> bool:
-    # Any linked foreign thread (Codex, Claude, Mistral) is a read-only pointer row.
+    # Any linked foreign thread (Codex, Claude, Mistral) is a pointer row: its transcript lives in
+    # the native tool's store. Appending is a capability of the HOST (``session.foreign.status``),
+    # not of this predicate — a linked row is still a linked row when a send is possible.
     return _session_linked_foreign_agent(session) is not None
 
 
@@ -157,7 +177,12 @@ def _session_history_result(rid, session: dict) -> dict:
     if row_session:
         with _session_db(session) as db:
             if db is not None:
-                linked = _linked_foreign_target(db, row_session)
+                try:
+                    linked = _linked_foreign_target(db, row_session)
+                except ValueError:
+                    # An unreadable pointer is a typed refusal, never a -32603 internal error.
+                    logger.warning("Linked session row %s has an unreadable configuration", row_session)
+                    return _linked_config_unreadable_error(rid)
                 if linked is not None:
                     agent, native_id = linked
                     label = _LINKED_AGENT_LABELS[agent]

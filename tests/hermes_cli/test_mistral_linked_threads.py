@@ -57,7 +57,7 @@ def store(tmp_path, monkeypatch):
 
 
 def test_list_covers_unified_and_legacy_sessions_without_previews(store):
-    root, _ = store
+    _root, _ = store
     page = linked.list_mistral_threads(limit=10)
     ids = {row["id"] for row in page["threads"]}
     assert ids == {SESSION_ID, LEGACY_SHORT}

@@ -9,7 +9,7 @@
 import { Codicon } from '@/components/ui/codicon'
 import { useI18n } from '@/i18n'
 
-import { agentHostCapability, type HostCapability } from './capability'
+import { agentDisplayName, agentHostCapability, type HostCapability } from './capability'
 import { agentAvailabilityText } from './capability-copy'
 
 const AGENTS = ['codex', 'claude', 'mistral'] as const
@@ -18,9 +18,15 @@ interface HostCapabilityStripProps {
   capability: HostCapability | undefined
   /** Host label to show before the first answer (`session.foreign.list` carries the same one). */
   fallbackHost?: string | null
+  /**
+   * Whose reason the caller renders itself, next to its own controls — `'all'` when the caller
+   * lists every blocked agent (the picker's note block). Those agents keep only their name and
+   * status icon here, so one explanation never appears twice on the same screen.
+   */
+  detailAgent?: (typeof AGENTS)[number] | 'all'
 }
 
-export function HostCapabilityStrip({ capability, fallbackHost }: HostCapabilityStripProps) {
+export function HostCapabilityStrip({ capability, fallbackHost, detailAgent }: HostCapabilityStripProps) {
   const { t } = useI18n()
   const copy = t.sessionImport
   const host = (capability?.state === 'ready' ? capability.status.host : fallbackHost) || copy.connectedComputer
@@ -37,6 +43,9 @@ export function HostCapabilityStrip({ capability, fallbackHost }: HostCapability
         AGENTS.map(agent => {
           const row = agentHostCapability(capability, agent)
           const available = Boolean(row?.store.readable && row.cli.available)
+          // The contextual note under the caller's own buttons already explains this agent;
+          // repeating the sentence here would print the same explanation twice on one screen.
+          const deferred = !available && (detailAgent === 'all' || agent === detailAgent)
 
           return (
             <span
@@ -46,7 +55,7 @@ export function HostCapabilityStrip({ capability, fallbackHost }: HostCapability
               key={agent}
             >
               <Codicon name={available ? 'pass-filled' : 'circle-slash'} />
-              {agentAvailabilityText(copy, capability, agent, host)}
+              {deferred ? agentDisplayName(agent) : agentAvailabilityText(copy, capability, agent, host)}
             </span>
           )
         })}

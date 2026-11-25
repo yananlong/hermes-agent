@@ -301,16 +301,18 @@ export const en: Translations = {
     codexLinkError: 'Could not open this Codex thread.',
     codexNoThreads: 'No Codex threads found',
     claudeThreads: 'Open a Claude Code session',
-    claudeThreadsHelp: 'Continue the same Claude Code conversation in Hermes (linked, read-only).',
+    claudeThreadsHelp:
+      'Continue the same Claude Code conversation in Hermes — the thread itself stays in Claude Code’s own store.',
     mistralThreads: 'Open a Mistral Vibe session',
-    mistralThreadsHelp: 'Continue the same Mistral Vibe conversation in Hermes (linked, read-only).',
+    mistralThreadsHelp:
+      'Continue the same Mistral Vibe conversation in Hermes — the thread itself stays in Mistral Vibe’s own store.',
     linkedLink: 'Open linked session',
     linkedLinking: 'Opening session…',
     linkedLinkError: 'Could not open this session.',
     linkedNoThreads: 'No native sessions found',
     linkedHandoff: 'Close the session in other clients before continuing here.',
     linkedReadonlyWarning:
-      'This linked session reads its history live from the native tool’s own store. Hermes stores only a pointer and does not write a second transcript; new turns cannot be appended to the native session from Hermes yet.',
+      'This linked session reads its history live from the native tool’s own store. Hermes stores only a pointer and does not write a second transcript, so this view is read-only here.',
     hostCapabilityChecking: 'Checking what this host can run…',
     hostCapabilityUnknown:
       'This gateway predates the host capability check, so linked sessions stay read-only here.',
@@ -320,7 +322,7 @@ export const en: Translations = {
     hostCapabilityCli: (label: string, host: string) => `${label} is not installed on ${host}.`,
     hostCapabilityBuild: (label: string) => `This gateway cannot continue ${label} threads yet.`,
     hostCapabilityReadOnly: (label: string) =>
-      `Sending is read-only in this build — it cannot append to ${label} threads yet.`,
+      `Sending is read-only in this build — it cannot append to ${label} threads.`,
     hostCapabilityWritable: (label: string) =>
       `New messages are appended to this ${label} thread on the host and are visible to ${label} there.`,
     title: 'Continue from another app',

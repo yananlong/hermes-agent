@@ -80,7 +80,12 @@ def test_reader_tolerates_both_store_shapes():
 
 
 def test_reader_returns_empty_for_a_row_it_cannot_reach():
-    """No row / no reader / a raising getter is "not a pointer", not a refusal."""
+    """No row at all / no reader at all is "not a pointer"; a store that RAISES is a refusal.
+
+    The raising case is the one this reader used to swallow: ``SQLITE_BUSY`` and I/O errors land
+    here routinely, and reading them as "provably an ordinary session" is what made a locked store
+    hand back a writable-looking pointer row (the module refuses instead — see the docstring).
+    """
     assert row_model_config(_HandleStore({}), "missing") == {}
     assert row_model_config(_HandleStore({"row": _Record(None)}), "row") == {}
     assert row_model_config(object(), "row") == {}
@@ -90,7 +95,19 @@ def test_reader_returns_empty_for_a_row_it_cannot_reach():
         def get_session(self, _key):
             raise OSError("state.db is gone")
 
-    assert row_model_config(_Broken(), "row") == {}
+    with pytest.raises(LinkedConfigUnreadable):
+        row_model_config(_Broken(), "row")
+
+    class _BrokenHandle:
+        def __init__(self):
+            self.sessions = type("Sessions", (), {
+                "get": lambda _self, _key: (_ for _ in ()).throw(RuntimeError("database is locked"))})()
+
+    with pytest.raises(LinkedConfigUnreadable):
+        row_model_config(_BrokenHandle(), "row")
+    # ... and the boolean guard reads the same failure as "linked, owner unknown", which refuses.
+    assert linked_foreign_kind(_Broken(), "row") == "foreign"
+    assert linked_foreign_kind(_BrokenHandle(), "row") == "foreign"
 
 
 @pytest.mark.parametrize("raw", ["{not json", '["a list"]', "3", "null-ish"])

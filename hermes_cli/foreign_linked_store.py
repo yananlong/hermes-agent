@@ -41,8 +41,12 @@ def page_params(cursor, limit):
     return {"cursor": cursor, "limit": limit}
 
 
-def check_owning_profile(profile_home=None) -> Path:
+def check_owning_profile(profile_home=None) -> tuple[Path, bool]:
     """Resolve the profile whose foreign store may be read, mirroring the Codex scope rules.
+
+    Returns ``(target_home, routed)``: the profile home the caller may read, and whether a routed
+    (multiplexed / secondary) profile is active, which is what forces that profile to name its own
+    store instead of leaning on the account-wide default.
 
     The account-wide ``~/.claude`` / ``~/.vibe`` fallback is a launch-profile default only; a routed
     secondary profile must name its own store via its secret scope, otherwise session IDs could
@@ -137,6 +141,21 @@ LEGACY_LINKED_ROW_MODES = {
 }
 
 
+def store_row_reader(store) -> bool:
+    """Whether this store exposes any way to read one session row.
+
+    Both shapes in the tree are tolerated (the persistence handle's ``sessions.get``, and
+    ``SessionDB.get_session``). A handle that cannot even be inspected answers ``False`` rather
+    than raising: a store nobody can read is a store whose pointer status is unknown, and callers
+    treat that as "not provably ordinary" (``agent/linked_foreign_turn.py``).
+    """
+    try:
+        return (callable(getattr(getattr(store, "sessions", None), "get", None))
+                or callable(getattr(store, "get_session", None)))
+    except Exception:  # health: allow BLE001 -- a store that cannot be inspected has no reader
+        return False
+
+
 def row_model_config(store, session_id: str) -> dict:
     """The parsed ``model_config`` of one Hermes session row, tolerating both store shapes.
 
@@ -144,10 +163,12 @@ def row_model_config(store, session_id: str) -> dict:
     persistence handle exposes the ``sessions`` repository (a record whose ``model_config`` is
     already a dict). Duck-typed doubles appear in tests, so every access is guarded.
 
-    Returns ``{}`` when there is no readable row at all — a pointer cannot exist without one, and a
-    store that is genuinely unavailable is refused loudly further down the call. Raises
-    :class:`LinkedConfigUnreadable` when the row DOES carry a configuration this reader cannot
-    validate: that is the fail-closed answer, never "ordinary session".
+    Returns ``{}`` only when there is no readable row at all AND no way to ask for one — a pointer
+    cannot exist without a row, and a store with no row reader is refused further down the call
+    (``agent/linked_foreign_turn.py``). Raises :class:`LinkedConfigUnreadable` when the row DOES
+    carry a configuration this reader cannot validate, and also when the store raises while the row
+    is being read: a ``SQLITE_BUSY`` or an I/O error proves nothing about the row, and "provably an
+    ordinary session" is the one answer that must never be guessed.
     """
     if store is None or not isinstance(session_id, str) or not session_id:
         return {}
@@ -156,9 +177,9 @@ def row_model_config(store, session_id: str) -> dict:
     if callable(getter):
         try:
             record = getter(session_id)
-        except Exception:
-            # The row itself is unreadable, not damaged: nothing here proves a pointer exists.
-            return {}
+        except Exception as exc:
+            raise LinkedConfigUnreadable(
+                f"session {session_id} could not be read from its store") from exc
         if record is None:
             return {}
         raw = getattr(record, "model_config", None)
@@ -168,8 +189,9 @@ def row_model_config(store, session_id: str) -> dict:
             return {}
         try:
             row = get_session(session_id)
-        except Exception:
-            return {}
+        except Exception as exc:
+            raise LinkedConfigUnreadable(
+                f"session {session_id} could not be read from its store") from exc
         if not isinstance(row, dict):
             return {}
         raw = row.get("model_config")
@@ -208,6 +230,8 @@ def linked_foreign_kind(store, session_id: str) -> str | None:
     try:
         config = row_model_config(store, session_id)
     except LinkedConfigUnreadable:
+        return "foreign"
+    except Exception:  # health: allow BLE001 -- an unreadable store is not "provably not a pointer"
         return "foreign"
     for flag in LINKED_FOREIGN_FLAGS:
         if config.get(flag) is True:

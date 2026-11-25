@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { isLinkedForeignSession, linkedForeignAgent, linkedResumeBlocked } from './linked-session'
+import { isLinkedForeignSession, linkedForeignAgent, linkedResumeBlocked, linkedResumeOverlay } from './linked-session'
 
 describe('linkedForeignAgent', () => {
   it('returns null for ordinary sessions and missing rows', () => {
@@ -45,5 +45,26 @@ describe('linkedResumeBlocked', () => {
     expect(linkedResumeBlocked({ id: 'a', agent: null, verified: true }, 'a')).toBe(false)
     // No resume target at all: nothing to gate.
     expect(linkedResumeBlocked(null, null)).toBe(false)
+  })
+})
+
+describe('linkedResumeOverlay', () => {
+  it('shows progress, not an empty verdict panel, while the lookup is in flight', () => {
+    // Nothing asked yet / wrong id answered / answered for another target: the
+    // canvas has no notice to render, so the blocked panel must not take it.
+    expect(linkedResumeOverlay(null, 'a')).toBe('loading')
+    expect(linkedResumeOverlay({ id: 'b', agent: null, verified: true }, 'a')).toBe('loading')
+    expect(linkedResumeOverlay({ id: 'b', agent: 'claude', verified: true }, 'a')).toBe('loading')
+  })
+
+  it('reserves the verdict panel for a linked or unverifiable target', () => {
+    expect(linkedResumeOverlay({ id: 'a', agent: 'claude', verified: true }, 'a')).toBe('blocked')
+    expect(linkedResumeOverlay({ id: 'a', agent: null, verified: false }, 'a')).toBe('blocked')
+  })
+
+  it('covers nothing when there is no resume target or the row is ordinary', () => {
+    expect(linkedResumeOverlay(null, null)).toBe('none')
+    expect(linkedResumeOverlay(null, '')).toBe('none')
+    expect(linkedResumeOverlay({ id: 'a', agent: null, verified: true }, 'a')).toBe('none')
   })
 })

@@ -709,6 +709,12 @@ def _compact_before_cache_expiry(sid: str, session: dict, action: str = "compact
                 session, trigger=TRIGGER, before_messages=before, history_version=version)
         except CompressionLockHeld:
             return
+        except LinkedNativeCompactionUnsupported:
+            # A linked Claude Code / Mistral Vibe row keeps its transcript in the native CLI and
+            # compacts there. It is not a pointer row at all to this edge, so there is nothing to
+            # do and nothing to report: skip it, like a lock-skip (and never the summarizer).
+            logger.info("Cache-expiry compaction skipped: linked native row (sid=%s)", sid)
+            return
         except Exception:
             finalize_context_engine_compression_notification(agent, committed=False)
             raise

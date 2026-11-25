@@ -191,3 +191,55 @@ def test_submit_still_writes_the_user_row_for_an_ordinary_session(db, monkeypatc
     staged = server._write_submit_user_row(_live("plain"), "hello there", None)
 
     assert staged is not None and staged["content"] == "hello there"
+
+
+# ── an unreadable pointer is a typed 4xxx refusal, never -32603 "internal error" ────────────
+
+
+def test_history_of_an_unreadable_pointer_row_is_a_typed_refusal(db, monkeypatch):
+    """``session.history`` must not answer ``-32603`` for a row only the user can repair.
+
+    ``linked_thread_id`` raises ``LinkedConfigUnreadable`` (a ``ValueError``) when a pointer row's
+    ``model_config`` cannot be parsed or validated. That used to escape the handler and surface as
+    a generic internal error, which reads as "the server is broken" for a row whose fix is to
+    re-link the session.
+    """
+    from hermes_cli.foreign_linked_store import LinkedConfigUnreadable
+
+    def _raise(*_args, **_kwargs):
+        raise LinkedConfigUnreadable("session bad has a model configuration that cannot be parsed")
+
+    monkeypatch.setattr(server, "_session_db", lambda _session: contextlib.nullcontext(db))
+    monkeypatch.setattr(server, "_submit_row_target_key", lambda _session: "bad")
+    monkeypatch.setattr(server, "_linked_foreign_target", _raise)
+
+    response = server._session_history_result("history", _live("bad"))
+
+    assert response["error"]["code"] == 4095, response
+    assert response["error"]["data"]["reason"] == "LINKED_CONFIG_UNREADABLE"
+    assert "re-link" in response["error"]["message"]
+    assert "internal" not in response["error"]["message"].lower()
+
+
+def test_resume_of_an_unreadable_pointer_row_is_a_typed_refusal(db, monkeypatch):
+    """``session.resume`` maps the same refusal to the same typed code.
+
+    The read happens inside ``read_resume_history`` → ``_linked_foreign_target``; the handler now
+    converts it instead of letting the dispatcher answer ``-32603``.
+    """
+    from hermes_cli.foreign_linked_store import LinkedConfigUnreadable
+
+    def _raise(_ctx):
+        raise LinkedConfigUnreadable("session bad has a model configuration that cannot be parsed")
+
+    monkeypatch.setattr(server, "_profile_session_db", lambda _home: (db, False))
+    monkeypatch.setattr(server, "_persistence_beside", lambda _db: db)
+    monkeypatch.setattr(server, "_release_persistence", lambda _handle: None)
+    monkeypatch.setattr(server, "_resume_locate", _raise)
+
+    response = server.handle_request({"id": "resume", "method": "session.resume",
+                                      "params": {"session_id": "bad"}})
+
+    assert response["error"]["code"] == 4095, response
+    assert response["error"]["data"]["reason"] == "LINKED_CONFIG_UNREADABLE"
+    assert "re-link" in response["error"]["message"]

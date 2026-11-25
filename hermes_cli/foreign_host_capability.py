@@ -123,11 +123,18 @@ def store_capability(agent: str, profile_home=None, *, host: str | None = None) 
 
 
 def _display_path(path: Path) -> str:
-    """``~``-collapsed path: enough to recognize an install, never a home-directory disclosure."""
+    """Display form of a resolved CLI path: never a raw host path.
+
+    Inside the user's home the path is ``~``-collapsed (enough to recognize an install, no
+    username); anywhere else — ``/usr/local/bin/claude``, a version manager's shim, a private
+    prefix — only the basename is published. The absolute location stays server-side: a status
+    answer is readable by any authenticated client of this gateway, and it must not enumerate
+    the host's filesystem for them.
+    """
     try:
         return f"~/{path.relative_to(Path.home()).as_posix()}"
     except ValueError:
-        return str(path)
+        return path.name
 
 
 def _command_display(token: str) -> str:
@@ -200,8 +207,9 @@ def cli_capability(agent: str, *, config=None, probe_version: bool = False,
     """Whether *agent*'s CLI resolves on this host, and its display path / version when cheap.
 
     ``command``/``path`` never widen what a client already learns from the foreign RPCs: an
-    absolute configured binary collapses to its basename, the resolved path is ``~``-collapsed,
-    and ``version`` (opt-in) is reduced to a short token.
+    absolute configured binary collapses to its basename, the resolved path is ``~``-collapsed
+    inside this profile's home and reduced to a basename outside it, and ``version`` (opt-in) is
+    reduced to a short token.
     """
     label, host = agent_label(agent), host or host_label()
     key = "codex_bin" if agent == "codex" else ("claude_bin" if agent == "claude" else "vibe_bin")

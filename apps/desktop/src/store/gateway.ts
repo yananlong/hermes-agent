@@ -39,6 +39,7 @@ import {
   sharedPrimaryRoute
 } from '@/store/gateway-shared-route'
 import type { Secondary } from '@/store/gateway-socket-entry'
+import { resetHostCapabilityCache } from '@/store/host-capability-cache'
 import { notifyError, RECOVERY_ACTIONS } from '@/store/notifications'
 import { markNativeNotifyBaseline } from '@/store/notify-baseline'
 import { setConnection, setGatewayState } from '@/store/session'
@@ -535,6 +536,12 @@ function reportGatewayState(profile: string, state: ConnectionState): void {
   // launch/reconnect doesn't alert about state that already existed.
   if (state === 'open') {
     markNativeNotifyBaseline()
+    // A socket that just opened may be a NEW gateway build: the backend restarted
+    // (upgrade, profile switch, new remote) and may well now serve
+    // `session.foreign.status`. Drop the `-32601` verdicts cached against the
+    // previous build so the next probe asks instead of assuming "unknown" until
+    // the window is relaunched.
+    resetHostCapabilityCache()
   }
 
   if (normKey(profile) === g.activeKey) {

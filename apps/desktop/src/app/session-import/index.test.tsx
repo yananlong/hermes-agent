@@ -16,7 +16,12 @@ const hostCapability = vi.hoisted(() => ({ current: undefined as HostCapability 
 
 vi.mock('./api', () => ({ codexThreadRequest: vi.fn(), foreignRequest: vi.fn() }))
 vi.mock('./use-host-capability', () => ({ useHostCapability: () => hostCapability.current }))
-vi.mock('@/store/session', () => ({ setSessionOwnerHint: vi.fn() }))
+vi.mock('@/store/session', async () => {
+  // use-host-capability reads the connection state to re-probe after a reconnect.
+  const { atom } = await import('nanostores')
+
+  return { $gatewayState: atom('open'), setSessionOwnerHint: vi.fn() }
+})
 vi.mock('@/components/assistant-ui/markdown-text', () => ({
   MarkdownTextContent: ({ text }: { text: string }) => <p>{text}</p>
 }))

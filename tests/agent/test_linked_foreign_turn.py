@@ -72,6 +72,10 @@ if MODE == "ok":
 
 for event in (
     {"type": "system", "subtype": "init", "session_id": SESSION_ID, "cwd": os.getcwd()},
+    # The CLI echoes the submitted prompt as its own user turn, exactly like the real one. The route
+    # must drop that echo, because the turn's user row is already in the caller's messages.
+    {"type": "user", "session_id": SESSION_ID,
+     "message": {"role": "user", "content": prompt}},
     {"type": "assistant", "session_id": SESSION_ID,
      "message": {"role": "assistant", "model": "claude-sonnet-4-5",
                  "content": [{"type": "text", "text": reply}]}},
@@ -146,11 +150,17 @@ sys.exit(0)
 
 
 class _FakeAgent:
-    """The attributes the turn route reads off a real ``AIAgent`` (and nothing else)."""
+    """The attributes the turn route reads off a real ``AIAgent`` (and nothing else).
 
-    def __init__(self, store, session_id=HERMES_SID, *, api_mode="chat_completions", cwd=None):
+    ``persistence_only`` is the gateway's shape: ``gateway/session_execution.py::_build_fresh_agent``
+    binds ``persistence=`` and (before the fix) no ``session_db=`` at all, so detection keyed on
+    ``_session_db`` answered "ordinary" for every linked row on that path.
+    """
+
+    def __init__(self, store, session_id=HERMES_SID, *, api_mode="chat_completions", cwd=None,
+                 persistence_only=False):
         self.persistence = store
-        self._session_db = store
+        self._session_db = None if persistence_only else store
         self.session_id = session_id
         self.api_mode = api_mode
         self.session_cwd = cwd
@@ -239,9 +249,12 @@ def test_claude_send_appends_to_the_native_thread_and_leaves_the_row_empty(claud
     assert result["agent_persisted"] is True
     assert result["linked_foreign_agent"] == "claude"
     assert result["linked_native_session_id"] == CLAUDE_ID
-    # The projection rides along for live display, and only once (no duplicated user row).
+    # The projection rides along for live display, and only once: the CLI echoes the submitted
+    # prompt as a user stream event, and re-appending it would show the turn twice.
     assert [row["role"] for row in state.messages] == ["user", "assistant"]
+    assert state.messages[0]["content"] == "add a docstring"
     assert state.messages[-1]["content"] == "echo: add a docstring"
+    assert sum(1 for row in state.messages if row["role"] == "user") == 1
 
 
 def test_claude_send_is_dispatched_even_when_the_runtime_says_codex(claude_env, store, monkeypatch):
@@ -370,6 +383,104 @@ def test_a_linked_row_with_unreadable_configuration_fails_closed(store, monkeypa
     assert result is not None and result["completed"] is False
     assert result["linked_error_code"] == "linked_foreign_config_unreadable"
     assert "re-link" in result["final_response"]
+
+
+# ── F4: the gate cannot depend on ONE attribute a surface happens to bind ─────────────────────
+
+
+def test_a_persistence_only_agent_still_appends_to_the_linked_native_thread(claude_env, store):
+    """The gateway binds ``persistence=`` and no ``session_db=``: detection must not hinge on it.
+
+    ``_build_fresh_agent`` threads the linked row's cwd and its persistence handle into the agent,
+    so keying the gate on ``agent._session_db`` alone made every gateway turn over a linked row
+    look like an ordinary Hermes session — the fork this module exists to prevent.
+    """
+    agent = _FakeAgent(store, cwd=str(claude_env.workspace), persistence_only=True)
+    assert agent._session_db is None and agent.persistence is store
+    state = _row_state(text="add a docstring")
+    before = claude_env.transcript.read_text(encoding="utf-8").count("\n")
+
+    # Detect first: a None here is what handed the turn to the generic loop.
+    assert route.linked_foreign_agent(agent) == "claude"
+    result = conversation_loop._turn_without_loop(agent, state, "")
+
+    assert result is not None, "None hands this turn to the generic model loop (the fork)"
+    assert result["linked_foreign_agent"] == "claude"
+    assert result["completed"] is True and result["error"] is None
+    assert result["final_response"] == "echo: add a docstring"
+    after = claude_env.transcript.read_text(encoding="utf-8").count("\n")
+    assert after == before + 2, "the append went to the native thread"
+    assert transcript_rows(store, HERMES_SID) == [], "and wrote no second transcript"
+
+
+def test_a_persistence_only_agent_over_a_linked_row_is_refused_not_answered(store, monkeypatch):
+    """A refused linked turn is a typed result even when only ``persistence`` is bound."""
+    monkeypatch.setattr(route, "_run_claude", _claude_refusal)
+    seed_session(store, "row", "desktop",
+                 model_config={"claude_linked_thread": True, "claude_session_id": CLAUDE_ID})
+    agent = _FakeAgent(store, "row", persistence_only=True)
+
+    result = conversation_loop._turn_without_loop(agent, _row_state(), "")
+
+    assert result is not None, "None is the fork: the generic loop would answer the user"
+    assert result["completed"] is False and result["partial"] is True
+    assert result["failure_reason"] == "claude_missing_binary"
+    assert result["linked_error_code"] == "claude_missing_binary"
+    assert result["agent_persisted"] is True
+    assert transcript_rows(store, "row") == []
+
+
+class _RaisingStore:
+    """A bound store whose row read raises (SQLITE_BUSY / I/O), the shaping of a live gateway."""
+
+    read_only = False
+
+    def __init__(self):
+        self.sessions = type("Sessions", (), {
+            "get": lambda _self, _key: (_ for _ in ()).throw(RuntimeError("database is locked"))})()
+
+
+class _BlindStore:
+    """A bound store that exposes no way to read a row at all."""
+
+    read_only = False
+
+
+@pytest.mark.parametrize("make_store, why", [
+    (lambda: _RaisingStore(), "the store raises while the row is read"),
+    (lambda: _BlindStore(), "the store exposes no row reader"),
+])
+def test_an_unreadable_store_refuses_a_linked_row_instead_of_answering_it(make_store, why):
+    """A store nobody can read cannot prove the row ordinary, so the gate refuses (never None)."""
+    agent = _FakeAgent(make_store(), "row", persistence_only=True)
+
+    assert route.linked_foreign_agent(agent) == "foreign", why
+    result = conversation_loop._turn_without_loop(agent, _row_state(), "")
+
+    assert result is not None, why
+    assert result["completed"] is False
+    assert result["linked_error_code"] == "linked_foreign_config_unreadable"
+    assert result["api_calls"] == 0, "a refusal makes no inference request"
+    assert "re-link" in result["final_response"]
+
+
+def test_a_storeless_helper_agent_is_not_a_pointer_row(store):
+    """The background-review fork / curator / prompt inspection bind no store at all.
+
+    They have no row of their own to point at, and refusing them would break every review turn —
+    so "no store" is the one shape that stays "ordinary". It is also unreachable for a
+    session-bound turn: TUI, gateway, api_server, CLI and subagents all bind one of the handles.
+    """
+    seed_session(store, HERMES_SID, "desktop",
+                 model_config={"claude_linked_thread": True, "claude_session_id": CLAUDE_ID})
+
+    class _Fork:
+        persistence = _session_db = None
+        session_id = HERMES_SID
+        api_mode = "chat_completions"
+        _persist_disabled = True
+
+    assert route.linked_foreign_agent(_Fork()) is None
 
 
 def test_a_plain_row_is_not_detected_as_linked(store):

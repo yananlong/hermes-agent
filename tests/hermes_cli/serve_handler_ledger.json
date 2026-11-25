@@ -2,7 +2,7 @@
  "counts": {
   "http": {
    "keep-host-wide": 1,
-   "undecided": 350
+   "undecided": 349
   },
   "rpc": {
    "authority": 114,
@@ -189,7 +189,6 @@
   {"current_path": "hermes_cli.web_routers.tools:get_toolset_models", "decision": "undecided", "handler": "GET /api/tools/toolsets/{name}/models", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.ui_preferences:get_ui_preferences; surface: ui_preferences", "decision": "undecided", "handler": "GET /api/ui-preferences", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.webapp_access:webapp_access_status; surface: web_access", "decision": "undecided", "handler": "GET /api/webapp-access/status", "kind": "http", "ref": ""},
-  {"current_path": "hermes_cli.web_routers.webapp:terminal_context", "decision": "undecided", "handler": "GET /api/webapp/terminal-context", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.web_routers.ops:list_webhooks", "decision": "undecided", "handler": "GET /api/webhooks", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.dashboard_auth.routes:auth_callback", "decision": "undecided", "handler": "GET /auth/callback", "kind": "http", "ref": ""},
   {"current_path": "hermes_cli.dashboard_auth.routes:auth_login", "decision": "undecided", "handler": "GET /auth/login", "kind": "http", "ref": ""},

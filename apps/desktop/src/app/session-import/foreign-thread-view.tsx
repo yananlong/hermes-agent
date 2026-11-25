@@ -120,7 +120,7 @@ export function ForeignThreadView({ agent, owner, onBack, onClose, onOpenSession
           <h1 className="mt-3 text-3xl font-semibold tracking-tight text-(--ui-text-primary)">{agentCopy.title}</h1>
           <p className="mt-2 text-sm text-(--ui-text-secondary)">{agentCopy.help}</p>
           <div className="mt-4">
-            <HostCapabilityStrip capability={capability} />
+            <HostCapabilityStrip capability={capability} detailAgent={agent} />
           </div>
         </header>
         <div className="grid min-h-0 flex-1 grid-cols-[minmax(17rem,0.85fr)_minmax(0,1.6fr)] border-t border-(--ui-stroke-tertiary) max-[760px]:grid-cols-1">

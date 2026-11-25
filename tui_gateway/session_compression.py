@@ -243,6 +243,17 @@ class CompressionBusy(Exception):
     """Raised by _manual_compress_turn when a turn already holds the session; callers map it to their busy reply."""
 
 
+class LinkedNativeCompactionUnsupported(ValueError):
+    """Raised by ``_compress_session_history`` for a row a native CLI owns and compacts itself.
+
+    A linked Claude Code / Mistral Vibe row stores a native session id and no messages: there is
+    nothing here to summarize and no session to split, so the summarizer must never run. It is a
+    ``ValueError`` because that is what the manual /compress surfaces already render as their
+    message; the automatic callers (the cache-edge reaper) catch this type and treat it as
+    "nothing to do", not as a failed compaction.
+    """
+
+
 @contextlib.contextmanager
 def _manual_compress_turn(sid: str, session: dict):
     """Hold the session busy (``running``) for a whole manual compaction: snapshot, LLM summary, commit
@@ -287,11 +298,20 @@ def _compress_session_history(
     if before_messages is None or history_version is None:
         with session["history_lock"]:
             before_messages, history_version = list(session.get("history", [])), int(session.get("history_version", 0))
-    # Linked sessions may have an empty local mirror despite a long native history.
-    linked = _session_is_codex_linked(session)
-    if len(before_messages) < MIN_MESSAGES and not linked:
+    # Linked sessions may have an empty local mirror despite a long native history. The KIND is what
+    # decides: Codex compacts its own thread through Hermes, while a linked Claude Code / Mistral
+    # Vibe row can only be compacted inside its own CLI. Running the local summarizer there would be
+    # a billable LLM call over a projection nobody persists, plus a SQLite session split of a row
+    # that has no transcript — so those two are refused here, before any summarizer runs.
+    from agent.linked_foreign_turn import linked_compaction_refusal
+
+    linked = _session_linked_foreign_agent(session)
+    if len(before_messages) < MIN_MESSAGES and linked is None:
         return 0, _get_usage(agent)
-    if linked and (focus_topic or "").strip():
+    refusal = linked_compaction_refusal(linked)
+    if refusal is not None:
+        raise LinkedNativeCompactionUnsupported(refusal)
+    if linked is not None and (focus_topic or "").strip():
         raise ValueError("Linked Codex threads support /compress without arguments")
     request = parse_compress_args(focus_topic or "")
     if request.aggressive:

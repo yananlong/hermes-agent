@@ -13,6 +13,8 @@
  */
 import { JSON_RPC_METHOD_NOT_FOUND } from '@hermes/shared'
 
+import { dashboardConnectionGeneration } from './gateway-connection-generation'
+
 /** The native tools a Hermes row can be linked to (wire: `ForeignAgent`). */
 export type ForeignCapabilityAgent = 'codex' | 'claude' | 'mistral'
 
@@ -63,17 +65,46 @@ export type HostCapability =
   /** The probe failed (socket, timeout). Retryable, and not cached. */
   | { state: 'error'; message: string }
 
-/** Minimal RPC surface this module needs: `gateway.request(method, params)`. */
-export type CapabilityRequester = <T>(method: string, params?: Record<string, unknown>) => Promise<T>
+/** Minimal RPC surface this module needs: `gateway.request(method, params)`.
+ *
+ *  Deliberately not generic. The channel is untyped JSON-RPC, and a `<T>` in the
+ *  parameter position forces every *implementation* to be generic too, so an
+ *  ordinary stub returning a concrete `Promise<ForeignStatus>` does not
+ *  type-check and callers get pushed into `as T` lies. `readHostCapability` is
+ *  the one place that knows the wire shape, and it asserts it there. A generic
+ *  `request<T>()` still satisfies this narrower signature.
+ */
+export type CapabilityRequester = (
+  method: string,
+  params?: Record<string, unknown>
+) => Promise<unknown>
 
 const CAPABILITY_METHOD = 'session.foreign.status'
 
-/** Serving scopes whose gateway answered -32601; module-level so every linked
- *  surface on the page shares the verdict. */
-const UNSUPPORTED_SCOPES = new Set<string>()
+/** Profiles whose gateway answered -32601; module-level so every linked
+ *  surface on the page shares the verdict. Cleared whenever a dashboard socket
+ *  opens (see `gateway-connection-generation`). */
+const UNSUPPORTED_PROFILES = new Set<string>()
+
+/** The connection generation the cached verdicts belong to. A `-32601` is a
+ *  statement about one gateway build, so the cache may not outlive the socket
+ *  that produced it: the first read after a reconnect starts empty. */
+let cacheGeneration = -1
+
+function unsupportedProfiles(): Set<string> {
+  const generation = dashboardConnectionGeneration()
+
+  if (generation !== cacheGeneration) {
+    UNSUPPORTED_PROFILES.clear()
+    cacheGeneration = generation
+  }
+
+  return UNSUPPORTED_PROFILES
+}
 
 export function resetHostCapabilityCache(): void {
-  UNSUPPORTED_SCOPES.clear()
+  UNSUPPORTED_PROFILES.clear()
+  cacheGeneration = dashboardConnectionGeneration()
 }
 
 /** True when the failure means "this backend has no such method". */
@@ -89,19 +120,44 @@ export function isMissingCapabilityMethod(error: unknown): boolean {
   return /method not found|-32601|unknown method|no such method/i.test(message)
 }
 
+/** Profiles that mean "the serving process's own profile": `""` is how the
+ *  dashboard's profile scope spells it, and `default` is the reserved alias the
+ *  gateway resolves to the same home. Neither is sent as a `profile` param. */
+const LAUNCH_PROFILES = new Set(['', 'default'])
+
+/** Params for one capability read of `profile`.
+ *
+ *  `session.foreign.status` is `@_profile_scoped` and resolves the scope from
+ *  `params['profile']`, so the profile the view is showing has to travel with
+ *  the call: asking with `{}` answers for the launch profile and renders
+ *  another profile's verdict on screen. */
+function capabilityParams(profile: string): Record<string, unknown> {
+  return LAUNCH_PROFILES.has(profile) ? {} : { profile }
+}
+
+/**
+ * Ask the gateway that serves this dashboard what it can do for linked threads.
+ *
+ * `profile` is the profile whose answer we want — it is BOTH the parameter sent
+ * to the profile-scoped RPC and the key the -32601 verdict is cached under (the
+ * dashboard holds one gateway connection, so the profile is the whole scope).
+ * Never pass a composite scope key here; the wire param must be a bare profile.
+ */
 export async function readHostCapability(
   request: CapabilityRequester,
-  scope = 'default'
+  profile = 'default'
 ): Promise<HostCapability> {
-  if (UNSUPPORTED_SCOPES.has(scope)) {
+  if (unsupportedProfiles().has(profile)) {
     return { state: 'unknown' }
   }
 
   try {
-    return { state: 'ready', status: await request<ForeignStatus>(CAPABILITY_METHOD, {}) }
+    const status = (await request(CAPABILITY_METHOD, capabilityParams(profile))) as ForeignStatus
+
+    return { state: 'ready', status }
   } catch (cause) {
     if (isMissingCapabilityMethod(cause)) {
-      UNSUPPORTED_SCOPES.add(scope)
+      unsupportedProfiles().add(profile)
 
       return { state: 'unknown' }
     }

@@ -242,14 +242,14 @@ function SnapshotImportView({
               {blockers
                 .filter(row => row.reason)
                 .map(row => (
-                  <p key={row.agent} data-blocked-agent={row.agent}>
+                  <p data-blocked-agent={row.agent} key={row.agent}>
                     {blockedNote(row.agent, host)}
                   </p>
                 ))}
             </div>
           )}
           <div className="mt-5 space-y-2">
-            <HostCapabilityStrip capability={capability} fallbackHost={host} />
+            <HostCapabilityStrip capability={capability} detailAgent="all" fallbackHost={host} />
             <span className="inline-flex items-center gap-2 text-xs text-(--ui-text-secondary)">
               <Codicon name="account" />
               {copy.destination} {owner.targetProfile ?? owner.profile}

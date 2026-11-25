@@ -942,6 +942,7 @@ def _(rid, params: dict) -> dict:
     # Profile scope: a DEDICATED handle we own until the agent takes it; else the shared launch db.
     ctx.db, ctx.owns_db = _profile_session_db(ctx.profile_home)
     ctx.persistence = _persistence_beside(ctx.db)
+    from hermes_cli.foreign_linked_store import LinkedConfigUnreadable
     try:
         if ctx.db is None:
             return _db_unavailable_error(rid, code=5000)
@@ -963,6 +964,12 @@ def _(rid, params: dict) -> dict:
             return _resume_lazy(ctx)
         return _resume_eager(ctx) if ctx.eager_build else (
             _resume_deferred(ctx) if ctx.defer_history else _resume_cold(ctx))
+    except LinkedConfigUnreadable:
+        # A pointer row whose configuration cannot be read is a typed 4xxx refusal (the same one
+        # session.history answers), not a -32603 internal error: nothing is broken server-side, and
+        # what the user has to do is re-link the session.
+        logger.warning("session.resume: %s has an unreadable linked configuration", target)
+        return _linked_config_unreadable_error(rid)
     finally:
         # A dedicated profile store this resume still owns is released here; its handle beside it with it.
         if ctx.owns_db and ctx.db is not None:

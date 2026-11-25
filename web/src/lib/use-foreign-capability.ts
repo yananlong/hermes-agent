@@ -8,14 +8,27 @@
  * `session.foreign.status` answers -32601 → `unknown`, the caller keeps its
  * read-only copy, and the negative verdict is cached for the rest of the page.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 
 import { GatewayClient } from '@/lib/gatewayClient'
 
 import { type HostCapability, readHostCapability } from './foreign-capability'
+import {
+  dashboardConnectionGeneration,
+  subscribeDashboardConnection,
+} from './gateway-connection-generation'
 
-export function useForeignCapability(active: boolean, scope: string): HostCapability | undefined {
+export function useForeignCapability(active: boolean, profile: string): HostCapability | undefined {
   const [capability, setCapability] = useState<HostCapability | undefined>(undefined)
+  // Every (re)opened dashboard socket may be a new gateway build, so the probe
+  // re-runs against it: without the generation here a view that rendered
+  // "unknown" (a gateway predating the RPC) would keep that verdict after an
+  // upgrade until the page was reloaded.
+  const generation = useSyncExternalStore(
+    subscribeDashboardConnection,
+    dashboardConnectionGeneration,
+    dashboardConnectionGeneration
+  )
 
   useEffect(() => {
     if (!active) {
@@ -29,7 +42,9 @@ export function useForeignCapability(active: boolean, scope: string): HostCapabi
 
     client
       .connect()
-      .then(() => readHostCapability((method, params) => client.request(method, params ?? {}), scope))
+      .then(() =>
+        readHostCapability((method, params) => client.request(method, params ?? {}), profile)
+      )
       .then((result: HostCapability) => {
         if (!cancelled) {
           setCapability(result)
@@ -45,7 +60,7 @@ export function useForeignCapability(active: boolean, scope: string): HostCapabi
       cancelled = true
       client.close()
     }
-  }, [active, scope])
+  }, [active, profile, generation])
 
   return capability
 }

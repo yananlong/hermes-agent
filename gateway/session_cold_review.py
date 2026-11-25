@@ -90,6 +90,9 @@ def cold_review_parent(runner, source, session_key, session_id):
             provider_data_collection=pr.get("data_collection"),
             session_id=session_id, platform=platform_key, gateway_session_key=session_key,
             persistence=store,
+            # Both handles the agent reads its own row through (``_build_fresh_agent`` binds them
+            # the same way): a linked row is only recognisable while one of them is readable.
+            session_db=store,
             **({"cwd": linked_cwd} if linked_cwd is not None else {}),
             # The session's backup providers, as its next turn would carry them: the reviewer inherits the chain.
             fallback_model=None if api_runtime_locked() else runner._refresh_fallback_model(),

@@ -126,6 +126,31 @@ def test_path_cli_resolves_with_a_collapsed_path_and_no_absolute_leak(homes):
     assert cli["version"] is None
 
 
+def test_a_cli_outside_the_home_publishes_only_its_basename(homes, monkeypatch):
+    """``path`` is a display token, never the host's filesystem layout.
+
+    The status answer is readable by every client of this gateway, so a binary installed outside
+    ``$HOME`` (``/usr/local/bin/claude``, a package manager's prefix) must not be echoed back in
+    absolute form: the resolved location stays server-side and the client sees the basename.
+    """
+    home = homes / "user-home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    outside = homes / "srv" / "bin"
+    outside.mkdir(parents=True)
+    binary = outside / "claude"
+    binary.write_text("#!/bin/sh\necho claude-cli 9.9.9\n", encoding="utf-8")
+    binary.chmod(0o755)
+
+    cli = cap.cli_capability("claude", env={"PATH": str(outside)}, host="gw.example")
+
+    assert cli["available"] is True
+    assert cli["command"] == "claude"
+    assert cli["path"] == "claude", "an out-of-home install must collapse to its basename"
+    assert str(outside) not in json.dumps(cli)
+    assert str(home) not in json.dumps(cli)
+
+
 def test_version_probe_is_opt_in_bounded_and_path_free(homes):
     _bin(homes, "codex", version="0.42.0")
     cli = cap.cli_capability("codex", env={"PATH": str(homes / "bin")}, probe_version=True,

@@ -241,6 +241,24 @@ def test_build_resume_argv_rejects_unsafe_inputs(workdir, tmp_path):
                                session_id=SESSION_ID, workdir=workdir)
 
 
+def test_the_prompt_budget_fits_the_kernels_per_argument_cap(workdir):
+    """The cap must be under ``MAX_ARG_STRLEN`` (128 KiB), not merely under ``ARG_MAX``.
+
+    The prompt is one argv string (``-p <prompt>``) with ``stdin=DEVNULL`` and no fallback, so a
+    prompt inside the old 384 KiB budget passed this check and then died with E2BIG inside
+    ``execvp`` — after the native session had already been claimed.
+    """
+    linux_max_arg_strlen = 128 * 1024
+    assert vibe.MAX_PROMPT_CHARS <= linux_max_arg_strlen - 16 * 1024
+
+    # The boundary is inclusive: exactly the budget still builds an argv with the prompt intact.
+    prompt = "x" * vibe.MAX_PROMPT_CHARS
+    argv = vibe.build_resume_argv(binary="/opt/vibe/bin/vibe", prompt=prompt,
+                                  session_id=SESSION_ID, workdir=workdir)
+    assert argv[1:3] == ["-p", prompt]
+    assert len(argv[1:3][1].encode()) == vibe.MAX_PROMPT_CHARS
+
+
 # --------------------------------------------------------------------------------------------------
 # subprocess
 # --------------------------------------------------------------------------------------------------

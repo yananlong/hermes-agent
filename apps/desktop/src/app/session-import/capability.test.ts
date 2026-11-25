@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { resetHostCapabilityCache as resetHostCapabilityCacheFromStore } from '@/store/host-capability-cache'
+
 import type { ForeignAgentCapability, ForeignStatus } from './api'
+import { foreignStatusRequest } from './api'
 import {
   agentHostCapability,
   continueReason,
@@ -11,7 +14,6 @@ import {
   readHostCapability,
   resetHostCapabilityCache
 } from './capability'
-import { foreignStatusRequest } from './api'
 
 vi.mock('./api', () => ({ foreignStatusRequest: vi.fn() }))
 
@@ -84,6 +86,21 @@ describe('version skew: an older gateway', () => {
     expect(capability.state).toBe('ready')
     expect(foreignStatusRequest).toHaveBeenCalledTimes(2)
   })
+
+  it('shares one cache with the connection lifecycle that clears it', async () => {
+    // `store/gateway.ts` calls this exact function when a socket opens, so clearing through the
+    // store-side module has to invalidate the verdict this module cached — otherwise an upgraded
+    // gateway keeps answering from the old build's -32601 until the window is relaunched.
+    vi.mocked(foreignStatusRequest).mockRejectedValue(methodNotFound())
+    await readHostCapability(owner)
+    await readHostCapability(owner)
+    expect(foreignStatusRequest).toHaveBeenCalledTimes(1)
+
+    resetHostCapabilityCacheFromStore()
+
+    await readHostCapability(owner)
+    expect(foreignStatusRequest).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('a failed probe', () => {
@@ -110,6 +127,7 @@ describe('link affordances are per agent', () => {
     const noCli = ready([row('codex', {
       cli: { available: false, command: 'codex', path: null, version: null, source: 'path', reason_code: 'cli_missing', reason: 'not installed' }
     })])
+
     const noStore = ready([row('codex', {
       store: { available: false, readable: false, reason_code: 'store_missing', reason: 'no store' }
     })])
@@ -148,6 +166,7 @@ describe('writable continue', () => {
     const build = ready([row('mistral', {
       continue_status: { supported: false, writable: false, reason_code: 'build_unsupported', reason: 'nope' }
     })])
+
     const scope = ready([row('mistral', {
       store: { available: false, readable: false, reason_code: 'profile_scope', reason: 'nope' },
       continue_status: { supported: true, writable: false, reason_code: 'profile_scope', reason: 'nope' }

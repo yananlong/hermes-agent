@@ -47,6 +47,40 @@ LINKED_FOREIGN_ROW_MODES = {
 LINKED_FOREIGN_LABELS = {"claude": "Claude Code", "mistral": "Mistral Vibe",
                          "foreign": "foreign"}
 
+#: Linked agents whose transcript — and therefore whose compaction — lives in the native CLI.
+#: Codex is NOT here: its app-server runtime exposes compaction through Hermes
+#: (``agent/conversation_compression.py::_route_codex_compaction``).
+LINKED_FOREIGN_COMPACTION_OWNED = ("claude", "mistral")
+
+
+def linked_native_compaction_message(agent_name: str) -> str:
+    """Why ``/compress`` cannot run on a linked Claude/Mistral row, in the native tool's terms.
+
+    A pointer row holds no messages of its own, so the generic summarizer would make a billable LLM
+    call over a projection nobody keeps and then split a Hermes session that has no transcript.
+    """
+    label = LINKED_FOREIGN_LABELS.get(agent_name, agent_name)
+    return (f"Linked {label} threads compact in {label} itself — Hermes cannot summarize a "
+            f"transcript it does not own")
+
+
+def linked_compaction_refusal(agent_name: str | None) -> str | None:
+    """The refusal for a linked row THIS module owns, or ``None`` when compression may proceed.
+
+    ``None`` is returned for an ordinary session, and for a linked Codex row: Codex compacts its
+    own thread through Hermes, which is the one native compaction this build can drive. A
+    ``"foreign"`` (unreadable) pointer is refused as well — an owner that cannot be named cannot be
+    asked to compact, and running the local summarizer on it is the same guess the turn route
+    refuses to make.
+    """
+    if agent_name in LINKED_FOREIGN_COMPACTION_OWNED:
+        return linked_native_compaction_message(agent_name)
+    if agent_name == "foreign":
+        return ("This session's stored configuration cannot be read, so its native thread cannot "
+                "be compacted — re-link the session from the foreign session list")
+    return None
+
+
 #: What the user can do about each typed refusal. Codes come from the transports / resume
 #: adapters; an unlisted one falls back to the transport's own detail sentence.
 LINKED_FOREIGN_FIXES = {
@@ -95,33 +129,55 @@ _VIBE_CLASS_CODES = {
 
 
 def _agent_store(agent: Any) -> Any:
-    """The store this turn's row lives in: the agent's writer handle, else its session DB."""
+    """The store this turn's row lives in: the agent's writer handle, else its persistence handle.
+
+    ``session_db`` is only one of the shapes a surface binds. The gateway builds its turn agent
+    with ``persistence=`` and no ``session_db=`` (``gateway/session_execution.py::_build_fresh_agent``),
+    so keying detection on ``agent._session_db`` alone made every gateway turn over a linked row
+    look ordinary — the fork this module exists to prevent. Read the same handles the rest of the
+    agent does, in their own precedence: the writer interface (both handles, store writable), the
+    persistence handle, a plain ``store`` attribute, then the session DB.
+    """
     from agent.agent_init_session import agent_interface
 
-    return agent_interface(agent) or getattr(agent, "_session_db", None)
+    return (agent_interface(agent) or getattr(agent, "persistence", None)
+            or getattr(agent, "store", None) or getattr(agent, "_session_db", None))
 
 
 def linked_foreign_agent(agent: Any) -> str | None:
     """Which linked agent owns this turn's row: ``"claude"``, ``"mistral"``, ``"foreign"``, ``None``.
 
     ``None`` is only returned for a row that is provably an ordinary Hermes session. ``"foreign"``
-    means the row carries a ``model_config`` that cannot be validated: the route refuses such a
-    turn (fail closed) because an unreadable pointer cannot be told apart from an ordinary row, and
-    running the generic loop on it is exactly the fork this module exists to prevent.
+    means the row carries a ``model_config`` that cannot be validated — or that the store bound to
+    this agent cannot be read at all: the route refuses such a turn (fail closed) because an
+    unreadable pointer cannot be told apart from an ordinary row, and running the generic loop on
+    it is exactly the fork this module exists to prevent.
+
+    An agent with NO store bound at all is still ``None``: it has no row of its own to point at
+    (the background-review fork, the curator and prompt inspection all build one deliberately),
+    so there is no pointer to honour and no native thread to fork.
 
     The flag is authoritative; a row that only carries the read-only ``api_mode`` is still a
     pointer (the shape the read-only era wrote), so it is honoured too. The row's own ``api_mode``
     is read — never ``agent.api_mode``, which init has already resolved to an ordinary wire mode.
     """
-    db, session_id = getattr(agent, "_session_db", None), getattr(agent, "session_id", None)
-    if db is None or not isinstance(session_id, str) or not session_id:
+    store, session_id = _agent_store(agent), getattr(agent, "session_id", None)
+    if store is None or not isinstance(session_id, str) or not session_id:
         return None
-    from hermes_cli.foreign_linked_store import LinkedConfigUnreadable, row_model_config
+    from hermes_cli.foreign_linked_store import (
+        LinkedConfigUnreadable, row_model_config, store_row_reader)
 
-    store = _agent_store(agent) or db
+    if not store_row_reader(store):
+        # Bound, but with no way to read a row: the pointer cannot be ruled out, so this turn is
+        # not "provably ordinary" and the route refuses it rather than answer it generically.
+        logger.warning("linked foreign turn: the bound store exposes no session row reader")
+        return "foreign"
     try:
         config = row_model_config(store, session_id)
     except LinkedConfigUnreadable:
+        return "foreign"
+    except Exception:  # health: allow BLE001 -- an unreadable store must refuse, never crash a turn
+        logger.warning("linked foreign turn: the session row could not be read", exc_info=True)
         return "foreign"
     for name in LINKED_FOREIGN_AGENTS:
         if config.get(LINKED_FOREIGN_FLAGS[name]) is True:
