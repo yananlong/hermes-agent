@@ -25,6 +25,7 @@ from session_rules.turns import message_uid_or_none, _durable_content, _is_ephem
 from agent.transcript_repair import sync_flushed_message_markers
 from persistence.conversation.messages import NewMessage, RowDisposition
 from session_rules.turns import _EPHEMERAL_SCAFFOLDING_FLAGS, _IMAGE_PART_TYPES
+from agent.linked_foreign_turn import linked_pointer_agent
 
 
 logger = logging.getLogger("run_agent")  # origin module's name: log records / caplog filters unchanged
@@ -569,6 +570,13 @@ class SessionPersistenceMixin:
         # Persistence-isolated agents (background review fork) share the parent's session_id for cache warmth;
         # a write here would land the curator's turn in the user's real history.
         if getattr(self, "_persist_disabled", False) or not self._session_db:
+            return None
+        if linked_pointer_agent(self) is not None:
+            # A linked Claude Code / Vibe row is a POINTER: the native tool owns the transcript and
+            # every turn appends to it there (``agent/linked_foreign_turn.py``), so its own message
+            # list stays empty and display re-reads the native store. Guarding the ONE durable-write
+            # funnel covers every writer — the turn-start crash persist, tool rounds, the turn-end
+            # flush and a surface's close persist — instead of each call site remembering.
             return None
         batch_rows: list[dict[str, Any]] = []
         try:

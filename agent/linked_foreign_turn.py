@@ -190,6 +190,18 @@ def linked_foreign_agent(agent: Any) -> str | None:
     return None
 
 
+def linked_pointer_agent(agent: Any) -> str | None:
+    """``"claude"`` / ``"mistral"`` when this row is a PROVEN linked pointer, else ``None``.
+
+    The turn route refuses whatever :func:`linked_foreign_agent` answers, including ``"foreign"``
+    (a pointer nobody can read). This gate instead decides whether a durable WRITE is skipped, so
+    only a proven pointer counts: dropping a real session's accepted input is worse than a refusal
+    the user sees afterwards.
+    """
+    name = linked_foreign_agent(agent)
+    return name if name in LINKED_FOREIGN_AGENTS else None
+
+
 class _AgentInterruptCancel:
     """``cancel_event`` (``is_set()``) over the agent's own interrupt latches.
 
