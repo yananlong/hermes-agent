@@ -13,10 +13,11 @@ import secrets
 from pathlib import Path
 
 
-def resolve_session_token() -> str:
-    env_token = os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN")
+def configured_session_token() -> str:
+    """Resolve the configured credential without generating a new one."""
+    env_token = os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN", "")
     if not env_token:
-        return secrets.token_urlsafe(32)
+        return ""
     # A "file:" prefix means the value is a token-file path, not a token:
     # deployment managers (agenix, sops-nix, systemd credentials) hand a
     # secret over as a file, and a path -- unlike the token -- can sit in a
@@ -36,3 +37,8 @@ def resolve_session_token() -> str:
             )
         return token
     return env_token
+
+
+def resolve_session_token() -> str:
+    """Use the configured credential or mint a token for a new server."""
+    return configured_session_token() or secrets.token_urlsafe(32)

@@ -170,6 +170,21 @@ loads portable Agent Skills and stdio MCP entries. See the
 [plugin developer guide](../developer-guide/plugins/index.md#portable-agent-plugins-v1-packages)
 for the exact supported subset and trust boundary.
 
+## Mirror an external terminal in the dashboard
+
+Run `hermes byot` in a POSIX terminal to start a shell locally and make it available in the dashboard
+Chat terminal selector. Pass a command after `--` to bridge that command instead, such as
+`hermes byot -- zsh`. The bridge connects to `http://127.0.0.1:9119` by default; use `--url` for
+another dashboard address. Authenticate with `--token` or `HERMES_DASHBOARD_SESSION_TOKEN`; the
+latter can be a literal token or `file:/path/to/token`. An automatically generated dashboard token
+must be supplied explicitly to the bridge.
+
+Selecting a terminal in Chat mirrors its live output and input. Choose **Use embedded terminal** to
+stop viewing the external terminal and return to the embedded chat; the external shell continues to
+run. The external shell is independent of the profile selected in the dashboard. Ctrl+C goes to
+the active terminal unless it is used to copy a selection. This mirroring mode is separate from resuming a
+Webapp chat in a terminal over SSH.
+
 ## Interface Layout
 
 :::info The classic CLI is a gateway client

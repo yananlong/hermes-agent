@@ -535,12 +535,7 @@ async def pty_ws(ws: WebSocket) -> None:
 
     try:
         argv, cwd, env = await _resolve_chat_argv_async(**resolve_kwargs)
-    except HTTPException as exc:  # unknown/invalid profile
-        if not marker_preexisting:
-            _discard_active_session_file(ws.app, channel, active_session_file)
-        await _pty_fail(ws, exc)
-        return
-    except SystemExit as exc:  # _make_tui_argv sys.exit(1)s when node/npm is missing
+    except (HTTPException, SystemExit) as exc:  # invalid profile or unavailable TUI runtime
         if not marker_preexisting:
             _discard_active_session_file(ws.app, channel, active_session_file)
         await _pty_fail(ws, exc)

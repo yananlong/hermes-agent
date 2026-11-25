@@ -51,3 +51,11 @@ export function parseByotControlMessage(data: string): ByotSession | null {
   }
   return null;
 }
+
+/** Change only the terminal target, retaining the embedded chat's resume and profile. */
+export function withByotTarget(params: URLSearchParams, id: string | null): URLSearchParams {
+  const next = new URLSearchParams(params);
+  if (id) next.set("byot", id);
+  else next.delete("byot");
+  return next;
+}

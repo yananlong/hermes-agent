@@ -120,3 +120,36 @@ def test_byot_host_requires_hello_first(byot_harness):
         with pytest.raises(WebSocketDisconnect) as exc_info:
             ws.receive_text()
     assert exc_info.value.code == 4400
+
+
+def test_byot_requires_credentials_and_detaching_viewer_preserves_host(monkeypatch):
+    from urllib.parse import urlencode
+
+    monkeypatch.setattr(web_server.app.state, "ui_surface", "dashboard", raising=False)
+    monkeypatch.setattr(web_server.app.state, "auth_required", False, raising=False)
+    monkeypatch.setattr(web_server.app.state, "bound_host", "127.0.0.1", raising=False)
+    monkeypatch.setattr(web_server, "_SESSION_TOKEN", "secret+&token")
+    client = TestClient(web_server.app, base_url="http://127.0.0.1", client=("127.0.0.1", 12345))
+    client.headers["host"] = "127.0.0.1"
+    assert client.get("/api/byot/sessions").status_code == 401
+    for endpoint in ("/api/byot/host", "/api/pty?byot=bogus"):
+        with pytest.raises(WebSocketDisconnect) as failure:
+            with client.websocket_connect(endpoint):
+                pass
+        assert failure.value.code == 4401
+    auth = urlencode({"token": web_server._SESSION_TOKEN})
+    with client.websocket_connect(f"/api/byot/host?{auth}") as host:
+        host.send_json({"type": "hello", "id": "client-chosen", "name": "zsh"})
+        byot_id = host.receive_json()["id"]
+        assert byot_id != "client-chosen"
+        with client.websocket_connect(f"/api/pty?byot={byot_id}&{auth}") as viewer:
+            viewer.receive_json()
+            viewer.send_bytes(b"\x03")
+            assert host.receive_bytes() == b"\x03"
+        # Closing a viewer does not disconnect the host or prevent another attachment.
+        headers = {web_server._SESSION_HEADER_NAME: web_server._SESSION_TOKEN}
+        assert client.get("/api/byot/sessions", headers=headers).json()["sessions"][0]["id"] == byot_id
+        with client.websocket_connect(f"/api/pty?byot={byot_id}&{auth}") as viewer:
+            assert viewer.receive_json()["id"] == byot_id
+            host.send_bytes(b"still running")
+            assert viewer.receive_bytes() == b"still running"

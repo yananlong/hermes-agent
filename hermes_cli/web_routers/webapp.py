@@ -13,11 +13,11 @@ import sys
 import threading
 import time
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from hermes_cli.dashboard_auth.request_utils import _http_origin
-from hermes_cli.web_server_surface import policy, private_launch
+from hermes_cli.web_server_surface import policy, private_launch, route_on
 from hermes_cli.web_session_sockets import (
     GATEWAY_SOCKET, HOST_TERMINAL_SOCKET, RELAY_SOCKET, SPEAK_STREAM_SOCKET, TRANSCRIBE_STREAM_SOCKET)
 
@@ -36,6 +36,22 @@ SESSION_TOKEN_OWNER = {"user_id": "legacy-token-owner", "provider": "session-tok
 def _require_private_webapp(request: Request) -> None:
     if not private_launch(request.app.state):
         raise HTTPException(404, "Private Webapp window handoff is unavailable")
+
+
+@router.get("/api/webapp/terminal-context", dependencies=[Depends(route_on("host_terminal"))])
+def terminal_context(request: Request, profile: str | None = None):
+    """Facts for an SSH handoff to the selected profile on this host."""
+    from hermes_cli.web_server import _require_token
+    from hermes_cli.web_server_profiles import _is_current_profile, _resolve_profile_dir
+    from hermes_constants import get_hermes_home
+    from hermes_platform.resolver import locate_command
+
+    _require_token(request)
+    home = get_hermes_home() if _is_current_profile(profile) else _resolve_profile_dir(profile.strip())
+    return JSONResponse(
+        {"hermes_home": str(home), "shells": {name: bool(locate_command(name).command) for name in ("bash", "zsh")}},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.websocket("/api/host-terminal")

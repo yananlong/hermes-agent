@@ -26,19 +26,19 @@ Wire protocol (same conventions as ``/api/pty``):
 from __future__ import annotations
 
 import asyncio
+import builtins
 import json
 import logging
 import os
 import re
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
 from hermes_cli.web_deps import late
 from hermes_cli.web_server_chat import _RESIZE_RE, _ws_close_reason, _ws_gate
-import builtins
 
 _log = logging.getLogger("hermes_cli.web_server")
 router = APIRouter()
@@ -59,12 +59,13 @@ class ByotHost:
     """One registered external terminal: its host socket plus attached viewers."""
 
     def __init__(self, ws: WebSocket, meta: dict[str, Any]) -> None:
-        self.id = str(meta.get("id") or uuid.uuid4().hex[:12])
+        self.id = uuid.uuid4().hex
         self.ws = ws
         self.meta = meta
         self.created_at = time.time()
         self.viewers: set[WebSocket] = set()
         self.lock = asyncio.Lock()
+        self.send_lock = asyncio.Lock()
 
     def public(self) -> dict[str, Any]:
         return {
@@ -118,23 +119,25 @@ class ByotRegistry:
         for viewer in viewers:
             try:
                 await viewer.send_bytes(data)
-            except Exception:
+            except (WebSocketDisconnect, RuntimeError, OSError):
                 await self.detach(host, viewer)
 
     async def send_to_host(self, host: ByotHost, data: bytes) -> bool:
         try:
-            await host.ws.send_bytes(data)
+            async with host.send_lock:
+                await host.ws.send_bytes(data)
             return True
-        except Exception:
+        except (WebSocketDisconnect, RuntimeError, OSError):
             return False
 
     async def send_control_to_host(
         self, host: ByotHost, control: dict[str, Any]
     ) -> bool:
         try:
-            await host.ws.send_text(json.dumps(control))
+            async with host.send_lock:
+                await host.ws.send_text(json.dumps(control))
             return True
-        except Exception:
+        except (WebSocketDisconnect, RuntimeError, OSError):
             return False
 
 
@@ -161,7 +164,6 @@ def _sanitize_meta(hello: dict[str, Any]) -> dict[str, Any]:
     if name is not None and not _NAME_RE.match(name):
         name = None
     return {
-        "id": _str("id", 64) or uuid.uuid4().hex[:12],
         "name": name or f"terminal-{os.getpid()}",
         "shell": _str("shell", 256),
         "cwd": _str("cwd", 1024),
@@ -195,7 +197,9 @@ async def byot_host_ws(ws: WebSocket) -> None:
         hello = json.loads(hello_raw)
         if not isinstance(hello, dict) or hello.get("type") != "hello":
             raise ValueError("first frame must be a JSON hello object")
-    except Exception as exc:
+    except WebSocketDisconnect:
+        return
+    except (TimeoutError, ValueError) as exc:
         await ws.close(code=4400, reason=_ws_close_reason(f"byot hello: {exc}"))
         return
 
@@ -252,8 +256,8 @@ async def byot_host_ws(ws: WebSocket) -> None:
                 await viewer.close(
                     code=BYOT_CLOSE_HOST_GONE, reason="External terminal disconnected"
                 )
-            except Exception:
-                pass
+            except (WebSocketDisconnect, RuntimeError, OSError):
+                _log.debug("BYOT viewer already closed")
         _log.info("byot host disconnected id=%s", host.id)
 
 
@@ -267,7 +271,7 @@ async def handle_byot_viewer(ws: WebSocket, byot_id: str) -> None:
     host = await BYOT_REGISTRY.get(byot_id)
     if host is None:
         await ws.send_text(
-            f"\r\n\x1b[31mExternal terminal '{byot_id}' is not connected. "
+            "\r\n\x1b[31mExternal terminal is not connected. "
             "Run `hermes byot` in your terminal (e.g. iTerm), then attach again.\x1b[0m\r\n"
         )
         await ws.close(code=1011)

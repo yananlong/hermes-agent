@@ -23,19 +23,19 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@nous-research/ui/ui/components/button";
-import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { cn } from "@/lib/utils";
 import { PanelRight, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router";
 
+import { ByotTerminalControls } from "@/components/ByotTerminalControls";
 import { ChatSidebar } from "@/components/ChatSidebar";
+import { MobileChatPanel } from "@/components/MobileChatPanel";
 import { ChatSessionList } from "@/components/ChatSessionList";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
-import { listByotSessions, parseByotControlMessage, type ByotSession } from "@/lib/byot";
+import { parseByotControlMessage, withByotTarget } from "@/lib/byot";
 import { readStoredWorkspace, writeStoredWorkspace } from "@/lib/chat-workspaces";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { readChatPanelCollapsed, toggleChatPanelCollapsed } from "@/lib/chat-panel-collapsed";
@@ -219,10 +219,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // affordance; clicking it bumps `reconnectNonce`, which is a dependency of
   // the connect effect, so a fresh PTY spawns in place.
   const [reconnectNonce, setReconnectNonce] = useState(0);
-  // BYOT: external terminals currently bridged to the gateway (polled), and
-  // the one this tab is attached to (from the server's control frame).
-  const [byotSessions, setByotSessions] = useState<ByotSession[]>([]);
-  const [attachedByot, setAttachedByot] = useState<ByotSession | null>(null);
   useEffect(() => {
     ptyStateRef.current = ptyState;
   }, [ptyState]);
@@ -263,7 +259,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
 
     next.delete("resume");
     next.delete("byot");
-    setAttachedByot(null);
     forceFreshPtyRef.current = true;
     reconnectAttemptRef.current = 0;
     clearReconnectTimer();
@@ -277,46 +272,20 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     setPtyState("connecting");
     setReconnectNonce((n) => n + 1);
   }, [clearReconnectTimer, searchParams, setSearchParams]);
-  // BYOT: poll the gateway for external terminals bridged via `hermes byot`
-  // so the ended/closed overlays can offer them as attach targets. Polling is
-  // cheap and keeps the list fresh while a bridge connects/disconnects.
-  useEffect(() => {
-    if (!isActive) return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const sessions = await listByotSessions();
-        if (!cancelled) setByotSessions(sessions);
-      } catch {
-        /* gateway predates /api/byot/sessions — the picker just stays empty */
-      }
-    };
-    void load();
-    const timer = setInterval(load, 10_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [isActive, byotParam, ptyState]);
-  // Attach the Chat tab to a bridged external terminal (`?byot=<id>`); the
-  // connect effect (keyed on byotParam via channel) redials /api/pty with it.
-  const attachByot = useCallback(
-    (id: string) => {
-      const next = new URLSearchParams(searchParams);
-      next.set("byot", id);
-      next.delete("resume");
-      setSearchParams(next, { replace: true });
-      setAttachedByot(null);
-      reconnectAttemptRef.current = 0;
-      clearReconnectTimer();
-      setBanner(null);
-      setBannerAction(null);
-      setReconnectGaveUp(false);
-      setPtyState("connecting");
-      setReconnectNonce((n) => n + 1);
-    },
-    [clearReconnectTimer, searchParams, setSearchParams],
-  );
+  const switchByot = useCallback((id: string | null) => {
+    const next = withByotTarget(searchParams, id);
+    forceFreshPtyRef.current = false;
+    reconnectAttemptRef.current = 0;
+    clearReconnectTimer();
+    blockedInputNoticeRef.current = false;
+    ptyInputLineRef.current = "";
+    mobileReplacementInputUntilRef.current = 0;
+    setBanner(null);
+    setBannerAction(null);
+    setReconnectGaveUp(false);
+    setPtyState("connecting");
+    setSearchParams(next, { replace: true });
+  }, [clearReconnectTimer, searchParams, setSearchParams]);
   // Clear mobile-input tracking refs when the tab is hidden so stale state
   // from a previous /chat visit doesn't cause the mobile-replacement logic
   // to misfire on the next activation (#106403: repeated last character).
@@ -378,7 +347,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // Sessions page relies on `/chat?resume=<id>` changing at runtime, so we must
   // treat the current resume target as part of the PTY identity and rebuild the
   // terminal session when it changes.
-  const resumeParam = searchParams.get("resume");
+  const embeddedResume = searchParams.get("resume");
+  const resumeParam = byotParam ? null : embeddedResume;
   // Profile-scoped chat: spawn the PTY under the globally selected
   // management profile. Changing it remounts the terminal (key below /
   // effect dep) so the user explicitly starts a fresh scoped session.
@@ -404,10 +374,12 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     setWorkspaceProfile(scopedProfile);
     setWorkspaceCwdState(readStoredWorkspace(scopedProfile));
   }
-  const channel = useMemo(
-    () => generateChannelId(`${resumeParam ?? ""}\0${byotParam ?? ""}\0${scopedProfile}`),
-    [resumeParam, byotParam, scopedProfile],
+  const embeddedChannel = useMemo(
+    () => generateChannelId(`${embeddedResume ?? ""}\0${scopedProfile}`),
+    [embeddedResume, scopedProfile],
   );
+  const externalChannel = useMemo(() => generateChannelId(byotParam ?? ""), [byotParam]);
+  const channel = byotParam ? externalChannel : embeddedChannel;
   const titleScope = `${channel}\0${reconnectNonce}`;
   const sessionTitle =
     sessionTitleState.scope === titleScope ? sessionTitleState.title : null;
@@ -1343,7 +1315,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       // skill" panel) is typed into the composer as a /learn command once the
       // PTY is up. /learn resolves via command.dispatch → a normal agent turn,
       // so this reuses the existing composer path — no special PTY protocol.
-      const learnSeed = searchParams.get("learn");
+      const learnSeed = byotParam ? null : searchParams.get("learn");
       if (learnSeed) {
         const next = new URLSearchParams(searchParams);
         next.delete("learn");
@@ -1401,13 +1373,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           beginResumeReplay();
           return;
         }
-        // BYOT: the server announces which external terminal this socket
-        // attached to; remember it for the header/picker, don't render it.
-        const byot = parseByotControlMessage(ev.data);
-        if (byot) {
-          setAttachedByot(byot);
-          return;
-        }
+        if (parseByotControlMessage(ev.data)) return;
       }
       const text =
         typeof ev.data === "string"
@@ -1843,99 +1809,17 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     ptyState,
     hydrating: resumeHydrating,
   });
-  const mobileModelToolsPortal =
-    isActive &&
-    narrow &&
-    portalRoot &&
-    createPortal(
-      <>
-        {mobilePanelOpen && (
-          <Button
-            ghost
-            aria-label={t.app.closeModelTools}
-            onClick={closeMobilePanel}
-            className={cn(
-              "fixed inset-0 z-[55] p-0 block",
-              "bg-black/60",
-            )}
-          />
-        )}
 
-        <div
-          id="chat-side-panel"
-          role="complementary"
-          aria-label={modelToolsLabel}
-          className={cn(
-            "font-mondwest fixed top-0 right-0 z-[60] flex h-dvh max-h-dvh w-64 min-w-0 flex-col antialiased",
-            "border-l border-current/20 text-midground",
-            "bg-background-base/95",
-            "transition-transform duration-200 ease-out",
-            "[background:var(--component-sidebar-background,var(--background-base))]",
-            "[clip-path:var(--component-sidebar-clip-path)]",
-            "[border-image:var(--component-sidebar-border-image)]",
-            mobilePanelOpen
-              ? "translate-x-0"
-              : "pointer-events-none translate-x-full",
-          )}
-        >
-          <div
-            className={cn(
-              "flex h-14 shrink-0 items-center justify-between gap-2 border-b border-current/20 px-5",
-            )}
-          >
-            <Typography
-              mondwest
-              className="text-display font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
-            >
-              {t.app.modelToolsSheetTitle}
-              <br />
-              {t.app.modelToolsSheetSubtitle}
-            </Typography>
-
-            <Button
-              ghost
-              size="icon"
-              onClick={closeMobilePanel}
-              aria-label={t.app.closeModelTools}
-              className="text-text-secondary hover:text-midground"
-            >
-              <X />
-            </Button>
-          </div>
-
-          <div
-            className={cn(
-              "min-h-0 flex-1 overflow-y-auto overflow-x-hidden",
-              "border-t border-current/10",
-            )}
-          >
-            <div className="border-b border-current/10 px-1 py-2">
-              <ChatSidebar
-                channel={channel}
-                profile={scopedProfile}
-                onDashboardNewSessionRequest={startFreshDashboardChat}
-                onSessionTitleChange={handleSessionTitleChange}
-              />
-            </div>
-            <ChatSessionList
-              activeSessionId={resumeParam}
-              isActive={isActive}
-              profile={scopedProfile}
-              onPicked={closeMobilePanel}
-              onNewChat={startFreshDashboardChat}
-              workspaceCwd={workspaceCwd}
-              onWorkspaceChange={setWorkspaceCwd}
-            />
-          </div>
-        </div>
-      </>,
-      portalRoot,
-    );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <PluginSlot name="chat:top" />
-      {mobileModelToolsPortal}
+      <ByotTerminalControls isActive={isActive} currentId={byotParam} onSelect={switchByot} />
+      <MobileChatPanel isActive={isActive} narrow={narrow} portalRoot={portalRoot}
+        mobilePanelOpen={mobilePanelOpen} closeMobilePanel={closeMobilePanel} modelToolsLabel={modelToolsLabel}
+        channel={channel} scopedProfile={scopedProfile} startFreshDashboardChat={startFreshDashboardChat}
+        handleSessionTitleChange={handleSessionTitleChange} resumeParam={resumeParam}
+        workspaceCwd={workspaceCwd} setWorkspaceCwd={setWorkspaceCwd} />
 
       {visibleBanner && (
         <div
@@ -2030,7 +1914,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
               </div>
               <div className="flex flex-wrap justify-center gap-2">
                 <Button
-                  onClick={startFreshPty}
+                  onClick={byotParam ? startFreshDashboardChat : startFreshPty}
                   prefix={<RotateCcw className="h-4 w-4" />}
                   aria-label="Start a new chat session"
                 >
@@ -2045,48 +1929,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
                     Open logs
                   </Button>
                 )}
-                {byotParam && (
-                  <Button
-                    outlined
-                    onClick={startFreshDashboardChat}
-                    aria-label="Detach external terminal and use the embedded one"
-                  >
-                    Use embedded terminal
-                  </Button>
-                )}
               </div>
-              {/* BYOT: external terminals bridged via `hermes byot` can be
-                  attached instead of the embedded terminal. */}
-              {(byotSessions.length > 0 || byotParam) && (
-                <div className="flex max-w-[min(32rem,calc(100vw-3rem))] flex-col items-center gap-2 border border-current/20 bg-black/40 px-3 py-2">
-                  <div className="text-xs tracking-wide text-white/60">
-                    {byotParam
-                      ? `Attached to external terminal ${attachedByot?.name ?? byotParam}`
-                      : "Use an external terminal (run `hermes byot` in iTerm & co.):"}
-                  </div>
-                  {byotSessions.length > 0 && (
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {byotSessions.map((s) => (
-                        <Button
-                          key={s.id}
-                          size="sm"
-                          outlined
-                          onClick={() => attachByot(s.id)}
-                          aria-label={`Attach external terminal ${s.name}`}
-                          title={`${s.shell ?? "terminal"} — ${s.cwd ?? ""}`}
-                        >
-                          {s.name}
-                        </Button>
-                      ))}
-                    </div>
-                  )}
-                  {byotSessions.length === 0 && !byotParam && (
-                    <div className="text-xs text-white/40">
-                      No external terminal connected.
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           )}
 
