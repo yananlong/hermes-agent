@@ -63,7 +63,7 @@ def cmd_byot(args) -> int:
 
     return run_byot_bridge(
         url=args.url,
-        token=args.token or "",
+        token=args.token,
         name=args.name or "",
         command=list(args.command) or None,
     )

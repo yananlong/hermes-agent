@@ -97,7 +97,8 @@ class FakeTerminal {
 
 const maybeReloadForLoopbackWsAuthFailure = vi.fn(() => false);
 const apiMocks = vi.hoisted(() => ({
-  buildWsUrl: vi.fn(async () => "ws://localhost/api/pty?channel=chat-1"),
+  buildWsUrl: vi.fn(async (_path: string, _params: Record<string, string>) => "ws://localhost/api/pty?channel=chat-1"),
+  fetchJSON: vi.fn(async (): Promise<{ sessions: Array<{ id: string; name: string }> }> => ({ sessions: [] })),
   getConfig: vi.fn(async (): Promise<Record<string, unknown>> => ({})),
 }));
 const uploadChatImage = vi.hoisted(() =>
@@ -150,6 +151,7 @@ vi.mock("@/lib/dashboard-auth-reload", () => ({
 vi.mock("@/lib/api", () => ({
   api: apiMocks,
   buildWsUrl: apiMocks.buildWsUrl,
+  fetchJSON: apiMocks.fetchJSON,
 }));
 
 class FakeWebSocket {
@@ -221,6 +223,7 @@ beforeEach(() => {
   apiMocks.getConfig.mockReset().mockResolvedValue({});
   webglInstances.length = 0;
   maybeReloadForLoopbackWsAuthFailure.mockClear();
+  apiMocks.fetchJSON.mockReset().mockResolvedValue({ sessions: [] });
   apiMocks.buildWsUrl.mockReset();
   apiMocks.buildWsUrl.mockResolvedValue("ws://localhost/api/pty?channel=chat-1");
   vi.stubGlobal("WebSocket", FakeWebSocket);
@@ -284,6 +287,32 @@ afterEach(async () => {
 });
 
 describe("ChatPage", () => {
+  it("switches a live embedded chat to a bridge and returns to its attachment", async () => {
+    apiMocks.fetchJSON.mockResolvedValue({ sessions: [{ id: "bridge-1", name: "iTerm" }] });
+    const { default: ChatPage } = await import("./ChatPage");
+    await render(<MemoryRouter initialEntries={["/chat"]}><ChatPage isActive /></MemoryRouter>);
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    await act(async () => FakeWebSocket.instances[0].onopen?.());
+    const original = apiMocks.buildWsUrl.mock.calls[0][1];
+    const attach = await vi.waitFor(() => {
+      const button = container.querySelector<HTMLButtonElement>('button[aria-label="Attach external terminal iTerm"]');
+      expect(button).not.toBeNull();
+      return button!;
+    });
+    await act(async () => attach.click());
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    expect(FakeWebSocket.instances[0].readyState).toBe(3);
+    expect(apiMocks.buildWsUrl.mock.calls[1][1].byot).toBe("bridge-1");
+    const detach = container.querySelector<HTMLButtonElement>('button[aria-label="Detach external terminal and use the embedded one"]');
+    expect(detach).not.toBeNull();
+    await act(async () => detach!.click());
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(3));
+    const restored = apiMocks.buildWsUrl.mock.calls[2][1];
+    expect(restored.attach).toBe(original.attach);
+    expect(restored.channel).toBe(original.channel);
+    expect(restored.byot).toBeUndefined();
+  });
+
   it("sends a PTY keepalive frame every 20 seconds while the socket is open", async () => {
     vi.useFakeTimers();
     try {

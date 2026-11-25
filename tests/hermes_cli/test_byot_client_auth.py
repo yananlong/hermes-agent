@@ -24,7 +24,7 @@ def test_bridge_resolves_file_token_and_encodes_query(tmp_path, monkeypatch, cap
     token_file.write_text(f"\ufeff{secret}\n", encoding="utf-8")
     monkeypatch.setenv("HERMES_DASHBOARD_SESSION_TOKEN", f"file:{token_file}")
     urls = _capture_connection(monkeypatch)
-    token = "explicit+&secret" if explicit else ""
+    token = "explicit+&secret" if explicit else None
     assert run_byot_bridge(url="https://dashboard.example", token=token) == 2
     assert parse_qs(urlsplit(urls[0]).query)["token"] == [token or secret]
     assert secret not in capsys.readouterr().err
@@ -70,3 +70,10 @@ def test_spawned_terminal_does_not_inherit_dashboard_credential(tmp_path, monkey
     assert run_byot_bridge(command=["/bin/sh"]) == 0
     assert "HERMES_DASHBOARD_SESSION_TOKEN" not in captured
     assert captured["HERMES_HOME"] == str(tmp_path)
+
+
+def test_empty_explicit_token_does_not_fall_back_to_environment(monkeypatch):
+    monkeypatch.setenv("HERMES_DASHBOARD_SESSION_TOKEN", "environment-secret")
+    urls = _capture_connection(monkeypatch)
+    assert run_byot_bridge(token="") == 2
+    assert urls == []

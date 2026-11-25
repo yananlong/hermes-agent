@@ -227,10 +227,10 @@ class _Relay:
         return self.child.poll() or 0
 
 
-def run_byot_bridge(url: str = DEFAULT_DASHBOARD_URL, token: str = "", name: str = "",
+def run_byot_bridge(url: str = DEFAULT_DASHBOARD_URL, token: str | None = None, name: str = "",
                     command: list[str] | None = None, out=None) -> int:
     """Bridge the current terminal to the dashboard; return the child exit code."""
-    token = token or configured_session_token()
+    token = configured_session_token() if token is None else token
     if not token:
         print("hermes byot: no dashboard session token. Pass --token or set "
               "HERMES_DASHBOARD_SESSION_TOKEN.", file=sys.stderr)
