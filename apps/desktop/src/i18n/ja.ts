@@ -539,6 +539,10 @@ export const jaOverrides = {
       terminalFontPlaceholder: 'MesloLGS NF または CSS フォントスタック',
       terminalFontPreview: 'グリフのプレビュー',
       terminalFontReset: '既定値を使用',
+      terminalFontSizeTitle: 'ターミナルの文字サイズ',
+      terminalFontSizeDesc:
+        '組み込みターミナルの文字サイズをピクセルで指定します。デスクトップのターミナルペインと Web コンソールに適用されます。8〜32。',
+      terminalFontSizeReset: '既定のサイズを使用',
       chatFontTitle: 'チャットフォント',
       chatFontDesc:
         'チャットとアプリ全体に使うインストール済みフォントを選択します。OpenDyslexic などの読みやすいフォントに便利です。空欄ならテーマのフォントを使います。',

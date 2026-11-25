@@ -18,6 +18,15 @@ describe('terminal font resolution', () => {
     expect(resolveTerminalFontFamily(undefined)).toBe(DEFAULT_TERMINAL_FONT_FAMILY)
   })
 
+  it('leads with the bundled Source Code Pro at 15px, matching the web console', () => {
+    // styles.css ships Source Code Pro via @font-face from src/fonts/. A stack
+    // that does not name it first never paints it — the font downloads and goes
+    // unused, which is what shipped when this default led with JetBrains Mono.
+    expect(DEFAULT_TERMINAL_FONT_FAMILY.startsWith("'Source Code Pro'")).toBe(true)
+    expect(DEFAULT_TERMINAL_FONT_SIZE).toBe(15)
+    expect(resolveTerminalFontFamily('').startsWith("'Source Code Pro'")).toBe(true)
+  })
+
   it('quotes a friendly family name and appends the bundled fallback stack', () => {
     expect(resolveTerminalFontFamily('  MesloLGS NF  ')).toBe(`'MesloLGS NF', ${DEFAULT_TERMINAL_FONT_FAMILY}`)
   })

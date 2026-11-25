@@ -52,6 +52,8 @@ import { useI18n } from "@/i18n";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { PluginSlot } from "@/plugins";
 import { errorMessage } from "@/lib/api-error";
+import { useProfileScope } from "@/contexts/useProfileScope";
+import { notifyTerminalConfigSaved } from "@/hooks/useTerminalAppearance";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -103,6 +105,7 @@ function CategoryIcon({
 /* ------------------------------------------------------------------ */
 
 export default function ConfigPage() {
+  const { profile } = useProfileScope();
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [schema, setSchema] = useState<Record<
     string,
@@ -281,7 +284,8 @@ export default function ConfigPage() {
     if (!config) return;
     setSaving(true);
     try {
-      await api.saveConfig(config);
+      await api.saveConfig(config, profile);
+      notifyTerminalConfigSaved(profile);
       showToast(t.config.configSaved, "success");
     } catch (e) {
       showToast(`${t.config.failedToSave}: ${errorMessage(e)}`, "error");
@@ -293,7 +297,8 @@ export default function ConfigPage() {
   const handleYamlSave = async () => {
     setYamlSaving(true);
     try {
-      await api.saveConfigRaw(yamlText);
+      await api.saveConfigRaw(yamlText, profile);
+      notifyTerminalConfigSaved(profile);
       showToast(t.config.yamlConfigSaved, "success");
       api
         .getConfig()
