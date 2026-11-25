@@ -22,6 +22,7 @@ from agent.redact import redact_sensitive_text
 from agent.transports.codex_app_server import (
     CodexAppServerClient, CodexAppServerError, CodexAppServerTransportError,
 )
+from agent.transports.codex_app_server_daemon import CodexAppServerWire
 from agent.transports.codex_event_projector import CodexEventProjector, ProjectionResult
 from agent.transports.codex_user_input import CodexUserInputUnavailable, request_codex_user_input
 from agent.transports.hermes_tools_mcp_server import HERMES_TOOLS_MCP_SERVER_NAME
@@ -206,6 +207,25 @@ def _extract_thread_id(result: dict) -> Optional[str]:
     return thread_obj.get("id") or thread_obj.get("sessionId") or result.get("sessionId") or result.get("threadId")
 
 
+def _default_client_factory(codex_bin: str = "codex", codex_home: Optional[str] = None,
+                            **kwargs: Any) -> "CodexAppServerWire":
+    """Daemon-joined client when the shared daemon answers, else the spawned child.
+
+    Joining the daemon is what lets Hermes append to a thread the Codex TUI/CLI has
+    open concurrently: a second app-server PROCESS cannot take the rollout's flock
+    (``-32600 "already has an active writer"``), while a second CONNECTION inside the
+    daemon coexists with the TUI's own. Both transports implement
+    :class:`~agent.transports.codex_app_server_daemon.CodexAppServerWire` identically,
+    so nothing upstream learns which one answered. A daemon that is absent,
+    stale-socketed or fails its handshake returns None here and the proven spawn path
+    runs UNCHANGED.
+    """
+    from agent.transports.codex_app_server_daemon import join_codex_daemon
+
+    peer = join_codex_daemon(codex_home, client_version=_get_hermes_version())
+    return peer if peer is not None else CodexAppServerClient(codex_bin=codex_bin, codex_home=codex_home, **kwargs)
+
+
 class CodexAppServerSession:
     """One Codex thread per Hermes session, lifetime owned by AIAgent. Not thread-safe: one caller at a time."""
 
@@ -215,7 +235,7 @@ class CodexAppServerSession:
         approval_callback: Optional[Callable[..., str]] = None,
         on_event: Optional[Callable[[dict], None]] = None,
         request_routing: Optional[_ServerRequestRouting] = None,
-        client_factory: Optional[Callable[..., CodexAppServerClient]] = None,
+        client_factory: Optional[Callable[..., CodexAppServerWire]] = None,
         model: Optional[str] = None, model_provider: Optional[str] = None,
         developer_instructions: Optional[str] = None, resume_thread_id: Optional[str] = None,
         history_seed: Optional[str] = None, preserve_thread_settings: bool = False,
@@ -265,9 +285,11 @@ class CodexAppServerSession:
         self._user_input_callback = user_input_callback
         self._on_event = on_event  # Display hook (kawaii spinner ticks etc.)
         self._routing = request_routing or _ServerRequestRouting()
-        self._client_factory = client_factory or CodexAppServerClient
+        # Daemon-join first, spawned child second (see _default_client_factory); an
+        # injected factory (tests, pinned transports) keeps full authority.
+        self._client_factory = client_factory or _default_client_factory
 
-        self._client: Optional[CodexAppServerClient] = None
+        self._client: Optional[CodexAppServerWire] = None
         self._thread_id: Optional[str] = None
         self._interrupt_event = threading.Event()
         self._active_turn_id: Optional[str] = None
@@ -440,12 +462,13 @@ class CodexAppServerSession:
             self._retire(result, hint or self._format_error_with_stderr(f"{label} timed out", exc))
         return None
 
-    def _subprocess_died(self, result: TurnResult, client: Optional[CodexAppServerClient]) -> bool:
-        """Bail out early (rather than waiting on the deadline) when codex exited or close() ran.
+    def _subprocess_died(self, result: TurnResult, client: Optional[CodexAppServerWire]) -> bool:
+        """Bail out early (rather than waiting on the deadline) when the transport is gone.
 
         ``client`` is the loop's snapshot: close() on another thread nulls ``self._client``
         mid-turn (session expiry), which must end the turn, not raise AttributeError. A
-        ``None`` snapshot means close() already landed before the loop started.
+        ``None`` snapshot means close() already landed before the loop started. For a
+        daemon peer the WebSocket connection is the liveness signal (``is_alive``).
         """
         if client is None or self._closed or self._client is not client:
             result.interrupted = True

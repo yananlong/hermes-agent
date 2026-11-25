@@ -88,6 +88,7 @@ def resolve_codex_home(profile_home=None) -> Path:
 @contextmanager
 def _codex_client(*, profile_home=None):
     from agent.transports.codex_app_server import CodexAppServerClient
+    from agent.transports.codex_app_server_daemon import join_codex_daemon
     from hermes_constants import get_hermes_home, hermes_home_key
     from hermes_cli.codex_runtime_switch import get_configured_codex_binary
     from hermes_cli.config import load_config
@@ -105,6 +106,18 @@ def _codex_client(*, profile_home=None):
         raise ValueError("Codex history request is outside the active owning profile")
 
     codex_home = resolve_codex_home(target_home)
+
+    # The shared daemon is the same store's owner and needs no child environment: a
+    # read client that joins it skips the per-page ``codex app-server`` spawn entirely.
+    # ``resolve_codex_home`` above already proved this home is the profile's own Codex
+    # store, so the daemon there is the one these threads live in.
+    peer = join_codex_daemon(str(codex_home))
+    if peer is not None:
+        try:
+            yield peer
+        finally:
+            peer.close()
+        return
 
     # History reads need the profile's Codex auth/config files, but no Hermes provider key or
     # launch-profile dotenv residue. CODEX_HOME is selected from the active profile scope above,
