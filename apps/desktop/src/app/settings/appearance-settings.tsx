@@ -85,7 +85,7 @@ import { MinimizeToTraySetting } from './minimize-to-tray-setting'
 import { PetSettings } from './pet-settings'
 import { ListRow, RowFootnoteAction, SectionHeading, SettingsContent, ToggleRow } from './primitives'
 import { SETTING_IDS, settingElementId } from './settings-manifest'
-import { TerminalFontSetting } from './terminal-font-setting'
+import { TerminalFontControls } from './terminal-font-controls'
 import { useSettingDeepLink } from './use-setting-deep-link'
 
 // display.resume_last_session lives in the backend config record (shared with
@@ -706,9 +706,7 @@ export function AppearanceSettings({ subpage }: AppearanceSettingsProps = {}) {
                 <ChatFontSetting />
               </div>
 
-              <div id={settingElementId(ids.terminalFont)}>
-                <TerminalFontSetting />
-              </div>
+              <TerminalFontControls />
             </>
           )}
 
