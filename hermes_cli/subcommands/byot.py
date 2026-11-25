@@ -9,7 +9,6 @@ instead of the embedded terminal. See ``hermes_cli/byot_bridge.py``.
 from __future__ import annotations
 
 import argparse
-import os
 
 
 def build_byot_parser(subparsers) -> None:
@@ -24,8 +23,8 @@ def build_byot_parser(subparsers) -> None:
             "streams it to the dashboard's /api/byot/host WebSocket. In the web UI Chat "
             "tab, attach the listed external terminal to mirror and control this session.\n"
             "\n"
-            "The dashboard URL defaults to http://127.0.0.1:8642 (override with --url or "
-            "HERMES_DASHBOARD_URL). Authentication uses the dashboard session token: "
+            "The dashboard URL defaults to http://127.0.0.1:9119 (override with --url). "
+            "Authentication uses the dashboard session token: "
             "--token, or HERMES_DASHBOARD_SESSION_TOKEN."
         ),
         epilog=(
@@ -38,8 +37,8 @@ def build_byot_parser(subparsers) -> None:
     )
     parser.add_argument(
         "--url",
-        default=os.environ.get("HERMES_DASHBOARD_URL", "http://127.0.0.1:8642"),
-        help="Dashboard base URL (default: %(default)s; env HERMES_DASHBOARD_URL)",
+        default="http://127.0.0.1:9119",
+        help="Dashboard base URL (default: %(default)s)",
     )
     parser.add_argument(
         "--token",

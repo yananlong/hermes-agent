@@ -2901,6 +2901,21 @@ export interface Translations extends NoticeTranslations {
       unarchive: string
       newWindow: string
       openInTerminal: string
+      useTerminalHandoff: string
+      terminalHandoffTitle: string
+      terminalHandoffInstructions: string
+      terminalHandoffOwnerWarning: string
+      terminalHandoffShellLabel: string
+      terminalHandoffLoginShell: string
+      terminalHandoffZsh: string
+      terminalHandoffBash: string
+      terminalHandoffShellNote: string
+      terminalHandoffIdentityNote: string
+      terminalHandoffPathNote: string
+      terminalHandoffLoading: string
+      terminalHandoffLoadFailed: string
+      terminalHandoffHomeUnsupported: string
+      terminalHandoffCopy: string
       hideTabBar: string
       openInNewTab: string
       openInSplit: string

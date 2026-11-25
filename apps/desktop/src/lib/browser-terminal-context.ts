@@ -19,9 +19,9 @@ function isBrowserTerminalContext(value: unknown): value is BrowserTerminalConte
 }
 
 /** Load machine facts needed for the handoff, preserving compatibility with older Webapp servers. */
-export async function loadBrowserTerminalContext(bootstrap: BrowserBootstrap): Promise<BrowserTerminalContext> {
+export async function loadBrowserTerminalContext(bootstrap: BrowserBootstrap, profile: string): Promise<BrowserTerminalContext> {
   try {
-    const result = await browserApi<unknown>(bootstrap, { method: 'GET', path: '/api/webapp/terminal-context' })
+    const result = await browserApi<unknown>(bootstrap, { method: 'GET', path: '/api/webapp/terminal-context', profile })
 
     if (!isBrowserTerminalContext(result)) {
       throw new Error('Invalid Webapp terminal context')
@@ -35,7 +35,7 @@ export async function loadBrowserTerminalContext(bootstrap: BrowserBootstrap): P
       throw error
     }
 
-    const status = (await browserApi<unknown>(bootstrap, { method: 'GET', path: '/api/status' })) as {
+    const status = (await browserApi<unknown>(bootstrap, { method: 'GET', path: '/api/status', profile })) as {
       hermes_home?: unknown
     } | null
 

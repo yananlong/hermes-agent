@@ -217,7 +217,8 @@ describe('SessionActionsMenu', () => {
     })
     expect(browserTransportMocks.browserApi).toHaveBeenNthCalledWith(2, expect.anything(), {
       method: 'GET',
-      path: '/api/status'
+      path: '/api/status',
+      profile: 'work'
     })
 
     const shellSelect = within(dialog).getByRole('combobox', { name: 'Shell on the Hermes host' })

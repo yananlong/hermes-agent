@@ -5,9 +5,9 @@ import { CopyButton } from '@/components/ui/copy-button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useI18n } from '@/i18n'
+import { type BrowserTerminalContext, loadBrowserTerminalContext } from '@/lib/browser-terminal-context'
 import { type BrowserTerminalHandoffShell, buildBrowserTerminalHandoff } from '@/lib/browser-terminal-handoff'
 import { browserBootstrap, type BrowserBootstrap } from '@/lib/browser-transport'
-import { loadBrowserTerminalContext, type BrowserTerminalContext } from '@/lib/browser-terminal-context'
 
 interface SessionTerminalHandoffDialogProps {
   open: boolean
@@ -48,7 +48,7 @@ export function SessionTerminalHandoffDialog({
       }
     }
 
-    void loadBrowserTerminalContext(bootstrap)
+    void loadBrowserTerminalContext(bootstrap, profile)
       .then(result => {
         if (!current) {
           return
@@ -70,7 +70,7 @@ export function SessionTerminalHandoffDialog({
     return () => {
       current = false
     }
-  }, [open])
+  }, [open, profile])
 
   const selectedShellAvailable = shell === 'login' || Boolean(context?.shells[shell])
 
