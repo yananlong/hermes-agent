@@ -528,13 +528,14 @@ async def transcript(connection, ref, params):
 
     def read():
         store = authority_persistence(authority)
-        from gateway.session_linked_codex import linked_thread_id, transcript_page
-        if thread_id := linked_thread_id(store, target):
-            from gateway.session_authorities import owner_scope
-            with owner_scope(authority):
-                return {'session_id': ref.session_id, **transcript_page(
-                    connection, ref.session_id, thread_id, cursor=cursor, limit=limit,
-                    order=order, inline_images=inline_images, owner_session_id=target)}
+        from gateway.session_linked_foreign import linked_native_target, linked_transcript_page
+        target_ref = linked_native_target(store, target)
+        if target_ref is not None:
+            # Linked rows page through the same digest cursor as the local read, so a viewer can
+            # walk a native conversation either way; the native read is off the event loop.
+            return {'session_id': ref.session_id, **linked_transcript_page(
+                connection, ref.session_id, target_ref, cursor=cursor, limit=limit, order=order,
+                inline_images=inline_images, owner_session_id=target)}
         held = None if cursor is None else _decode_cursor(cursor, binding)
         return {'session_id': ref.session_id, **read_transcript(
             store, target, store.lineage.resume_lineage_ids(target), binding, held, limit,

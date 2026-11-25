@@ -13,7 +13,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hermes_cli.foreign_linked_store import read_jsonl_bounded, safe_native_text
+from hermes_cli.foreign_linked_store import (
+    read_jsonl_bounded, row_model_config, safe_native_text,
+)
 from hermes_cli.foreign_sessions import _flatten_blocks
 
 _MAX_ROWS = 10_000
@@ -93,11 +95,20 @@ def count_vibe_messages(session_dir: Path) -> int:
 
 
 def linked_mistral_session_id(store, session_id: str) -> str | None:
-    """Return the native identity, rejecting a damaged linked-session record."""
-    row = store.sessions.get(session_id)
-    if row is None or row.model_config.get("mistral_linked_thread") is not True:
+    """Return the native identity, rejecting a damaged linked-session record.
+
+    Shape-tolerant row read for the same reason as ``linked_claude_session_id``: a dict row from
+    ``SessionDB.get_session`` has no ``model_config`` attribute, so the direct read raised
+    ``AttributeError`` on every ordinary row of a dict-shaped store and broke canonical resume.
+
+    Raises:
+        LinkedConfigUnreadable: the row's ``model_config`` exists but is unusable.
+        ValueError: the row is flagged as a linked Mistral session but records no session id.
+    """
+    config = row_model_config(store, session_id)
+    if config.get("mistral_linked_thread") is not True:
         return None
-    native_id = row.model_config.get("mistral_session_id")
+    native_id = config.get("mistral_session_id")
     if not isinstance(native_id, str) or not native_id:
         raise ValueError("Linked Mistral session has no session ID")
     return native_id

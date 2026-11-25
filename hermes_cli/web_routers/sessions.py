@@ -719,15 +719,16 @@ def _linked_foreign_history_source(store, session_id: str):
     read-oriented stores whose history is paged live from the native transcript, so the reader
     is ``claude_linked_threads.read_claude_history`` / ``mistral_linked_threads.read_mistral_history``.
     """
-    from hermes_cli.claude_linked_history import linked_claude_session_id
-    from hermes_cli.mistral_linked_history import linked_mistral_session_id
-    if native_id := linked_claude_session_id(store, session_id):
+    from hermes_cli.foreign_linked_store import linked_foreign_target
+    target = linked_foreign_target(store, session_id)
+    if target is None or target[0] == "codex":
+        return None
+    kind, native_id = target
+    if kind == "claude":
         from hermes_cli import claude_linked_threads
         return "Claude", native_id, claude_linked_threads.read_claude_history
-    if native_id := linked_mistral_session_id(store, session_id):
-        from hermes_cli import mistral_linked_threads
-        return "Mistral", native_id, mistral_linked_threads.read_mistral_history
-    return None
+    from hermes_cli import mistral_linked_threads
+    return "Mistral", native_id, mistral_linked_threads.read_mistral_history
 
 
 # Same windowing the Codex linked-history REST branch uses
