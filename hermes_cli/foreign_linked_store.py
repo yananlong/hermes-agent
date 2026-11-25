@@ -248,6 +248,56 @@ def linked_foreign_label(kind: str) -> str:
         kind, "the native tool")
 
 
+def linked_foreign_target(store, session_id: str) -> tuple[str, str] | None:
+    """``(kind, native_id)`` of the native thread this row points at, else ``None``.
+
+    The one resolution every canonical read uses: a linked row is a locator, so a reader must know
+    WHICH store owns its transcript before it can answer. ``None`` means the row is provably an
+    ordinary Hermes session; a row whose configuration is unusable raises (see
+    :class:`LinkedConfigUnreadable`) rather than reading as ordinary.
+    """
+    from hermes_cli.claude_linked_history import linked_claude_session_id
+    from hermes_cli.codex_linked_history import linked_thread_id
+    from hermes_cli.mistral_linked_history import linked_mistral_session_id
+
+    if native_id := linked_thread_id(store, session_id):
+        return "codex", native_id
+    if native_id := linked_claude_session_id(store, session_id):
+        return "claude", native_id
+    if native_id := linked_mistral_session_id(store, session_id):
+        return "mistral", native_id
+    return None
+
+
+def read_linked_foreign_display(kind: str, native_id: str, *, profile_home=None) -> list[dict]:
+    """The FULL native transcript of a read-oriented linked row as display rows.
+
+    Claude Code and Mistral Vibe have no app-server, so their readers answer one bounded page at a
+    time (100 rows). A canonical read wants the whole conversation, so this walks the cursor to the
+    end; a page or cursor that does not type-check fails closed instead of spinning.
+    """
+    if kind == "claude":
+        from hermes_cli.claude_linked_threads import read_claude_history as read_page
+    elif kind == "mistral":
+        from hermes_cli.mistral_linked_threads import read_mistral_history as read_page
+    else:
+        raise ValueError(f"{linked_foreign_label(kind)} history is not read this way")
+    rows: list[dict] = []
+    cursor, seen = None, set()
+    while True:
+        page = read_page(native_id, cursor=cursor, limit=100, profile_home=profile_home)
+        messages = page.get("messages") if isinstance(page, dict) else None
+        if not isinstance(messages, list):
+            raise ValueError(f"Linked {kind} history returned an invalid page")
+        rows.extend(row for row in messages if isinstance(row, dict))
+        cursor = page.get("next_cursor")
+        if cursor is None:
+            return rows
+        if not isinstance(cursor, str) or cursor in seen:
+            raise ValueError(f"Linked {kind} history returned an invalid cursor")
+        seen.add(cursor)
+
+
 def read_jsonl_bounded(path: Path, max_bytes: int = MAX_STORE_FILE_BYTES,
                        max_line_bytes: int = MAX_STORE_LINE_BYTES):
     """Yield parsed JSON lines from an append-only foreign transcript, bounded per line and total."""

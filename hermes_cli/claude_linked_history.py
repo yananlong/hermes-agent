@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hermes_cli.foreign_linked_store import read_jsonl_bounded, safe_native_text
+from hermes_cli.foreign_linked_store import (
+    read_jsonl_bounded, row_model_config, safe_native_text,
+)
 from hermes_cli.foreign_sessions import _message_turn
 
 _MAX_ROWS = 10_000
@@ -50,11 +52,21 @@ def display_claude_messages(path: Path) -> list[dict]:
 
 
 def linked_claude_session_id(store, session_id: str) -> str | None:
-    """Return the native identity, rejecting a damaged linked-session record."""
-    row = store.sessions.get(session_id)
-    if row is None or row.model_config.get("claude_linked_thread") is not True:
+    """Return the native identity, rejecting a damaged linked-session record.
+
+    Reads through the shared shape-tolerant row reader: ``SessionDB.get_session`` hands back a dict
+    row whose ``model_config`` may be JSON text, while the persistence handle's record carries a
+    dict. Reading ``row.model_config`` directly made every ordinary row on the dict-shaped store
+    raise ``AttributeError`` — which every canonical read turned into a resume failure.
+
+    Raises:
+        LinkedConfigUnreadable: the row's ``model_config`` exists but is unusable.
+        ValueError: the row is flagged as a linked Claude session but records no session id.
+    """
+    config = row_model_config(store, session_id)
+    if config.get("claude_linked_thread") is not True:
         return None
-    native_id = row.model_config.get("claude_session_id")
+    native_id = config.get("claude_session_id")
     if not isinstance(native_id, str) or not native_id:
         raise ValueError("Linked Claude session has no session ID")
     return native_id

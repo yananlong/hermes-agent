@@ -34,45 +34,20 @@ def _linked_foreign_target(store, key: str):
     Codex, Claude and Mistral linked rows all store a durable native identity in
     ``model_config``; the native tool owns the transcript and Hermes only points at it.
     """
-    from hermes_cli.codex_linked_history import linked_thread_id
-    from hermes_cli.claude_linked_history import linked_claude_session_id
-    from hermes_cli.mistral_linked_history import linked_mistral_session_id
-    if thread_id := linked_thread_id(store, key):
-        return "codex", thread_id
-    if native_id := linked_claude_session_id(store, key):
-        return "claude", native_id
-    if native_id := linked_mistral_session_id(store, key):
-        return "mistral", native_id
-    return None
+    from hermes_cli.foreign_linked_store import linked_foreign_target
+    return linked_foreign_target(store, key)
 
 
 def _read_linked_foreign_full(agent: str, native_id: str, *, profile_home=None) -> list[dict]:
-    """Read the FULL native transcript of a linked Claude/Mistral session as display rows.
+    """Read the FULL native transcript of a read-oriented linked row as display rows.
 
-    ``read_claude_history``/``read_mistral_history`` return one paged dict (max 100 rows per
-    page), so loop the cursor until it ends; fail closed on a broken cursor instead of spinning.
-    The rows are already ``{role, content, ...}`` display dicts, the same shape Codex's
+    ``read_claude_history``/``read_mistral_history`` page at most 100 rows per call; a canonical
+    read renders the whole conversation, so the shared reader walks their cursors to the end. The
+    rows are already ``{role, content, ...}`` display dicts, the same shape Codex's
     ``read_display_history`` flattens to, so ``_history_to_messages`` consumes them directly.
     """
-    if agent == "claude":
-        from hermes_cli.claude_linked_threads import read_claude_history as read_page
-    elif agent == "mistral":
-        from hermes_cli.mistral_linked_threads import read_mistral_history as read_page
-    else:
-        raise ValueError(f"Unknown linked foreign agent: {agent}")
-    rows, cursor, seen = [], None, set()
-    while True:
-        page = read_page(native_id, cursor=cursor, limit=100, profile_home=profile_home)
-        messages = page.get("messages") if isinstance(page, dict) else None
-        if not isinstance(messages, list):
-            raise ValueError(f"Linked {agent} history returned an invalid page")
-        rows.extend(row for row in messages if isinstance(row, dict))
-        cursor = page.get("next_cursor")
-        if cursor is None:
-            return rows
-        if not isinstance(cursor, str) or cursor in seen:
-            raise ValueError(f"Linked {agent} history returned an invalid cursor")
-        seen.add(cursor)
+    from hermes_cli.foreign_linked_store import read_linked_foreign_display
+    return read_linked_foreign_display(agent, native_id, profile_home=profile_home)
 
 
 def _read_linked_display(agent: str, native_id: str, *, session_id: str, model=None,

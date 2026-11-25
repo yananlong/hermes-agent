@@ -765,17 +765,13 @@ class AuthorityConnection:
         if target is None:
             from gateway.session_local_recovery import transcript_target
             target = transcript_target(self.authority, ref)
-        from gateway.session_linked_codex import linked_thread_id, read_display_history
-        if thread_id := linked_thread_id(authority_persistence(self.authority), target):
-            # This is a network read; keep Codex startup and pagination off the gateway event loop.
-            store = authority_persistence(self.authority)
-            owner_row = store.sessions.get(target)
-            linked_history = await asyncio.to_thread(
-                lambda: read_display_history(thread_id, session_id=target, model=owner_row.model if owner_row is not None else None,
-                                             profile_home=store.scope.profile_dir, session_db=store,
-                                             platform=owner_row.source if owner_row else ""))
-            if not omit:
-                history = linked_history
+        from gateway.session_linked_foreign import linked_display_history
+        # The native read is off the gateway event loop: it opens a Codex app-server or reads a
+        # foreign transcript file.
+        linked_history = await asyncio.to_thread(
+            lambda: linked_display_history(self.authority, target))
+        if linked_history is not None and not omit:
+            history = linked_history
         if params.get('display_projection'):
             # A micro-compaction merge stays in ``messages`` (an undo target); its originals are what shows.
             display['display_messages'] = display_projection(

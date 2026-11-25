@@ -193,3 +193,40 @@ def test_kind_follows_a_model_config_rewrite(store):
                                               "mistral_linked_thread": True,
                                               "mistral_session_id": MISTRAL_ID})
     assert linked_foreign_kind(store, "row") == "mistral"
+
+
+# ── the per-agent identity readers read every store shape ─────────────────────────────────────
+#
+# ``linked_foreign_kind`` tolerated both store shapes from the start, but the per-agent identity
+# readers it sits beside (``linked_claude_session_id`` / ``linked_mistral_session_id``) read
+# ``row.model_config`` straight off the record. On the dict-row shape (``SessionDB.get_session``)
+# an ORDINARY row raised ``AttributeError: 'dict' object has no attribute 'model_config'`` — and
+# every canonical read calls them, so plain ``session.resume`` failed on every non-linked row.
+
+
+@pytest.mark.parametrize("reader", ["linked_claude_session_id", "linked_mistral_session_id"])
+def test_identity_readers_answer_none_for_an_ordinary_row_in_either_store_shape(reader):
+    from hermes_cli import claude_linked_history, mistral_linked_history
+
+    read = getattr({"linked_claude_session_id": claude_linked_history,
+                    "linked_mistral_session_id": mistral_linked_history}[reader], reader)
+    plain = {"model_config": json.dumps({"api_mode": "chat_completions"})}
+
+    assert read(_SpyDB({"plain": plain}), "plain") is None   # dict row, JSON-text config
+    assert read(_HandleStore({"plain": _Record({"api_mode": "chat_completions"})}), "plain") is None
+    assert read(_SpyDB({}), "absent") is None
+
+
+@pytest.mark.parametrize("reader, flag, id_key, native_id", [
+    ("linked_claude_session_id", "claude_linked_thread", "claude_session_id", CLAUDE_ID),
+    ("linked_mistral_session_id", "mistral_linked_thread", "mistral_session_id", MISTRAL_ID),
+])
+def test_identity_readers_resolve_a_linked_row_in_either_store_shape(reader, flag, id_key, native_id):
+    from hermes_cli import claude_linked_history, mistral_linked_history
+
+    read = getattr({"linked_claude_session_id": claude_linked_history,
+                    "linked_mistral_session_id": mistral_linked_history}[reader], reader)
+    config = {flag: True, id_key: native_id}
+
+    assert read(_SpyDB({"row": {"model_config": json.dumps(config)}}), "row") == native_id
+    assert read(_HandleStore({"row": _Record(config)}), "row") == native_id

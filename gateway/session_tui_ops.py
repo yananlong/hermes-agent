@@ -139,17 +139,11 @@ async def session_history(connection, ref, params):
         from gateway.session_controls import display_projection
         from gateway.session_persistence import authority_persistence
         from persistence.conversation.messages import ConversationRequest
-        from gateway.session_linked_codex import linked_thread_id, read_display_history
+        from gateway.session_linked_foreign import linked_display_history
         store = authority_persistence(authority)
-        if thread_id := linked_thread_id(store, target):
-            from gateway.session_authorities import owner_scope
-            owner_row = store.sessions.get(target)
-            with owner_scope(authority):
-                history = read_display_history(
-                    thread_id, session_id=target, model=owner_row.model if owner_row is not None else None,
-                    profile_home=store.scope.profile_dir, session_db=store,
-                                             platform=owner_row.source if owner_row else "")
-            return {'count': len(history), 'messages': display_projection(history, authority.profile_id)}
+        linked = linked_display_history(authority, target)
+        if linked is not None:
+            return {'count': len(linked), 'messages': display_projection(linked, authority.profile_id)}
         rows = [row.as_openai_message() for row in store.messages.read_conversation(
             target, ConversationRequest(include_lineage=True, include_row_ids=True))]
         return {'count': len(rows), 'messages': display_projection(rows, authority.profile_id)}
