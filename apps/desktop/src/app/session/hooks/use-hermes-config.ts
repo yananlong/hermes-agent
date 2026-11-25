@@ -1,6 +1,6 @@
 import { type MutableRefObject, useCallback, useRef, useState } from 'react'
 
-import { setTerminalFontFamilyFromConfig } from '@/app/right-sidebar/terminal/terminal-font'
+import { setTerminalFontFamilyFromConfig, setTerminalFontSizeFromConfig } from '@/app/right-sidebar/terminal/terminal-font'
 import { getHermesConfig, getHermesConfigDefaults } from '@/hermes'
 import { BUILTIN_PERSONALITIES, normalizePersonalityValue, personalityNamesFromConfig } from '@/lib/chat-runtime'
 import { composerServiceTier } from '@/lib/model-status-label'
@@ -160,6 +160,7 @@ export function useHermesConfig({ activeSessionIdRef }: HermesConfigOptions) {
         setShowReasoningFromConfig(localShowReasoning(config.display))
         setShowToolActivityFromConfig(config.display?.tool_progress)
         setTerminalFontFamilyFromConfig(config.terminal?.font_family)
+        setTerminalFontSizeFromConfig(config.terminal?.font_size)
         setChatFontFamilyFromConfig(config.desktop?.font_family)
 
         if (!canPublish()) {

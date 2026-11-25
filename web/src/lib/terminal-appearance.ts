@@ -1,3 +1,54 @@
+import {
+  DEFAULT_TERMINAL_FONT_SIZE,
+  refitWhenTerminalFontLoads,
+  TERMINAL_FONT_FAMILY,
+  type RemeasurableTerminal,
+} from "./terminal-font-refit";
+
+export interface TerminalAppearance {
+  fontFamily: string;
+  fontSize: number;
+}
+
+export const DEFAULT_TERMINAL_APPEARANCE: TerminalAppearance = {
+  fontFamily: TERMINAL_FONT_FAMILY,
+  fontSize: DEFAULT_TERMINAL_FONT_SIZE,
+};
+
+export function terminalAppearanceFromConfig(config: Record<string, unknown>): TerminalAppearance {
+  const terminal = config.terminal;
+  const options = terminal && typeof terminal === "object" && !Array.isArray(terminal)
+    ? terminal as Record<string, unknown>
+    : {};
+  const family = typeof options.font_family === "string" ? options.font_family.trim() : "";
+  const preferred = family && !family.includes(",") && !/['"]/.test(family)
+    ? `'${family.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`
+    : family;
+  const size = options.font_size;
+  return {
+    fontFamily: preferred ? `${preferred}, ${TERMINAL_FONT_FAMILY}` : TERMINAL_FONT_FAMILY,
+    fontSize: typeof size === "number" && Number.isInteger(size) && size >= 8 && size <= 32
+      ? size
+      : DEFAULT_TERMINAL_FONT_SIZE,
+  };
+}
+
+/** Update an existing xterm and its cell metrics without restarting its session. */
+export function applyTerminalAppearance(
+  term: RemeasurableTerminal & { options: { fontFamily?: string; fontSize?: number } },
+  appearance: TerminalAppearance,
+  fit: () => void,
+): () => void {
+  if (term.options.fontFamily !== appearance.fontFamily || term.options.fontSize !== appearance.fontSize) {
+    term.options.fontFamily = appearance.fontFamily;
+    term.options.fontSize = appearance.fontSize;
+    fit();
+    term.clearTextureAtlas();
+    if (term.rows > 0) term.refresh(0, term.rows - 1);
+  }
+  return refitWhenTerminalFontLoads(term, fit, undefined, appearance.fontFamily);
+}
+
 /**
  * Terminal appearance helpers shared by the chat composer's xterm host:
  * theme colors and the layout-width-driven font tiers. Extracted from
@@ -41,14 +92,11 @@ export function terminalTierWidthPx(host: HTMLElement | null): number {
   return Math.max(1, Math.round(layout));
 }
 
-export function terminalFontSizeForWidth(layoutWidthPx: number): number {
-  if (layoutWidthPx < 300) return 7;
-  if (layoutWidthPx < 360) return 8;
-  if (layoutWidthPx < 420) return 9;
-  if (layoutWidthPx < 520) return 10;
-  if (layoutWidthPx < 720) return 11;
-  if (layoutWidthPx < 1024) return 12;
-  return 14;
+const FONT_SIZE_TIERS = [[300, 7], [360, 8], [420, 9], [520, 10], [720, 11], [1024, 12]] as const;
+
+export function terminalFontSizeForWidth(layoutWidthPx: number, size = DEFAULT_TERMINAL_FONT_SIZE): number {
+  const tier = FONT_SIZE_TIERS.find(([maxWidth]) => layoutWidthPx < maxWidth)?.[1] ?? DEFAULT_TERMINAL_FONT_SIZE;
+  return Math.max(7, Math.round(size * tier / DEFAULT_TERMINAL_FONT_SIZE));
 }
 
 export function terminalLineHeightForWidth(layoutWidthPx: number): number {

@@ -1005,6 +1005,10 @@ export const en: Translations = {
       terminalFontPlaceholder: 'MesloLGS NF or a CSS font stack',
       terminalFontPreview: 'Glyph preview',
       terminalFontReset: 'Use default',
+      terminalFontSizeTitle: 'Terminal Font Size',
+      terminalFontSizeDesc:
+        'Set the embedded terminal size in pixels. Applies to the Desktop terminal panes and the web console; 8 to 32.',
+      terminalFontSizeReset: 'Use default size',
       chatFontTitle: 'Chat Font',
       chatFontDesc:
         "Choose an installed font for chat and the rest of the app. Handy for readability faces such as OpenDyslexic; leave blank to use the theme's font.",

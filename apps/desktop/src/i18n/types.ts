@@ -824,6 +824,9 @@ export interface Translations extends NoticeTranslations {
       terminalFontPlaceholder: string
       terminalFontPreview: string
       terminalFontReset: string
+      terminalFontSizeTitle: string
+      terminalFontSizeDesc: string
+      terminalFontSizeReset: string
       chatFontTitle: string
       chatFontDesc: string
       chatFontPlaceholder: string

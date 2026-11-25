@@ -92,9 +92,15 @@ describe('TerminalFontSetting', () => {
     // Only the font key goes over the wire (PUT deep-merges); the shared cache
     // gets the merged record so sibling terminal keys survive.
     expect(mocks.save).toHaveBeenCalledWith({ terminal: { font_family: 'MesloLGS NF' } })
-    expect(mocks.cache).toHaveBeenCalledWith({
-      display: { skin: 'hermes' },
-      terminal: { backend: 'local', cwd: '/workspace', font_family: 'MesloLGS NF' }
+    const cacheUpdate = mocks.cache.mock.calls[0][0] as (previous?: Record<string, unknown>) => Record<string, unknown>
+    expect(
+      cacheUpdate({
+        display: { skin: 'changed' },
+        terminal: { backend: 'local', cwd: '/workspace', font_family: '', font_size: 17 }
+      })
+    ).toEqual({
+      display: { skin: 'changed' },
+      terminal: { backend: 'local', cwd: '/workspace', font_family: 'MesloLGS NF', font_size: 17 }
     })
   })
 

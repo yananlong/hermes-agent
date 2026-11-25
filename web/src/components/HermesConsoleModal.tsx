@@ -10,12 +10,10 @@ import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { useModalBehavior } from "@/hooks/useModalBehavior";
 import { useProfileScope } from "@/contexts/useProfileScope";
+import { useEmbeddedTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { api } from "@/lib/api";
 import { maybeReloadForLoopbackWsAuthFailure } from "@/lib/dashboard-auth-reload";
-import {
-  refitWhenTerminalFontLoads,
-  TERMINAL_FONT_FAMILY,
-} from "@/lib/terminal-font-refit";
+import { refitWhenTerminalFontLoads } from "@/lib/terminal-font-refit";
 import { cn, themedBody } from "@/lib/utils";
 import { useTheme } from "@/themes";
 import { errorMessage } from "@/lib/api-error";
@@ -107,6 +105,7 @@ export function HermesConsoleModal({ open, onClose }: HermesConsoleModalProps) {
   const modalRef = useModalBehavior({ open, onClose });
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XtermTerminal | null>(null);
+  const fitRef = useRef<(() => void) | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const lineRef = useRef("");
   const promptRef = useRef("hermes> ");
@@ -123,6 +122,7 @@ export function HermesConsoleModal({ open, onClose }: HermesConsoleModalProps) {
   const [connectNonce, setConnectNonce] = useState(0);
   const [consoleProfile, setConsoleProfile] = useState("current");
   const { profile } = useProfileScope();
+  const appearanceRef = useEmbeddedTerminalAppearance(profile, termRef, hostRef, fitRef);
   const { theme } = useTheme();
 
   const redrawInput = useCallback((line = lineRef.current) => {
@@ -355,8 +355,8 @@ export function HermesConsoleModal({ open, onClose }: HermesConsoleModalProps) {
     const term = new XtermTerminal({
       allowProposedApi: true,
       cursorBlink: true,
-      fontFamily: TERMINAL_FONT_FAMILY,
-      fontSize: 13,
+      fontFamily: appearanceRef.current.fontFamily,
+      fontSize: appearanceRef.current.fontSize,
       lineHeight: 1.25,
       letterSpacing: 0,
       macOptionIsMeta: true,
@@ -394,10 +394,11 @@ export function HermesConsoleModal({ open, onClose }: HermesConsoleModalProps) {
         fitTerminal();
       });
     };
+    fitRef.current = fitTerminal;
     const ro = new ResizeObserver(scheduleFit);
     ro.observe(host);
     scheduleFit();
-    const stopFontRefit = refitWhenTerminalFontLoads(term, fitTerminal);
+    const stopFontRefit = refitWhenTerminalFontLoads(term, fitTerminal, undefined, appearanceRef.current.fontFamily);
 
     const dataDisposable = term.onData(handleInputData);
     setConnectionState("connecting");
@@ -467,6 +468,7 @@ export function HermesConsoleModal({ open, onClose }: HermesConsoleModalProps) {
       ro.disconnect();
       if (resizeFrame) cancelAnimationFrame(resizeFrame);
       stopFontRefit();
+      fitRef.current = null;
       wsRef.current?.close();
       wsRef.current = null;
       term.dispose();
@@ -476,7 +478,7 @@ export function HermesConsoleModal({ open, onClose }: HermesConsoleModalProps) {
       activeCommandRef.current = false;
       hasReadyFrameRef.current = false;
     };
-  }, [connectNonce, handleFrame, handleInputData, open, profile, theme]);
+  }, [appearanceRef, connectNonce, handleFrame, handleInputData, open, profile, theme]);
 
   useEffect(() => {
     if (!open) return;

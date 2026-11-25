@@ -503,6 +503,7 @@ export interface HermesConfig {
   terminal?: {
     cwd?: string
     font_family?: string
+    font_size?: number
   }
   stt?: {
     enabled?: boolean

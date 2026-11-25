@@ -32,7 +32,12 @@ export function useAgentTerminal({ active, id, procId }: { active: boolean; id: 
   const termRef = useRef<Terminal | null>(null)
   const webglRef = useRef<WebglAddon | null>(null)
   const fitRef = useRef<(() => void) | null>(null)
-  const { latestFontFamilyRef, mountedRef } = useTerminalFontController({ fitRef, termRef, webglRef })
+
+  const { latestFontFamilyRef, latestFontSizeRef, mountedRef } = useTerminalFontController({
+    fitRef,
+    termRef,
+    webglRef
+  })
 
   const surfaceTheme = () => {
     const ansi = renderedMode === 'dark' ? (theme.darkTerminal ?? theme.terminal) : theme.terminal
@@ -76,7 +81,7 @@ export function useAgentTerminal({ active, id, procId }: { active: boolean; id: 
       cursorBlink: false,
       disableStdin: true,
       fontFamily: latestFontFamilyRef.current,
-      fontSize: 11,
+      fontSize: latestFontSizeRef.current,
       fontWeight: 'normal',
       fontWeightBold: 'bold',
       letterSpacing: 0,
@@ -179,6 +184,7 @@ export function useAgentTerminal({ active, id, procId }: { active: boolean; id: 
 
       // Stream live output straight into the terminal (replays backlog on attach).
       unregister = registerAgentTerminalWriter(procId, chunk => term.write(chunk))
+
       // Closing can evict the backlog while the registry stays unchanged. Pin
       // the writer before recovering its snapshot so retention cannot evict it.
       for (const list of Object.values($backgroundStatusBySession.get())) {
@@ -187,9 +193,11 @@ export function useAgentTerminal({ active, id, procId }: { active: boolean; id: 
         if (item) {
           seedAgentTerminalCommand(procId, item.title)
           syncAgentTerminalSnapshot(procId, item.output ?? '')
+
           break
         }
       }
+
       unregisterReader = registerTerminalReader(id, makeTerminalReader(term))
     }
 
@@ -200,7 +208,9 @@ export function useAgentTerminal({ active, id, procId }: { active: boolean; id: 
 
     void prepareTerminalFontFamily(
       () => latestFontFamilyRef.current,
-      () => !disposed && host.isConnected
+      () => !disposed && host.isConnected,
+      undefined,
+      () => latestFontSizeRef.current
     ).then(fontFamily => {
       if (!fontFamily) {
         // Same host-connection race as the user terminal (#118004): the font
@@ -215,10 +225,13 @@ export function useAgentTerminal({ active, id, procId }: { active: boolean; id: 
           if (host.isConnected) {
             void prepareTerminalFontFamily(
               () => latestFontFamilyRef.current,
-              () => !disposed && host.isConnected
+              () => !disposed && host.isConnected,
+              undefined,
+              () => latestFontSizeRef.current
             ).then(next => {
               if (next && !disposed && !mounted && host.isConnected) {
                 term.options.fontFamily = next
+                term.options.fontSize = latestFontSizeRef.current
                 mount()
               }
             })
@@ -235,6 +248,7 @@ export function useAgentTerminal({ active, id, procId }: { active: boolean; id: 
       }
 
       term.options.fontFamily = fontFamily
+      term.options.fontSize = latestFontSizeRef.current
       mount()
     })
 

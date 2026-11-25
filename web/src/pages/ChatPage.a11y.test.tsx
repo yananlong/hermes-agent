@@ -103,6 +103,7 @@ class FakeTerminal {
 
 const apiMocks = vi.hoisted(() => ({
   buildWsUrl: vi.fn(async () => "ws://localhost/api/pty?channel=chat-1"),
+  getConfig: vi.fn(async () => ({})),
 }));
 
 vi.mock("@/lib/chatImagePaste", () => ({

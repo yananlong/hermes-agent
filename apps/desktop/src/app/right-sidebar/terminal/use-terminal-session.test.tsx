@@ -16,7 +16,10 @@ const emulator = vi.hoisted(() => ({
   input: (_data: string) => {},
   output: '',
   latestFontFamilyRef: { current: 'monospace' },
-  mountedRef: { current: false }
+  latestFontSizeRef: { current: 15 },
+  mountedRef: { current: false },
+  prepare: () => Promise.resolve('monospace'),
+  instances: [] as Array<{ options: Record<string, unknown>; opened: boolean }>
 }))
 
 vi.mock('@xterm/xterm', () => ({
@@ -30,9 +33,11 @@ vi.mock('@xterm/xterm', () => ({
     parser = { registerOscHandler: () => ({ dispose() {} }) }
     constructor(options: Record<string, unknown>) {
       this.options = options
+      emulator.instances.push(this)
     }
+    opened = false
     loadAddon() {}
-    open() {}
+    open() { this.opened = true }
     focus() {}
     dispose() {}
     refresh() {}
@@ -89,7 +94,7 @@ vi.mock('@xterm/addon-webgl', () => ({
 vi.mock('./links', () => ({ terminalLinkHandler: {}, terminalWebLinksAddon: () => ({}) }))
 vi.mock('./buffer', () => ({ makeTerminalReader: () => () => '', registerTerminalReader: () => () => {} }))
 vi.mock('./terminal-context-menu', () => ({ registerTerminalContextMenu: () => () => {} }))
-vi.mock('./terminal-font', () => ({ prepareTerminalFontFamily: async () => 'monospace' }))
+vi.mock('./terminal-font', () => ({ prepareTerminalFontFamily: () => emulator.prepare() }))
 vi.mock('./use-terminal-font', () => ({ useTerminalFontController: () => emulator }))
 vi.mock('@/themes/context', () => ({ useTheme: () => ({ renderedMode: 'dark', theme: {}, themeName: 'test' }) }))
 
@@ -182,8 +187,26 @@ afterEach(() => {
   Socket.persistent = false
   Socket.refusal = null
   emulator.output = ''
+  emulator.instances = []
+  emulator.prepare = () => Promise.resolve('monospace')
+  emulator.latestFontSizeRef.current = 15
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+})
+
+it('opens the user terminal with a size changed during font preparation', async () => {
+  seedWebappSession('test-token')
+  vi.stubGlobal('WebSocket', Socket)
+  installBrowserDesktopBridge()
+  let release!: (family: string) => void
+  emulator.prepare = () => new Promise(resolve => { release = resolve })
+  const id = createTerminal('/work')
+  render(<Harness id={id} />)
+  expect(emulator.instances[0].options.fontSize).toBe(15)
+  emulator.latestFontSizeRef.current = 23
+  await act(async () => { release('monospace') })
+  await waitFor(() => expect(emulator.instances[0].opened).toBe(true))
+  expect(emulator.instances[0].options.fontSize).toBe(23)
 })
 
 it.each([1006, 1000])('retains the saved tab on transport loss (%s) and lets Enter recover in the same scrollback', async code => {
