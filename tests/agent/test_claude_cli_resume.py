@@ -10,11 +10,14 @@ the session id and the file count are compared before and after a turn.
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
+from agent.secret_scope import UnscopedSecretError, set_multiplex_active
 from agent.transports import claude_cli_resume as transport
+from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 from tests.waiting import wait_until
 
 pytestmark = pytest.mark.platforms("posix")
@@ -26,11 +29,17 @@ MODEL = "claude-sonnet-4-5"
 # binary produces: a logged-out result with exit 0, an unknown session, a rejected output format,
 # a fork, a permission denial, an empty success, and a child that never finishes.
 _FAKE_CLAUDE = r'''
-import json, os, sys, time, uuid
+import json, os, sys, threading, time, uuid
 
 MODE = os.environ.get("FAKE_CLAUDE_MODE", "ok")
 SESSION_FILE = os.environ.get("FAKE_CLAUDE_SESSION_FILE", "")
 FORK_DIR = os.environ.get("FAKE_CLAUDE_FORK_DIR", "")
+
+
+def env_probe():
+    """The names the test asked this child to report, with what the child actually inherited."""
+    names = [name for name in os.environ.get("FAKE_CLAUDE_ENV_PROBE", "").split(",") if name]
+    return {name: os.environ.get(name) for name in names}
 
 
 def log(entry):
@@ -38,6 +47,7 @@ def log(entry):
     if path:
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry) + "\n")
+
 
 
 def emit(obj):
@@ -89,12 +99,21 @@ while index < len(argv):
         index += 2
         continue
     index += 1
+
+cwd = os.getcwd()
+if MODE == "no_stdin":
+    # A child that never drains its stdin pipe: the parent's write blocks in the kernel until the
+    # prompt outgrows the pipe buffer. It announces itself first so the test can prove it ran.
+    log({"pid": os.getpid(), "argv": argv, "cwd": cwd, "prompt": None,
+         "mode": MODE, "output_format": output_format, "env": env_probe()})
+    time.sleep(6)
+    sys.exit(0)
+
 if prompt is None:
     prompt = sys.stdin.read().strip()
 
-cwd = os.getcwd()
 log({"pid": os.getpid(), "argv": argv, "cwd": cwd, "prompt": prompt,
-     "mode": MODE, "output_format": output_format})
+     "mode": MODE, "output_format": output_format, "env": env_probe()})
 
 if MODE == "hang":
     time.sleep(30)
@@ -200,10 +219,14 @@ class Harness:
         self.fork_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = tmp_path / "fake-claude.log"
         self.binary = install_fake_claude(tmp_path)
+        self.env_probe: list[str] = []
 
     def env(self, mode: str = "ok") -> dict:
-        return {"FAKE_CLAUDE_MODE": mode, "FAKE_CLAUDE_SESSION_FILE": str(self.session_path),
-                "FAKE_CLAUDE_FORK_DIR": str(self.fork_dir), "FAKE_CLAUDE_LOG": str(self.log_path)}
+        env = {"FAKE_CLAUDE_MODE": mode, "FAKE_CLAUDE_SESSION_FILE": str(self.session_path),
+               "FAKE_CLAUDE_FORK_DIR": str(self.fork_dir), "FAKE_CLAUDE_LOG": str(self.log_path)}
+        if self.env_probe:
+            env["FAKE_CLAUDE_ENV_PROBE"] = ",".join(self.env_probe)
+        return env
 
     def calls(self) -> list[dict]:
         if not self.log_path.exists():
@@ -349,6 +372,87 @@ def test_an_already_set_cancel_event_kills_the_child(harness):
     assert caught.value.code == transport.CLAUDE_CANCELLED
     pid = wait_until(lambda: harness.calls() and harness.calls()[0]["pid"], what="the fake CLI started")
     wait_until(lambda: not _alive(pid), what="the cancelled child to be gone")
+
+
+def test_the_deadline_bounds_the_stdin_write_not_only_the_drain(harness):
+    """A child that never reads stdin must not outlast the turn's own deadline.
+
+    The prompt (a dash-leading, 1 MiB one) goes out on stdin, and a pipe write blocks in the kernel
+    until the child drains it — so with the write outside the deadline loop a configured 0.25s
+    timeout only starts counting once the child gives up. ``no_stdin`` stalls 6s without reading, so
+    an unbounded write is a visible 6s return, not a hang.
+    """
+    prompt = "-" + "x" * (1024 * 1024)
+    started = time.monotonic()
+    with pytest.raises(transport.ClaudeCliError) as caught:
+        harness.run(prompt, mode="no_stdin", timeout=0.25)
+    elapsed = time.monotonic() - started
+
+    assert caught.value.code == transport.CLAUDE_TIMEOUT
+    assert elapsed < 2.0, f"the 0.25s deadline was only honoured after {elapsed:.2f}s"
+    pid = wait_until(lambda: harness.calls() and harness.calls()[-1]["pid"],
+                     what="the stalled child started")
+    wait_until(lambda: not _alive(pid), what="the timed-out child to be gone")
+
+
+@pytest.fixture
+def routed_profiles(tmp_path, monkeypatch):
+    """Launch profile A (its credential in the ambient process env) and served profile B (its own).
+
+    The values are synthetic: A's ambient key is what a systemd/Compose launch injects, A's ``.env``
+    holds a second A-only credential-shaped name, and B declares its own for both names it cares about.
+    """
+    a = tmp_path / ".hermes"
+    b = a / "profiles" / "b"
+    b.mkdir(parents=True)
+    (a / ".env").write_text("ANTHROPIC_API_KEY=launch-dotenv-value\nA_MARKER=a\n", encoding="utf-8")
+    (b / ".env").write_text("ANTHROPIC_API_KEY=served-profile-value\nB_MARKER=b\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(a))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "launch-ambient-value")
+    monkeypatch.setenv("A_MARKER", "a")
+    monkeypatch.delenv("B_MARKER", raising=False)
+    return a, b
+
+
+_PROFILE_PROBE = ["ANTHROPIC_API_KEY", "A_MARKER", "B_MARKER"]
+
+
+def test_a_routed_turn_spawns_the_child_with_the_served_profiles_credential(
+        harness, routed_profiles):
+    """Observed from INSIDE the child: B's key, none of A's, and the launch env left untouched."""
+    _a, b = routed_profiles
+    harness.env_probe = _PROFILE_PROBE
+    token = set_hermes_home_override(str(b))
+    try:
+        harness.run("add a docstring")
+    finally:
+        reset_hermes_home_override(token)
+
+    assert harness.calls()[0]["env"] == {"ANTHROPIC_API_KEY": "served-profile-value",
+                                        "A_MARKER": None, "B_MARKER": "b"}
+    # Building the child env must not move A's values: the launch process keeps its own profile.
+    assert {name: os.environ.get(name) for name in _PROFILE_PROBE} == {
+        "ANTHROPIC_API_KEY": "launch-ambient-value", "A_MARKER": "a", "B_MARKER": None}
+
+
+def test_the_launch_profiles_own_turn_keeps_its_ambient_credential(harness, routed_profiles):
+    """The control arm: the same child, no profile bound, still sees the launch profile's env."""
+    harness.env_probe = _PROFILE_PROBE
+    harness.run("add a docstring")
+
+    assert harness.calls()[0]["env"] == {"ANTHROPIC_API_KEY": "launch-ambient-value",
+                                        "A_MARKER": "a", "B_MARKER": None}
+
+
+def test_a_multiplexed_turn_with_no_bound_scope_refuses_to_spawn(harness, routed_profiles):
+    """Fail closed: with no profile bound, the child would inherit the default's credentials."""
+    set_multiplex_active(True)
+    try:
+        with pytest.raises(UnscopedSecretError):
+            harness.run("add a docstring")
+    finally:
+        set_multiplex_active(False)
+    assert harness.calls() == []  # nothing was spawned for the refused turn
 
 
 def test_missing_binary_is_a_typed_refusal_not_a_crash(monkeypatch):

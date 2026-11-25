@@ -32,11 +32,13 @@ native store render the same. The caller shows them; nothing here writes a Herme
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import queue
 import subprocess
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -261,7 +263,7 @@ def _run_once(prompt: str, *, session_id: str, cwd: Path, claude_bin: str,
     try:
         _start_readers(proc, lines, stderr_tail)
         if stdin_prompt:
-            _write_prompt(proc, prompt)
+            _feed_stdin(proc, prompt, started=started, timeout=timeout, cancel_event=cancel_event)
         events = _drain(proc, lines, raw, started=started, timeout=timeout,
                         cancel_event=cancel_event, on_event=on_event)
         exit_code = _reap(proc)
@@ -323,16 +325,19 @@ def _group_kwargs() -> dict[str, Any]:
 
 
 def _native_cli_env(overrides: Mapping[str, str] | None) -> dict[str, str]:
-    """The child's environment: the operator's own, plus what the caller resolved for it.
+    """The child's environment: the SERVED profile's own, plus what the caller resolved for it.
 
     Claude Code authenticates as the user (``CLAUDE_CONFIG_DIR``, ``~/.claude`` credentials,
-    ``ANTHROPIC_*``), so the child inherits the ambient environment byte-for-byte and Hermes adds
-    no credential of its own. The one overlay is the store the caller resolved through the profile
-    secret scope, so a routed profile's child reads the same store the caller just located.
+    ``ANTHROPIC_*``), so Hermes adds no credential of its own: the base is the profile-scoped child
+    env, and the one overlay is the store the caller resolved through the profile secret scope.
+
+    ``os.environ`` is the LAUNCH profile's — under ``gateway.multiplex_profiles`` that is the DEFAULT
+    profile's key, so an unbound read here signs a routed turn's child in as the wrong profile, and a
+    scoped miss must fail closed rather than fall back to it (``served_profile_child_env``).
     """
-    # The native CLI authenticates as the user; Hermes adds no credential of its own.
-    # health: allow PS-P05 -- the child is the user's own `claude`, whose identity lives in this env
-    env = dict(os.environ)
+    from tools.environments.local import served_profile_child_env
+
+    env = served_profile_child_env(inherit_credentials=True)
     for key, value in (overrides or {}).items():
         if value is None:
             continue
@@ -365,18 +370,49 @@ def _start_readers(proc: subprocess.Popen, lines: queue.Queue, stderr_tail: dequ
     spawn_context_thread(read_stderr, name="claude-resume-stderr").start()
 
 
-def _write_prompt(proc: subprocess.Popen, prompt: str) -> None:
-    """Feed a dash-leading prompt to ``claude -p`` on stdin; a closed pipe is the child's error."""
-    try:
-        proc.stdin.write(prompt if prompt.endswith("\n") else prompt + "\n")
-        proc.stdin.flush()
-    except (OSError, ValueError):
-        return
-    finally:
+def _feed_stdin(proc: subprocess.Popen, prompt: str, *, started: float, timeout: float | None,
+                cancel_event: Any) -> None:
+    """Write the prompt to ``claude -p``'s stdin under the turn's deadline and cancellation.
+
+    A pipe write blocks in the kernel until the child drains it, so a child that never reads its
+    stdin would hold the turn past its own timeout before :func:`_drain` ever ran. The write
+    therefore runs on a context-bound thread while the caller polls the same deadline/cancel checks
+    the drain uses; on expiry the child's group is killed (which breaks the pipe and ends the write)
+    and the typed refusal is raised. A closed pipe is the child's own error, as before.
+    """
+    from agent.memory_provider import spawn_context_thread
+
+    written = threading.Event()
+    payload = prompt if prompt.endswith("\n") else prompt + "\n"
+    stream = proc.stdin
+    assert stream is not None  # _spawn opens a stdin pipe whenever the prompt rides on it
+
+    def write() -> None:
         try:
-            proc.stdin.close()
+            stream.write(payload)
+            stream.flush()
         except (OSError, ValueError):
             pass
+        finally:
+            with contextlib.suppress(OSError, ValueError):
+                stream.close()
+            written.set()
+
+    spawn_context_thread(write, name="claude-resume-stdin").start()
+    deadline = None if timeout is None else started + timeout
+    while not written.is_set():
+        if cancel_event is not None and cancel_event.is_set():
+            _kill(proc)
+            raise ClaudeCliError(CLAUDE_CANCELLED, "the linked Claude turn was cancelled")
+        wait = _POLL_SECONDS
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _kill(proc)
+                raise ClaudeCliError(
+                    CLAUDE_TIMEOUT, f"the linked Claude turn exceeded {timeout:g}s")
+            wait = min(wait, remaining)
+        written.wait(wait)
 
 
 def _drain(proc: subprocess.Popen, lines: queue.Queue, raw: _RawStdout, *, started: float,
