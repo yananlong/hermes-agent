@@ -139,6 +139,43 @@ def read_display_history(thread_id: str, *, session_id: str, model: str | None =
     return rows[offset:] if limit is None else rows[offset:offset + limit]
 
 
+def _page_records(turns, *, collected: int, total_bytes: int, max_bytes: int,
+                  latest: bool) -> tuple[list, int, bool]:
+    """One native page as display records under the byte budget.
+
+    Returns ``(records, total_bytes, budget_hit)``. A turn that would cross the budget stops
+    the page (``budget_hit``); when nothing has been collected yet, that one oversized turn
+    is truncated (tail for ``latest``, head otherwise) inside the full budget instead of
+    blanking the window — its stub (budget below record overhead) projects to no rows.
+    """
+    from hermes_cli.codex_linked_history import native_turn_record, truncate_record_tail
+
+    records: list = []
+    for turn in turns:
+        if not isinstance(turn, dict) or not isinstance(turn.get("items", []), list):
+            raise ValueError("Codex returned an invalid history turn")
+        turn_id = turn.get("id")
+        if not isinstance(turn_id, str) or not turn_id or len(turn_id) > 256:
+            raise ValueError("Codex returned a native turn without a stable ID")
+        record = native_turn_record(turn)
+        try:
+            size = len(json.dumps(record, ensure_ascii=False, default=str).encode("utf-8"))
+        except (TypeError, ValueError):
+            raise ValueError("Codex returned an invalid history turn") from None
+        if total_bytes + size > max_bytes:
+            if collected == 0 and not records:
+                record = truncate_record_tail(record, max_bytes - total_bytes,
+                                              keep="tail" if latest else "head")
+                if record.get("rows"):
+                    total_bytes += len(json.dumps(record, ensure_ascii=False,
+                                                  default=str).encode("utf-8"))
+                    records.append(record)
+            return records, total_bytes, True
+        total_bytes += size
+        records.append(record)
+    return records, total_bytes, False
+
+
 def read_display_history_window(thread_id: str, *, session_id: str, model: str | None = None,
                                 profile_home=None, client=None, limit: int = 500, offset: int = 0,
                                 latest: bool = True, session_db=None, platform: str = "",
@@ -154,8 +191,7 @@ def read_display_history_window(thread_id: str, *, session_id: str, model: str |
     otherwise) instead of yielding an empty window.
     """
     from agent.transports.codex_app_server import CodexAppServerError
-    from hermes_cli.codex_linked_history import (display_native_turns, linked_turn_display_overlays,
-                                                 native_turn_record, truncate_record_tail, _next_cursor)
+    from hermes_cli.codex_linked_history import display_native_turns, linked_turn_display_overlays, _next_cursor
     from hermes_cli.codex_linked_threads import _codex_client, read_codex_history
     from hermes_constants import get_hermes_home
 
@@ -190,36 +226,9 @@ def read_display_history_window(thread_id: str, *, session_id: str, model: str |
                 if not isinstance(turns, list):
                     raise ValueError("Codex returned an invalid history page")
                 turns_seen += len(turns)
-                records = []
-                for turn in turns:
-                    if not isinstance(turn, dict) or not isinstance(turn.get("items", []), list):
-                        raise ValueError("Codex returned an invalid history turn")
-                    turn_id = turn.get("id")
-                    if not isinstance(turn_id, str) or not turn_id or len(turn_id) > 256:
-                        raise ValueError("Codex returned a native turn without a stable ID")
-                    record = native_turn_record(turn)
-                    try:
-                        size = len(json.dumps(record, ensure_ascii=False, default=str).encode("utf-8"))
-                    except (TypeError, ValueError):
-                        raise ValueError("Codex returned an invalid history turn") from None
-                    if total_bytes + size > max_bytes:
-                        if collected == 0 and not records:
-                            # One turn larger than the whole budget must not blank the
-                            # window: keep its tail (latest) or head (oldest) within the
-                            # full budget instead of dropping it. Mid-list oversized turns
-                            # keep the fail-soft stop above (fewer rows, no truncation).
-                            record = truncate_record_tail(record, max_bytes - total_bytes,
-                                                          keep="tail" if latest else "head")
-                            if record.get("rows"):
-                                total_bytes += len(json.dumps(record, ensure_ascii=False,
-                                                              default=str).encode("utf-8"))
-                                records.append(record)
-                            # A stub (budget below record overhead) projects to no rows;
-                            # stop here so the window fails soft to empty instead of raising.
-                        budget_hit = True
-                        break
-                    total_bytes += size
-                    records.append(record)
+                records, total_bytes, budget_hit = _page_records(
+                    turns, collected=collected, total_bytes=total_bytes, max_bytes=max_bytes,
+                    latest=latest)
                 if records:
                     if direction == "desc":
                         records.reverse()  # keep rows ascending within each page

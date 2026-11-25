@@ -414,7 +414,7 @@ def _linked_turn_refusals() -> tuple[type[BaseException], ...]:
                                ("agent.transports.vibe_cli_resume", ("VibeResumeError",))):
         try:
             module = __import__(module_name, fromlist=list(names))
-        except Exception:  # pragma: no cover - a build without that adapter
+        except ImportError:  # pragma: no cover - a build without that adapter
             continue
         kinds.extend(getattr(module, name) for name in names if isinstance(getattr(module, name, None), type))
     return tuple(dict.fromkeys(kinds))

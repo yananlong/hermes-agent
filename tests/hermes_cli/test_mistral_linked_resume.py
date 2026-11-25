@@ -20,7 +20,6 @@ import json
 import os
 import shutil
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -30,6 +29,7 @@ from hermes_cli import mistral_linked_resume as resume
 from agent.transports import vibe_cli_resume
 from persistence.conversation.messages import TranscriptRead
 from persistence_assembly import open_persistence, profile_scope
+from tests.waiting import wait_until
 
 SESSION_ID = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f"
 OTHER_SESSION = "9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a"
@@ -591,15 +591,18 @@ def test_a_timeout_kills_the_child_and_appends_nothing(db, linked, store_root, c
                                     base_env=base_env, timeout=1.5)
     assert len(_journal_records(session_dir)) == before
     pid = int(pid_file.read_text(encoding="utf-8").strip())
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.05)
-    else:  # pragma: no cover - would mean we leaked a child
+    try:
+        wait_until(lambda: _pid_gone(pid), timeout=15, what="the timed-out Vibe child to be reaped")
+    except AssertionError:  # pragma: no cover - would mean we leaked a child
         pytest.fail("the timed-out Vibe child was left running")
+
+
+def _pid_gone(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
 
 
 def test_a_blank_prompt_is_refused_before_any_spawn(db, linked, config, call_log, tmp_path):

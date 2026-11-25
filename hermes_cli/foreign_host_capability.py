@@ -25,6 +25,7 @@ existing foreign RPCs return, and reasons are path-free sentences.
 from __future__ import annotations
 
 import importlib.util
+import logging
 import os
 import re
 import shutil
@@ -33,6 +34,8 @@ import subprocess
 from pathlib import Path
 
 from hermes_cli.linked_send_admission import AGENT_LABELS, agent_label, linked_send_refusal
+
+logger = logging.getLogger(__name__)
 
 AGENTS = ("codex", "claude", "mistral")
 
@@ -149,8 +152,8 @@ def _probe_version(binary: str, timeout: float = _VERSION_PROBE_TIMEOUT) -> str 
     probe combined, and a status surface that runs on mount must stay a stat/``which``.
     """
     try:
-        proc = subprocess.run([binary, "--version"], capture_output=True, text=True,
-                              timeout=max(0.5, float(timeout)), check=False,
+        proc = subprocess.run([binary, "--version"], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=max(0.5, float(timeout)), check=False,
                               stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
@@ -196,7 +199,12 @@ def _transport_binary(agent: str, config) -> Path | None:
     try:
         module = importlib.import_module(module_name)
         resolved = getattr(module, getter_name)(config if isinstance(config, dict) else {})
-    except Exception:  # a transport mid-change, a typed "missing binary", or no install at all
+    except (ImportError, AttributeError, TypeError, ValueError, OSError, RuntimeError):
+        # A typed "missing binary" (RuntimeError/ValueError/OSError from the transport's
+        # resolver), a module whose signature moved (TypeError/AttributeError), or no
+        # install at all (ImportError): none of them mean "this host can run it", so the
+        # probe answers None and the CLI row supplies its own reason.
+        logger.debug("linked %s transport resolver unavailable", agent, exc_info=True)
         return None
     candidate = Path(str(resolved)).expanduser()
     return candidate if candidate.is_absolute() and candidate.is_file() else None
@@ -251,7 +259,9 @@ def append_supported(agent: str) -> bool:
             from agent.transports.codex_app_server_session import CodexAppServerSession
 
             return "resume_thread_id" in inspect.signature(CodexAppServerSession.__init__).parameters
-        except Exception:  # pragma: no cover - an unimportable transport cannot append either
+        except (ImportError, AttributeError, TypeError, ValueError):
+            # pragma: no cover - an unimportable transport cannot append either
+            logger.debug("codex append probe failed; treating as unsupported", exc_info=True)
             return False
     spec = _APPEND_RUNNERS.get(agent)
     if spec is None:
@@ -259,7 +269,9 @@ def append_supported(agent: str) -> bool:
     module_name, runner_name = spec
     try:
         return callable(getattr(importlib.import_module(module_name), runner_name, None))
-    except Exception:  # pragma: no cover - an unimportable adapter cannot append either
+    except (ImportError, AttributeError, TypeError):
+        # pragma: no cover - an unimportable adapter cannot append either
+        logger.debug("linked %s append probe failed; treating as unsupported", agent, exc_info=True)
         return False
 
 
@@ -309,11 +321,13 @@ def host_capabilities(*, profile_home=None, config=None, probe_version: bool = F
     """
     host = host or host_label()
     if config is None:
-        from hermes_cli.config import load_config
+        from hermes_cli.config import InvalidUserConfigError, load_config
 
         try:
             config = load_config()
-        except Exception:  # pragma: no cover - a broken config still reports stores/CLIs
+        except (InvalidUserConfigError, OSError, ValueError, TypeError):
+            # pragma: no cover - a broken config still reports stores/CLIs
+            logger.debug("config.yaml unreadable; reporting capability without it", exc_info=True)
             config = {}
     return {"host": host,
             "agents": [agent_capability(agent, profile_home=profile_home, config=config,
