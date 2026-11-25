@@ -206,19 +206,21 @@ def check_linked_vibe_send(store, session_id: str, *, profile_home=None,
 # child environment
 # --------------------------------------------------------------------------------------------------
 def child_env_for_vibe_store(store_root: Path, base_env: Mapping[str, str] | None = None) -> dict:
-    """The child's environment: Hermes' usual sanitized one, pinned to the *resolved* store.
+    """The child's environment: the SERVED profile's, pinned to the *resolved* store.
+
+    The base is ``served_profile_child_env``, never ``os.environ``: ``os.environ`` holds the LAUNCH
+    profile's values, so a routed linked turn would otherwise run the Vibe CLI — and read its
+    ``MISTRAL_API_KEY`` — as the default profile, and a scoped credential miss would borrow that key
+    instead of failing closed. The served home is the active override (the runtime scope binds it for
+    a routed turn), so this module does not have to guess it.
 
     ``VIBE_HOME`` is set from the store root the pointer was resolved against whenever that root has
     the ``<VIBE_HOME>/logs/session`` shape, so the child appends to the same store this module will
     verify. Otherwise the child keeps its own resolution and the journal check below decides.
     """
-    try:
-        from tools.environments.local import hermes_subprocess_env
-        env = hermes_subprocess_env(
-            inherit_credentials=True,
-            base_env=dict(base_env) if base_env is not None else None)
-    except Exception:  # health: allow BLE001 -- a sanitizer failure must not block the send
-        env = dict(base_env) if base_env is not None else dict(os.environ)
+    from tools.environments.local import served_profile_child_env
+
+    env = served_profile_child_env(base=base_env, inherit_credentials=True)
     vibe_home = _vibe_home_for_store(store_root)
     if vibe_home is not None:
         env["VIBE_HOME"] = str(vibe_home)

@@ -27,7 +27,9 @@ import pytest
 
 from hermes_cli import mistral_linked_history, mistral_linked_threads
 from hermes_cli import mistral_linked_resume as resume
+from agent.secret_scope import UnscopedSecretError, set_multiplex_active
 from agent.transports import vibe_cli_resume
+from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 from persistence.conversation.messages import TranscriptRead
 from persistence_assembly import open_persistence, profile_scope
 
@@ -130,8 +132,10 @@ def append_records(directory, mode, entries, base_sequence):
 def main():
     argv = sys.argv[1:]
     parsed = parse(argv)
+    probe = [name for name in os.environ.get("FAKE_ENV_PROBE", "").split(",") if name]
     record = {"argv": argv, "cwd": os.getcwd(), "parsed": parsed,
-              "vibe_home": os.environ.get("VIBE_HOME"), "pid": os.getpid()}
+              "vibe_home": os.environ.get("VIBE_HOME"), "pid": os.getpid(),
+              "env": {name: os.environ.get(name) for name in probe}}
     log = os.environ.get("FAKE_CALL_LOG")
     if log:
         with open(log, "a", encoding="utf-8") as handle:
@@ -648,6 +652,78 @@ def test_the_session_root_comes_from_vibe_home_and_pins_the_child(
     assert turn.native_session_id == SESSION_ID
     assert _calls(call_log)[0]["vibe_home"] == str(store_root.resolve().parent.parent)
     assert _session_dirs(store_root) == [SESSION_ID]
+
+
+@pytest.fixture
+def routed_profiles(tmp_path, monkeypatch):
+    """Launch profile A (its credential in the ambient process env) and served profile B (its own)."""
+    a = tmp_path / ".hermes"
+    b = a / "profiles" / "b"
+    b.mkdir(parents=True)
+    (a / ".env").write_text("MISTRAL_API_KEY=launch-dotenv-value\nA_MARKER=a\n", encoding="utf-8")
+    (b / ".env").write_text("MISTRAL_API_KEY=served-profile-value\nB_MARKER=b\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(a))
+    monkeypatch.setenv("MISTRAL_API_KEY", "launch-ambient-value")
+    monkeypatch.setenv("A_MARKER", "a")
+    monkeypatch.delenv("B_MARKER", raising=False)
+    return a, b
+
+
+_VIBE_PROFILE_PROBE = ["MISTRAL_API_KEY", "A_MARKER", "B_MARKER"]
+
+
+def _send_with_ambient_stub(db, linked, config, call_log, tmp_path, monkeypatch):
+    """Run one send whose stub knobs ride the ambient env (the production ``base_env=None`` path).
+
+    Nothing is passed as ``base_env``: the child env is built from the process env exactly as a real
+    send builds it, which is what makes "did the launch profile's key reach the child?" observable.
+    """
+    monkeypatch.setenv("FAKE_CALL_LOG", str(call_log))
+    monkeypatch.setenv("FAKE_ENV_PROBE", ",".join(_VIBE_PROFILE_PROBE))
+    return resume.run_linked_vibe_turn(
+        store=db, session_id=linked, prompt="routed send", config=config,
+        lock_dir=tmp_path / "locks", timeout=120)
+
+
+def test_a_routed_send_runs_the_cli_with_the_served_profiles_credential(
+        db, linked, store_root, config, root_patch, call_log, tmp_path, routed_profiles,
+        monkeypatch):
+    """Observed from INSIDE the child: B's key, none of A's, and the launch env left untouched."""
+    _a, b = routed_profiles
+    token = set_hermes_home_override(str(b))
+    try:
+        _send_with_ambient_stub(db, linked, config, call_log, tmp_path, monkeypatch)
+    finally:
+        reset_hermes_home_override(token)
+
+    call = _calls(call_log)[0]
+    assert call["vibe_home"] == str(store_root.resolve().parent.parent)
+    assert call["env"] == {"MISTRAL_API_KEY": "served-profile-value",
+                           "A_MARKER": None, "B_MARKER": "b"}
+    # Building the child env must not move A's values: the launch process keeps its own profile.
+    assert {name: os.environ.get(name) for name in _VIBE_PROFILE_PROBE} == {
+        "MISTRAL_API_KEY": "launch-ambient-value", "A_MARKER": "a", "B_MARKER": None}
+
+
+def test_the_launch_profiles_own_send_keeps_its_ambient_credential(
+        db, linked, config, root_patch, call_log, tmp_path, routed_profiles, monkeypatch):
+    """The control arm: the same child, no profile bound, still sees the launch profile's env."""
+    _send_with_ambient_stub(db, linked, config, call_log, tmp_path, monkeypatch)
+
+    assert _calls(call_log)[0]["env"] == {"MISTRAL_API_KEY": "launch-ambient-value",
+                                          "A_MARKER": "a", "B_MARKER": None}
+
+
+def test_a_multiplexed_send_with_no_bound_scope_refuses_to_spawn(
+        db, linked, config, root_patch, call_log, tmp_path, routed_profiles, monkeypatch):
+    """Fail closed: with no profile bound, the child would inherit the default's credentials."""
+    set_multiplex_active(True)
+    try:
+        with pytest.raises(UnscopedSecretError):
+            _send_with_ambient_stub(db, linked, config, call_log, tmp_path, monkeypatch)
+    finally:
+        set_multiplex_active(False)
+    assert _calls(call_log) == []  # nothing was spawned for the refused send
 
 
 def test_find_session_dir_refuses_a_symlink_that_escapes_the_store(tmp_path, workspace):
