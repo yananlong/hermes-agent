@@ -40,11 +40,32 @@ def _session_path(projects: Path, session_id: str) -> Path:
     return resolved
 
 
+def _has_displayable_message(path: Path) -> bool:
+    """True when the transcript's head holds at least one displayable user/assistant row.
+
+    A bounded HEAD scan, not a full count: linking only needs to reject an empty or unreadable
+    conversation, and a transcript can be tens of MiB.
+    """
+    from hermes_cli.claude_linked_history import _display_row
+    from hermes_cli.foreign_linked_store import MAX_STORE_HEAD_BYTES, read_jsonl_head
+
+    for obj in read_jsonl_head(path, MAX_STORE_HEAD_BYTES):
+        if _display_row(obj) is not None:
+            return True
+    return False
+
+
 def _session_meta(path: Path) -> dict:
-    """Read just enough of the transcript for identity: summary, cwd, model, message count."""
+    """Read just enough of the transcript for identity: summary, cwd, model.
+
+    Bounded HEAD read, not a whole-file parse: a listing needs four fields, and a transcript can be
+    tens of MiB. ``message_count`` was dropped from the contract for the same reason — the picker
+    never rendered it, and computing it required scanning the entire file.
+    """
+    from hermes_cli.foreign_linked_store import MAX_STORE_HEAD_BYTES, read_jsonl_head
+
     summary = cwd = model = None
-    count = 0
-    for obj in read_jsonl_bounded(path):
+    for obj in read_jsonl_head(path, MAX_STORE_HEAD_BYTES):
         if obj.get("type") == "summary" and summary is None:
             value = obj.get("summary")
             if isinstance(value, str) and value.strip():
@@ -55,9 +76,9 @@ def _session_meta(path: Path) -> dict:
             message = obj.get("message")
             if isinstance(message, dict) and isinstance(message.get("model"), str):
                 model = message["model"]
-        if obj.get("type") in ("user", "assistant") and not (obj.get("isSidechain") or obj.get("isMeta")):
-            count += 1
-    return {"summary": summary, "cwd": cwd, "model": model, "message_count": count}
+        if summary is not None and cwd is not None and model is not None:
+            break
+    return {"summary": summary, "cwd": cwd, "model": model}
 
 
 def list_claude_threads(cursor=None, limit=25, profile_home=None):
@@ -91,7 +112,12 @@ def list_claude_threads(cursor=None, limit=25, profile_home=None):
             session_id = foreign_session_uuid(path.stem)
         except ValueError:
             continue  # non-session JSONL files in a project dir are skipped
-        meta = _session_meta(path)
+        try:
+            meta = _session_meta(path)
+        except (OSError, ValueError):
+            # One unreadable or damaged transcript must not abort the whole picker: it degrades to
+            # a single row with default identity instead of returning no threads at all.
+            meta = {"summary": None, "cwd": None, "model": None}
         raw_title = meta["summary"]
         title = safe_native_text(raw_title[:512] if isinstance(raw_title, str) else "Claude session")[:_TITLE_MAX]
         cwd = meta["cwd"]
@@ -108,25 +134,29 @@ def list_claude_threads(cursor=None, limit=25, profile_home=None):
 
 
 def read_claude_history(session_id, cursor=None, limit=50, profile_home=None):
-    """Read one live page of the native Claude transcript as safe display rows."""
-    from hermes_cli.claude_linked_history import display_claude_messages
+    """Read one BACKWARDS page of the native Claude transcript as safe display rows.
+
+    Newest slice first: the first call (no cursor) returns the most recent ``limit`` rows and each
+    ``next_cursor`` walks towards older rows, matching how a chat surface loads history as the user
+    scrolls up. A large transcript is never read whole, so a 36 MiB session opens as fast as a small
+    one. Rows within a page stay in reading order (oldest first).
+    """
+    from hermes_cli.claude_linked_history import display_claude_messages_page
 
     session_id = foreign_session_uuid(session_id)
     params = page_params(cursor, limit)
     projects = resolve_claude_projects(profile_home)
     path = _session_path(projects, session_id)
-    rows = display_claude_messages(path)
-    offset = 0
+    before = None
     if params["cursor"] is not None:
         try:
-            offset = int(params["cursor"])
+            before = int(params["cursor"])
         except ValueError:
             raise ValueError("Invalid Claude page cursor") from None
-        if offset < 0 or offset > len(rows):
+        if before < 0:
             raise ValueError("Invalid Claude page cursor")
-    page = rows[offset:offset + params["limit"]]
-    next_offset = offset + params["limit"]
-    return {"messages": page, "next_cursor": str(next_offset) if next_offset < len(rows) else None}
+    rows, next_cursor = display_claude_messages_page(path, before=before, limit=params["limit"])
+    return {"messages": rows, "next_cursor": None if next_cursor is None else str(next_cursor)}
 
 
 def link_claude_thread(session_id, store, profile, profile_home=None):
@@ -138,7 +168,7 @@ def link_claude_thread(session_id, store, profile, profile_home=None):
     projects = resolve_claude_projects(profile_home)
     path = _session_path(projects, session_id)
     meta = _session_meta(path)
-    if meta["message_count"] == 0:
+    if not _has_displayable_message(path):
         raise ValueError("This Claude session has no readable conversation messages")
     cwd = meta["cwd"]
     if not isinstance(cwd, str) or not Path(cwd).is_absolute() or not Path(cwd).is_dir():

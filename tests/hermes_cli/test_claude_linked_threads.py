@@ -121,3 +121,49 @@ def test_import_payload_rejects_linked_foreign_sessions(tmp_path):
     normalized, errors = _validate_import_payload(payload)
     assert errors and "native history" in errors[0]["error"]
     assert not normalized
+
+
+def test_history_pages_backwards_from_the_newest_rows(tmp_path, store):
+    """A transcript larger than one page opens on its newest rows and walks towards the top.
+
+    This is the shape a scroll-up surface needs: the first call shows recent work, and each
+    ``next_cursor`` loads the rows above it, so the whole-file read (and its size ceiling) is
+    never required just to open a long conversation.
+    """
+    projects, cwd = store
+    cwd = str(cwd)
+    turns = [{"type": "summary", "summary": "Long conversation"}]
+    for i in range(6):
+        turns.append({"type": "user", "cwd": cwd, "message": {"role": "user", "content": f"question {i}"}})
+        turns.append({"type": "assistant", "cwd": cwd, "message": {"role": "assistant", "content": f"answer {i}"}})
+    _write_session(projects, OTHER_ID, cwd, turns)
+
+    first = linked.read_claude_history(OTHER_ID, limit=4)
+    newest = [row["content"] for row in first["messages"]]
+    assert "answer 5" in newest, "the newest turn must be on the first page"
+    assert "question 0" not in newest, "the oldest turn must not be on the first page"
+    assert first["next_cursor"] is not None
+
+    seen = list(newest)
+    cursor = first["next_cursor"]
+    while cursor is not None:
+        page = linked.read_claude_history(OTHER_ID, cursor=cursor, limit=4)
+        assert page["messages"], "a non-final page must return rows"
+        seen = [row["content"] for row in page["messages"]] + seen
+        cursor = page["next_cursor"]
+
+    # Every turn appears exactly once, in reading order, newest last.
+    assert len(seen) == 12
+    assert seen[0] == "question 0" and seen[-1] == "answer 5"
+    assert len(set(seen)) == 12, "paging must not repeat or skip a row"
+
+
+def test_history_page_survives_a_damaged_record(store):
+    """One torn line must not hide the rest of the transcript (the killed-append class)."""
+    projects, cwd = store
+    cwd = str(cwd)
+    path = _write_session(projects, OTHER_ID, cwd, _lines(cwd, with_summary=False))
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"type":"user","message":{"role":"user","conte\n')
+    page = linked.read_claude_history(OTHER_ID, limit=10)
+    assert [row["role"] for row in page["messages"]] == ["user", "assistant"]

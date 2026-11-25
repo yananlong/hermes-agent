@@ -18,6 +18,9 @@ LINKED_FOREIGN_FLAGS = ("codex_linked_thread", "claude_linked_thread", "mistral_
 
 MAX_STORE_FILE_BYTES = 32 * 1024 * 1024
 MAX_STORE_LINE_BYTES = 2 * 1024 * 1024
+# Identity metadata (summary/cwd/model) lives in the first records of a Claude transcript, so a
+# listing reads this much of the head instead of the whole file.
+MAX_STORE_HEAD_BYTES = 256 * 1024
 
 
 def foreign_session_uuid(value):
@@ -246,6 +249,35 @@ def linked_foreign_label(kind: str) -> str:
     """Display name of the tool that owns a :func:`linked_foreign_kind` row."""
     return {"codex": "Codex", "claude": "Claude Code", "mistral": "Mistral Vibe"}.get(
         kind, "the native tool")
+
+
+def read_jsonl_head(path: Path, max_bytes: int = MAX_STORE_HEAD_BYTES,
+                    max_line_bytes: int = MAX_STORE_LINE_BYTES):
+    """Yield parsed JSON objects from the FIRST ``max_bytes`` of a foreign transcript.
+
+    The bounded-head twin of :func:`read_jsonl_bounded`, for identity metadata: a listing needs a
+    few leading records, never the whole file. Same per-line guard; a malformed or oversized record
+    is skipped rather than failing the read, because one damaged line must not hide session identity.
+    """
+    import json
+
+    if not path.is_file():
+        raise ValueError("The foreign session transcript is unavailable")
+    read_bytes = 0
+    with path.open("rb") as handle:
+        for raw in handle:
+            read_bytes += len(raw)
+            if read_bytes > max_bytes:
+                break
+            if len(raw) > max_line_bytes:
+                continue
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line.decode("utf-8", errors="strict"))
+            except (UnicodeDecodeError, ValueError):
+                continue
 
 
 def read_jsonl_bounded(path: Path, max_bytes: int = MAX_STORE_FILE_BYTES,
