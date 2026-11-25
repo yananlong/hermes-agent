@@ -3,10 +3,6 @@ import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
-import { EmptyState } from '@/components/ui/empty-state'
-import { ErrorState } from '@/components/ui/error-state'
-import { Loader } from '@/components/ui/loader'
-import { SearchField } from '@/components/ui/search-field'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { setSessionOwnerHint } from '@/store/session'
@@ -19,6 +15,7 @@ import { type LinkedAgent, type LinkedLinkResult, type LinkedThreadPage, linkedT
 import { agentDisplayName, continueReason, linkBlockedReason } from './capability'
 import { capabilityHost, capabilityReasonText } from './capability-copy'
 import { HostCapabilityStrip } from './host-capability-strip'
+import { ThreadListPanel } from './thread-list-panel'
 import { useHostCapability } from './use-host-capability'
 
 interface ForeignThreadViewProps {
@@ -130,59 +127,25 @@ export function ForeignThreadView({ agent, owner, onBack, onClose, onOpenSession
               selected && 'max-[760px]:hidden'
             )}
           >
-            <div className="px-6 pb-4 pt-6">
-              <SearchField
-                aria-label={copy.search}
-                containerClassName="opacity-100"
-                onChange={setSearch}
-                placeholder={copy.search}
-                value={search}
-              />
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-5">
-              {sessions.isPending && <Loader className="mx-auto my-12" label={copy.scanning} />}
-              {sessions.isError && (
-                <ErrorState className="p-5" description={copy.scanHelp} title={copy.scanError}>
-                  <Button onClick={() => void sessions.refetch()} variant="secondary">
-                    {t.common.retry}
-                  </Button>
-                </ErrorState>
-              )}
-              {!sessions.isPending && !sessions.isError && visible.length === 0 && (
-                <div className="p-5">
-                  <EmptyState title={search ? copy.noMatches : copy.linkedNoThreads} />
-                </div>
-              )}
-              {visible.map(row => (
-                <button
-                  aria-pressed={selected === row.id}
-                  className={cn(
-                    'w-full cursor-pointer rounded-md px-3 py-4 text-start hover:bg-(--chrome-action-hover)',
-                    selected === row.id && 'bg-(--chrome-action-hover)'
-                  )}
-                  key={row.id}
-                  onClick={() => {
-                    setSelected(row.id)
-                    setError('')
-                  }}
-                  type="button"
-                >
-                  <span className="block line-clamp-2 text-sm font-medium">{row.title || row.preview || row.id}</span>
-                  <span className="mt-1 block truncate text-xs text-(--ui-text-secondary)">{row.cwd || row.id}</span>
-                </button>
-              ))}
-              {sessions.hasNextPage && (
-                <div className="flex justify-center pt-4">
-                  <Button
-                    disabled={sessions.isFetchingNextPage}
-                    onClick={() => void sessions.fetchNextPage()}
-                    variant="text"
-                  >
-                    {copy.more}
-                  </Button>
-                </div>
-              )}
-            </div>
+            <ThreadListPanel
+              copy={copy}
+              emptyTitle={search ? copy.noMatches : copy.linkedNoThreads}
+              hasNextPage={Boolean(sessions.hasNextPage)}
+              isError={Boolean(sessions.isError)}
+              isFetchingNextPage={Boolean(sessions.isFetchingNextPage)}
+              isPending={Boolean(sessions.isPending)}
+              onFetchNextPage={() => void sessions.fetchNextPage()}
+              onRefetch={() => void sessions.refetch()}
+              onSearch={setSearch}
+              onSelected={id => {
+                setSelected(id)
+                setError('')
+              }}
+              retryLabel={t.common.retry}
+              search={search}
+              selected={selected}
+              visible={visible}
+            />
           </aside>
           <main className={cn('flex min-h-0 min-w-0 flex-col', !selected && 'max-[760px]:hidden')}>
             {!current ? (

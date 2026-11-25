@@ -40,9 +40,8 @@ import {
   sharedPrimaryRoute
 } from '@/store/gateway-shared-route'
 import type { Secondary } from '@/store/gateway-socket-entry'
-import { resetHostCapabilityCache } from '@/store/host-capability-cache'
+import { reportGatewayState } from '@/store/gateway-connection-report'
 import { notifyError, RECOVERY_ACTIONS } from '@/store/notifications'
-import { markNativeNotifyBaseline } from '@/store/notify-baseline'
 import { setConnection, setGatewayState } from '@/store/session'
 import { stampSecondaryProfileOwner } from '@/store/session-event-provenance'
 export { useGatewayActivationEpoch } from '@/store/gateway-activation-epoch'
@@ -442,28 +441,9 @@ export function liveSecondaryConnectionIds(): Set<string> {
 // Mirror a backend's connection state into the global composer state, but only
 // when that backend is the one the user is currently looking at. Lets the
 // composer reflect the active profile's socket without a background reconnect
-// flipping the foreground enabled/disabled state.
-function reportGatewayState(profile: string, state: ConnectionState): void {
-  // Any socket opening replays parked prompts; hold OS notifications so a
-  // launch/reconnect doesn't alert about state that already existed.
-  if (state === 'open') {
-    markNativeNotifyBaseline()
-    // A socket that just opened may be a NEW gateway build: the backend restarted
-    // (upgrade, profile switch, new remote) and may well now serve
-    // `session.foreign.status`. Drop the `-32601` verdicts cached against the
-    // previous build so the next probe asks instead of assuming "unknown" until
-    // the window is relaunched.
-    resetHostCapabilityCache()
-  }
-
-  if (normKey(profile) === g.activeKey) {
-    setGatewayState(state)
-  }
-}
-
-export function reportPrimaryGatewayState(state: ConnectionState): void {
-  reportGatewayState(g.primaryProfile, state)
-}
+// flipping the foreground enabled/disabled state. Lives in
+// ``gateway-connection-report`` with the open-socket side effects it arms.
+export { reportGatewayState, reportPrimaryGatewayState } from '@/store/gateway-connection-report'
 
 function setActive(profile: string): void {
   const activationEpoch = beginGatewayActivation()

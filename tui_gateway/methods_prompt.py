@@ -920,6 +920,57 @@ def _linked_foreign_submit_refusal(rid, session: dict):
 from gateway.session_surface import SURFACES as _CLIENT_SURFACES
 
 
+# ── prompt.submit: isolated compute-host dispatch ──────────────────────────
+
+
+def _try_isolated_dispatch(rid, sid, session, text, *, turn_isolation, turn_author, has_truncation,
+                            display_kind, display_metadata, survivor_fields):
+    """Try to hand an isolated compute worker this turn before the inline path runs.
+
+    Returns an error-free JSON-RPC reply to return to the client (already updated with the
+    survivor fields), or ``None`` when the turn must continue inline — ``turn_isolation`` off,
+    an inline logistical refusal, or a compute-host dispatch that failed (then logged; the
+    ordinary inline submit below is the fallback, and its ordinal-consent refusal is a
+    deliberate later check, not this one).
+    """
+    if not turn_isolation:
+        return None
+    if turn_author:
+        logger.debug("isolated compute turns carry no author yet; the turn from %s runs unattributed",
+                     turn_author.get("id"))
+    # The isolated dispatch returns to the caller before the inline persist, so the reopen
+    # cannot live only in _persist_session_row_for_submit: the turn is already
+    # admitted here (running, in flight, active-slot lease claimed, truncation
+    # applied inline), and the child's transcript writes must land in a live row
+    # (#85303 review: the early return made _reopen_if_finalized unreachable on
+    # this path). Best-effort like the helper: a failed read never blocks the send.
+    try:
+        with _session_db(session) as db:
+            if db is not None:
+                _reopen_if_finalized(db, str(session.get("session_key") or ""))
+    except Exception:
+        logger.debug("finalized-session reopen before isolated dispatch failed for %s",
+                     sid, exc_info=True)
+    isolated_response = _submit_prompt_to_compute_host(
+        rid, sid, session, text, display_kind=display_kind, display_metadata=display_metadata)
+    if not isolated_response.get("error"):
+        # The truncation already happened inline above (memory + DB).
+        isolated_response["result"].update(survivor_fields)
+        return isolated_response
+    # An ordinal/id alone is not consent. A client that carries a leftover ordinal into an ORDINARY
+    # submit sends a request that is indistinguishable, field by field, from a real rewind — same
+    # method, same shape, an in-range target — and the cut it asks for is a destructive
+    # replace_messages() the user never requested (#80763: 296 -> 52 messages, 244 durable rows gone).
+    # Only the client knows whether this submit is a rewind/edit/regenerate, so it has to say so; refuse
+    # the cut when it doesn't. Consent is checked BEFORE target resolution: an unconfirmed
+    # (leaked-state) request must refuse with 4029 without paying the durable transcript read or
+    # heal-stamping live history dicts that row-id resolution performs.
+    logger.warning(
+        "compute-host dispatch failed for session %s; falling back inline: %s", sid,
+        isolated_response["error"].get("message", "unknown error"))
+    return None
+
+
 @method("prompt.submit")
 def _(rid, params: dict) -> dict:
     from hermes_cli.input_sanitize import sanitize_user_prompt_text
@@ -1027,40 +1078,12 @@ def _(rid, params: dict) -> dict:
         internal_hosted_submit)
     if err is not None:
         return err
-    if turn_isolation:
-        if turn_author:
-            logger.debug("isolated compute turns carry no author yet; the turn from %s runs unattributed",
-                         turn_author.get("id"))
-        # The isolated dispatch returns BELOW before the inline persist, so the reopen
-        # cannot live only in _persist_session_row_for_submit: the turn is already
-        # admitted here (running, in flight, active-slot lease claimed, truncation
-        # applied inline), and the child's transcript writes must land in a live row
-        # (#85303 review: the early return made _reopen_if_finalized unreachable on
-        # this path). Best-effort like the helper: a failed read never blocks the send.
-        try:
-            with _session_db(session) as db:
-                if db is not None:
-                    _reopen_if_finalized(db, str(session.get("session_key") or ""))
-        except Exception:
-            logger.debug("finalized-session reopen before isolated dispatch failed for %s",
-                         sid, exc_info=True)
-        isolated_response = _submit_prompt_to_compute_host(
-            rid, sid, session, text, display_kind=display_kind, display_metadata=display_metadata)
-        if not isolated_response.get("error"):
-            # The truncation already happened inline above (memory + DB).
-            isolated_response["result"].update(survivor_fields)
-            return isolated_response
-        # An ordinal/id alone is not consent. A client that carries a leftover ordinal into an ORDINARY
-        # submit sends a request that is indistinguishable, field by field, from a real rewind — same
-        # method, same shape, an in-range target — and the cut it asks for is a destructive
-        # replace_messages() the user never requested (#80763: 296 -> 52 messages, 244 durable rows gone).
-        # Only the client knows whether this submit is a rewind/edit/regenerate, so it has to say so; refuse
-        # the cut when it doesn't. Consent is checked BEFORE target resolution: an unconfirmed
-        # (leaked-state) request must refuse with 4029 without paying the durable transcript read or
-        # heal-stamping live history dicts that row-id resolution performs.
-        logger.warning(
-            "compute-host dispatch failed for session %s; falling back inline: %s", sid,
-            isolated_response["error"].get("message", "unknown error"))
+    isolated_reply = _try_isolated_dispatch(
+        rid, sid, session, text, turn_isolation=turn_isolation, turn_author=turn_author,
+        has_truncation=has_truncation, display_kind=display_kind,
+        display_metadata=display_metadata, survivor_fields=survivor_fields)
+    if isolated_reply is not None:
+        return isolated_reply
     if (err := _persist_session_row_for_submit(rid, session, text, display_kind)) is not None:
         return err
     # Capture before starting the worker: it consumes the staging dict and may finish before the RPC returns.

@@ -361,8 +361,11 @@ def _wait_for(proc: subprocess.Popen, timeout: float, cancel_event: Any):
 def _terminate(proc: subprocess.Popen) -> tuple[str, str]:
     """SIGTERM the child's process group, escalate to SIGKILL, and reap it."""
     if proc.poll() is not None:
-        stdout, stderr = proc.communicate()
-        return stdout or "", stderr or ""
+        try:
+            stdout, stderr = proc.communicate(timeout=_TERM_GRACE_SECONDS)
+            return stdout or "", stderr or ""
+        except subprocess.TimeoutExpired:  # pragma: no cover - grandchild holds the pipe
+            return "", ""
     _signal_group(proc, getattr(signal, "SIGTERM", signal.SIGINT))
     try:
         return proc.communicate(timeout=_TERM_GRACE_SECONDS)
@@ -375,18 +378,18 @@ def _terminate(proc: subprocess.Popen) -> tuple[str, str]:
 
 
 def _signal_group(proc: subprocess.Popen, sig: int) -> None:
-    with suppress(ProcessLookupError, PermissionError, OSError, AttributeError):
-        if os.name == "posix":
-            os.killpg(os.getpgid(proc.pid), sig)
-        elif sig == getattr(signal, "SIGKILL", None):  # pragma: no cover - windows
-            proc.kill()
-        else:  # pragma: no cover - windows
-            proc.terminate()
+    """Signal the child's whole tree portably: ``kill_process_tree`` covers both platforms
+    (an unkillable-after-SIGKILL child is left to the caller's bounded ``communicate``)."""
+    from agent.deadline import kill_process_tree
+
+    with suppress(ProcessLookupError, PermissionError, OSError):
+        kill_process_tree(proc.pid, sig=sig)
 
 
 def _spawn_isolation_kwargs() -> dict[str, Any]:
     """Own process group on POSIX (so a kill takes the tree) / hidden console on Windows."""
     if os.name == "posix":
+        # detached-spawn: ok — awaited child; a timeout/cancel kills its whole process group (_signal_group)
         return {"start_new_session": True}
     return {"creationflags": _hide_flags().get("creationflags", 0)}  # pragma: no cover - windows
 
@@ -395,7 +398,7 @@ def _hide_flags() -> dict[str, Any]:
     try:
         from hermes_cli._subprocess_compat import windows_hide_flags
         return {"creationflags": windows_hide_flags()}
-    except Exception:  # pragma: no cover - optional nicety
+    except ImportError:  # pragma: no cover - the compat module is part of every install
         return {}
 
 
