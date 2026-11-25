@@ -4,7 +4,7 @@ import { createSlashHandler } from '../app/createSlashHandler.js'
 import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { patchUiState, resetUiState } from '../app/uiStore.js'
 
-// `/link`: bare opens the linked-thread picker, `/<agent> <thread-id>` links + resumes, and the
+// `/link-thread`: bare opens the linked-thread picker, `/<agent> <thread-id>` links + resumes, and the
 // host's own capability answer decides which agents are offered — never an optimistic guess that
 // would fail on the next send.
 
@@ -80,11 +80,21 @@ beforeEach(() => {
   patchUiState({ info: { model: 'm', skills: {}, tools: {} } as any, sid: 'owner' })
 })
 
-describe('/link', () => {
+describe('/link-thread', () => {
+  it('still answers to the short /link alias, so nothing users already type breaks', async () => {
+    const h = harness()
+
+    h.slash('/link codex 0a1b1c2d')
+    await flush()
+
+    expect(h.calls('session.codex.link')).toEqual([['session.codex.link', { thread_id: '0a1b1c2d' }]])
+    expect(h.resumeById).toHaveBeenCalledWith('linked-sid')
+  })
+
   it('opens the picker overlay on the bare form and links nothing', async () => {
     const h = harness()
 
-    h.slash('/link')
+    h.slash('/link-thread')
     await flush()
 
     expect(getOverlayState().link).toBe(true)
@@ -93,7 +103,7 @@ describe('/link', () => {
   })
 
   it('scopes the picker to the agent named without a thread id', async () => {
-    harness().slash('/link codex')
+    harness().slash('/link-thread codex')
 
     expect(getOverlayState().link).toEqual({ agent: 'codex' })
     expect(getOverlayState().link).not.toBe(true)
@@ -102,7 +112,7 @@ describe('/link', () => {
   it('links the named Codex thread and resumes the Hermes session it returned', async () => {
     const h = harness()
 
-    h.slash('/link codex 0a1b1c2d')
+    h.slash('/link-thread codex 0a1b1c2d')
     await flush()
 
     expect(h.calls('session.foreign.status')).toHaveLength(1)
@@ -114,14 +124,14 @@ describe('/link', () => {
   it('sends Claude Code and Vibe ids as session_id, the parameter their link RPC documents', async () => {
     const claude = harness()
 
-    claude.slash('/link claude 0b2c')
+    claude.slash('/link-thread claude 0b2c')
     await flush()
     expect(claude.calls('session.claude.link')).toEqual([['session.claude.link', { session_id: '0b2c' }]])
     expect(claude.resumeById).toHaveBeenCalledWith('linked-sid')
 
     const vibe = harness()
 
-    vibe.slash('/link mistral 0c3d')
+    vibe.slash('/link-thread mistral 0c3d')
     await flush()
     expect(vibe.calls('session.mistral.link')).toEqual([['session.mistral.link', { session_id: '0c3d' }]])
     expect(vibe.resumeById).toHaveBeenCalledWith('linked-sid')
@@ -137,7 +147,7 @@ describe('/link', () => {
         ])
     })
 
-    h.slash('/link codex 0a1b')
+    h.slash('/link-thread codex 0a1b')
     await flush()
 
     expect(h.said()).toContainEqual('error: Codex is unavailable here: Codex is not installed on build-host.')
@@ -148,7 +158,7 @@ describe('/link', () => {
   it('treats an unknown capability as unavailable rather than writable', async () => {
     const h = harness({ foreignStatus: async () => ({ agents: [], host: 'older-build' }) })
 
-    h.slash('/link codex 0a1b')
+    h.slash('/link-thread codex 0a1b')
     await flush()
 
     expect(h.said()).toContainEqual('error: Codex is unavailable here: This gateway did not report Codex capability.')
@@ -165,7 +175,7 @@ describe('/link', () => {
         ])
     })
 
-    h.slash('/link 0d4e')
+    h.slash('/link-thread 0d4e')
     await flush()
 
     expect(h.calls('session.codex.link')).toEqual([['session.codex.link', { thread_id: '0d4e' }]])
@@ -175,11 +185,11 @@ describe('/link', () => {
   it('asks for the agent when a lone thread id could belong to more than one', async () => {
     const h = harness()
 
-    h.slash('/link 0d4e')
+    h.slash('/link-thread 0d4e')
     await flush()
 
     expect(h.said()).toContainEqual(
-      'error: name the agent — /link <agent> 0d4e (this host can serve codex, claude, mistral)'
+      'error: name the agent — /link-thread <agent> 0d4e (this host can serve codex, claude, mistral)'
     )
     expect(h.request.mock.calls.filter(([method]) => method.endsWith('.link'))).toHaveLength(0)
     expect(h.resumeById).not.toHaveBeenCalled()
@@ -195,7 +205,7 @@ describe('/link', () => {
         ])
     })
 
-    h.slash('/link 0d4e')
+    h.slash('/link-thread 0d4e')
     await flush()
 
     expect(h.said()).toContainEqual(
@@ -211,7 +221,7 @@ describe('/link', () => {
       foreignStatus: () => Promise.reject(new Error('gateway socket closed'))
     })
 
-    h.slash('/link codex 0a1b')
+    h.slash('/link-thread codex 0a1b')
     await flush()
 
     expect(h.said()).toHaveLength(1)
@@ -225,7 +235,7 @@ describe('/link', () => {
       link: () => Promise.reject(Object.assign(new Error('busy'), { code: 4009 }))
     })
 
-    h.slash('/link codex 0a1b')
+    h.slash('/link-thread codex 0a1b')
     await flush()
 
     expect(h.said()).toHaveLength(1)
@@ -236,7 +246,7 @@ describe('/link', () => {
   it('refuses to start a link while a turn is running', async () => {
     const h = harness({ busy: true })
 
-    h.slash('/link codex 0a1b')
+    h.slash('/link-thread codex 0a1b')
     await flush()
 
     expect(h.guardBusySessionSwitch).toHaveBeenCalledWith('link a native thread')
@@ -248,7 +258,7 @@ describe('/link', () => {
   it('reports an already-linked thread without changing the resume target', async () => {
     const h = harness({ link: async () => ({ already_linked: true, session_id: 'existing-sid' }) })
 
-    h.slash('/link codex 0a1b')
+    h.slash('/link-thread codex 0a1b')
     await flush()
 
     expect(h.said()).toContainEqual('Codex thread 0a1b was already linked — opening it')

@@ -1,5 +1,5 @@
 /**
- * Shared vocabulary for `/link` — the linked-session feature's client side.
+ * Shared vocabulary for `/link-thread` — the linked-session feature's client side.
  *
  * A linked session is a pointer row: the native tool (Codex, Claude Code, Mistral Vibe) owns the
  * transcript on the GATEWAY host, and `session.<agent>.{list,link}` are the RPCs that enumerate
@@ -55,10 +55,11 @@ export interface LinkCreated {
 const isLinkAgent = (value: string): value is ForeignAgent => (LINK_AGENTS as readonly string[]).includes(value)
 
 /**
- * `/link`'s argument split into the agent it names (when it names one) and the native thread id.
+ * `/link-thread`'s argument split into the agent it names (when it names one) and the native thread id.
  *
- * `/link codex 0a1b` names both; `/link 0a1b` names only a thread, and which agent owns it is a
- * capability question the caller resolves (never a guess here). `/link` and `/link codex` carry
+ * `/link-thread codex 0a1b` names both; `/link-thread 0a1b` names only a thread, and which agent
+ * owns it is a capability question the caller resolves (never a guess here). `/link-thread` and
+ * `/link-thread codex` carry
  * no thread id: they open the picker.
  */
 export const parseLinkArg = (arg: string): { agent: ForeignAgent | null; threadId: string } => {

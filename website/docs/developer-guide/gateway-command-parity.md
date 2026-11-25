@@ -74,7 +74,7 @@ handler does; `client-local (cli_only)` commands are terminal/UI features of a c
 | `/journey` (/learning, /memory-graph) | refused | HermesCLI._handle_journey_command | local | action: journey | slash.exec: refused | client-local (cli_only) |
 | `/kanban` | read (list/show/stats/assignees/context/runs/log/diagnostics) | HermesCLI._handle_kanban_command | slash.exec | unavailable: advanced | slash.exec |  |
 | `/learn` | control | HermesCLI._handle_learn_command | slash.exec | slash.exec | slash.exec |  |
-| `/link` | refused | unknown command | local | unavailable: terminal | slash.exec: refused | client-local (cli_only) |
+| `/link-thread` (/link) | refused | unknown command | local | unavailable: terminal | slash.exec: refused | client-local (cli_only) |
 | `/login` | control | HermesCLI._handle_login_command | slash.exec | unavailable: settings | slash.exec |  |
 | `/loop` (/proactive) | control | HermesCLI._handle_loop_command | slash.exec | slash.exec | slash.exec |  |
 | `/memory` | read (bare / `pending`) | HermesCLI._handle_memory_command | slash.exec | slash.exec | slash.exec |  |

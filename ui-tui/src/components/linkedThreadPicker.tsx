@@ -44,7 +44,7 @@ const rowTitle = (thread: LinkThreadRow) => thread.title.trim() || thread.id
 const rowKey = (agent: ForeignAgent, id: string) => `${agent}:${id}`
 
 /**
- * `/link`'s picker: the native threads this host can be continued from, one section per agent.
+ * `/link-thread`'s picker: the native threads this host can be continued from, one section per agent.
  *
  * The capability answer (`session.foreign.status`) is asked ONCE when the panel opens and decides
  * what is selectable: an agent the host cannot serve renders its reason and no rows, so Enter can
@@ -288,7 +288,7 @@ export function LinkedThreadPicker({ gw, initialAgent, maxWidth, onCancel, onRes
 
 interface LinkedThreadPickerProps {
   gw: GatewayClient
-  /** `/link <agent>`: select that agent's first thread when its page arrives. */
+  /** `/link-thread <agent>`: select that agent's first thread when its page arrives. */
   initialAgent?: ForeignAgent
   maxWidth?: number
   onCancel: () => void
