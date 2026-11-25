@@ -1,5 +1,5 @@
 import type { MouseTrackingMode, ScrollBoxHandle } from '@hermes/ink'
-import type { Usage } from '@hermes/shared/gateway-events'
+import type { ForeignAgent, Usage } from '@hermes/shared/gateway-events'
 import type {
   BillingCardInfo,
   BillingMutationResponse,
@@ -292,6 +292,8 @@ export interface OverlayState {
   /** Modal widget app — owns input, blocks the composer. */
   widget: ActiveWidget | null
   journey: boolean
+  /** Linked native threads (`/link`); an object scopes the picker to one agent's threads. */
+  link: boolean | { agent?: ForeignAgent }
   modelPicker: boolean | { refresh?: boolean }
   pager: null | PagerState
   petPicker: boolean

@@ -184,6 +184,12 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("resume", "Resume a previously-named session", "Session",
                args_hint="[name]", argument_mode="mixed"),
     CommandDef("sessions", "Browse and resume previous sessions", "Session"),
+    # Linked native threads: the TUI's /link name->resume flow. The transcript lives in the
+    # native tool's store on the gateway host, so the work happens over
+    # ``session.{codex,claude,mistral}.{list,link}`` and ``session.foreign.status`` rather than a
+    # gateway slash handler; messaging surfaces have no linked view, hence cli_only.
+    CommandDef("link", "Link a Codex, Claude Code, or Mistral Vibe thread and continue it here",
+               "Session", args_hint="[agent] [thread-id]", cli_only=True, desktop="terminal"),
 
     # Configuration
     CommandDef("config", "Show current configuration", "Configuration",
