@@ -1030,6 +1030,10 @@ export const esOverrides = {
       terminalFontPlaceholder: 'MesloLGS NF o una pila de fuentes CSS',
       terminalFontPreview: 'Vista previa de glifos',
       terminalFontReset: 'Usar la predeterminada',
+      terminalFontSizeTitle: 'Tamaño de fuente del terminal',
+      terminalFontSizeDesc:
+        'Define en píxeles el tamaño del terminal integrado. Se aplica a los paneles de terminal del escritorio y a la consola web; de 8 a 32.',
+      terminalFontSizeReset: 'Usar el tamaño predeterminado',
       chatFontTitle: 'Fuente del chat',
       chatFontDesc:
         'Elige una fuente instalada para el chat y el resto de la app. Útil para fuentes de lectura como OpenDyslexic; déjalo en blanco para usar la fuente del tema.',

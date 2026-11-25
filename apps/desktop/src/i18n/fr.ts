@@ -1033,6 +1033,10 @@ export const frOverrides = {
       terminalFontPlaceholder: 'MesloLGS NF ou une pile de polices CSS',
       terminalFontPreview: 'Aperçu des glyphes',
       terminalFontReset: 'Utiliser la valeur par défaut',
+      terminalFontSizeTitle: 'Taille de police du terminal',
+      terminalFontSizeDesc:
+        "Définit en pixels la taille du terminal intégré. S'applique aux panneaux de terminal du bureau et à la console web ; de 8 à 32.",
+      terminalFontSizeReset: 'Utiliser la taille par défaut',
       chatFontTitle: 'Police de la conversation',
       chatFontDesc:
         "Choisissez une police installée pour la conversation et le reste de l'application. Pratique pour des polices plus lisibles comme OpenDyslexic ; laissez vide pour utiliser celle du thème.",

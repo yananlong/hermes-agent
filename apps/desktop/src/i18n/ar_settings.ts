@@ -329,6 +329,10 @@ export const arSettings = {
       chatTextScaleTitle: 'حجم نص المحادثة',
       chatTextScaleDesc:
         'يضبط حجم نص المحادثة ومحرر الرسائل نسبةً إلى مقياس الواجهة. يبقى حجم الأشرطة الجانبية وعناصر التحكم كما هو.',
+      terminalFontSizeTitle: 'حجم خط الطرفية',
+      terminalFontSizeDesc:
+        'يضبط حجم الطرفية المدمجة بالبكسل. ينطبق على ألواح الطرفية في التطبيق ووحدة تحكم الويب؛ من 8 إلى 32.',
+      terminalFontSizeReset: 'استخدام الحجم الافتراضي',
       title: 'المظهر',
       intro: 'خصص مظهر Hermes Desktop.',
       colorMode: 'نمط الألوان',

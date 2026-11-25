@@ -518,6 +518,10 @@ export const ruOverrides = {
       terminalFontPlaceholder: 'MesloLGS NF или CSS-стек шрифтов',
       terminalFontPreview: 'Предпросмотр глифов',
       terminalFontReset: 'Использовать по умолчанию',
+      terminalFontSizeTitle: 'Размер шрифта терминала',
+      terminalFontSizeDesc:
+        'Задаёт размер встроенного терминала в пикселях. Действует для панелей терминала в приложении и для веб-консоли; от 8 до 32.',
+      terminalFontSizeReset: 'Использовать размер по умолчанию',
       chatFontTitle: 'Шрифт чата',
       chatFontDesc:
         'Выберите установленный шрифт для чата и всего интерфейса. Удобно для шрифтов повышенной читаемости, например OpenDyslexic; оставьте пустым, чтобы использовать шрифт темы.',

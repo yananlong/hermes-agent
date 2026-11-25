@@ -121,7 +121,7 @@ describe('TerminalFontSizeSetting', () => {
     expect($terminalFontSize.get()).toBe(DEFAULT_TERMINAL_FONT_SIZE)
   })
 
-  it('resets the profile size to the existing 11 px default', async () => {
+  it('resets the profile size to the default', async () => {
     mocks.loadedConfig = { terminal: { font_size: 18 } }
     render(<TerminalFontSizeSetting />)
 

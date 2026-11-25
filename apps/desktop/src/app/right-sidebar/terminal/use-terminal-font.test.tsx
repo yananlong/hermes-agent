@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   $terminalFontFamily,
   $terminalFontSize,
+  DEFAULT_TERMINAL_FONT_SIZE,
   setTerminalFontFamilyFromConfig,
   setTerminalFontSizeFromConfig
 } from './terminal-font'
@@ -17,7 +18,7 @@ vi.mock('./terminals', () => ({ redrawAllTerminals: mocks.redrawAllTerminals }))
 describe('useTerminalFontController', () => {
   afterEach(() => {
     setTerminalFontFamilyFromConfig('')
-    setTerminalFontSizeFromConfig(11)
+    setTerminalFontSizeFromConfig(DEFAULT_TERMINAL_FONT_SIZE)
     mocks.redrawAllTerminals.mockClear()
   })
 
