@@ -74,10 +74,26 @@ def _apply_linked_binding_api_mode(cli, session_meta) -> None:
     to restore — except the binding. ``agent/conversation_loop.py`` refuses a linked Codex row whose
     agent is not on ``codex_app_server`` (the no-fork boundary), so an ambient wire that happens to
     match the pointer's model and provider must not leave the binding unset.
+
+    The live agent is swapped too: the guard reads ``agent.api_mode``, not ``cli.api_mode``, and
+    ``/link`` resumes onto a CLI whose agent was already built for the previous session — setting
+    only the CLI field would leave that agent on the ambient wire and the guard refusing.
     """
     binding = linked_row_binding_api_mode(session_meta)
-    if binding and binding != getattr(cli, "api_mode", None):
+    if not binding:
+        return
+    if binding != getattr(cli, "api_mode", None):
         cli.api_mode = binding
+    agent = getattr(cli, "agent", None)
+    if agent is not None and getattr(agent, "api_mode", None) != binding:
+        try:
+            agent.switch_model(
+                new_model=getattr(cli, "model", ""), new_provider=getattr(cli, "provider", ""),
+                api_key=getattr(cli, "api_key", "") or "",
+                base_url=getattr(cli, "base_url", "") or "", api_mode=binding)
+        except Exception:  # health: allow BLE001 -- a live swap that fails must be visible, not fatal
+            logger.warning("Could not move the live agent onto the linked binding %s", binding,
+                           exc_info=True)
 
 
 def stored_session_route(session_meta, *, current_model, current_provider):

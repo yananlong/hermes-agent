@@ -227,3 +227,90 @@ def test_a_link_still_succeeds_when_the_title_cannot_be_read(monkeypatch):
 
     link_cmd.handle_link_thread_command(CLI(), "/link-thread codex 01a2153d")
     assert any("Codex" in line for line in printed)
+
+
+def test_the_live_agent_follows_the_binding_when_nothing_else_changed():
+    """The guard reads ``agent.api_mode``, not ``cli.api_mode``.
+
+    ``/link`` resumes onto a CLI whose agent was already built for the previous session, and
+    ``stored_session_route`` answers None when the stored model and provider already match. Setting
+    only the CLI field left that live agent on the ambient wire, so the no-fork guard refused with
+    'Linked Codex sessions require the Codex app-server runtime' — a real, reported failure.
+    """
+    from hermes_cli.cli_model_switch_mixin import _apply_linked_binding_api_mode
+
+    class Agent:
+        api_mode = "chat_completions"
+
+        def __init__(self):
+            self.switched = None
+
+        def switch_model(self, **kwargs):
+            self.switched = kwargs
+            self.api_mode = kwargs["api_mode"]
+
+    class CLI:
+        model = "gpt-6-luna"
+        provider = "openai"
+        api_mode = "codex_app_server"
+        api_key = "k"
+        base_url = "https://api.openai.com/v1"
+
+        def __init__(self):
+            self.agent = Agent()
+
+    cli = CLI()
+    _apply_linked_binding_api_mode(cli, {"model_config": _pointer_config()})
+    assert cli.agent.api_mode == "codex_app_server"
+    assert cli.agent.switched["api_mode"] == "codex_app_server"
+
+
+def test_a_missing_credential_shape_does_not_silently_skip_the_swap():
+    """A CLI lacking api_key/base_url must still reach switch_model.
+
+    The first cut read ``cli.api_key`` directly and raised AttributeError; the surrounding except
+    swallowed it, so the binding never reached the agent and the guard refused with no diagnostic.
+    """
+    from hermes_cli.cli_model_switch_mixin import _apply_linked_binding_api_mode
+
+    class Agent:
+        api_mode = "chat_completions"
+
+        def __init__(self):
+            self.switched = None
+
+        def switch_model(self, **kwargs):
+            self.switched = kwargs
+            self.api_mode = kwargs["api_mode"]
+
+    class Bare:  # deliberately no api_key / base_url attributes
+        model = "gpt-6-luna"
+        provider = "openai"
+        api_mode = "codex_app_server"
+
+        def __init__(self):
+            self.agent = Agent()
+
+    cli = Bare()
+    _apply_linked_binding_api_mode(cli, {"model_config": _pointer_config()})
+    assert cli.agent.api_mode == "codex_app_server"
+    assert cli.agent.switched["api_key"] == ""
+
+
+def test_an_ordinary_row_does_not_touch_the_live_agent():
+    """Only pointer rows carry the binding; an ordinary row's agent must be left alone."""
+    from hermes_cli.cli_model_switch_mixin import _apply_linked_binding_api_mode
+
+    class Agent:
+        api_mode = "chat_completions"
+
+        def switch_model(self, **kwargs):
+            raise AssertionError("an ordinary row must not rewire the agent")
+
+    class CLI:
+        agent = Agent()
+        api_mode = "chat_completions"
+
+    cli = CLI()
+    _apply_linked_binding_api_mode(cli, {"model_config": {"provider": "openai"}})
+    assert cli.agent.api_mode == "chat_completions"
