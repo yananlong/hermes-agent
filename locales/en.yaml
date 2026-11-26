@@ -3043,6 +3043,21 @@ cli:
       compressed_redirect: "Session {session_id} was compressed into {resolved_id}; resuming the descendant with your transcript."
     sessions:
       none_yet: "(._.) No previous sessions yet."
+    link_thread:
+      owner_unavailable: "This Hermes session is not attached to a gateway owner yet, so a linked thread cannot be created. Send a message first, or restart with `hermes gateway start`."
+      status_unavailable: "This backend does not provide session.foreign.status, so nothing was linked. Restart the gateway owner from the checkout you are running."
+      no_agent: "No agent on this host can open a linked thread ({reasons})."
+      name_the_agent: "Name the agent — /link-thread <agent> {thread_id} (this host can serve {agents})."
+      unavailable: "{label} is unavailable here: {reason}"
+      not_reported: "this gateway did not report its capability"
+      failed: "Could not link that {agent} thread: {error}"
+      invalid_response: "Invalid response from {method}."
+      already_linked: "That {label} thread {thread_id} was already linked — opening it."
+      list_failed: "Could not list {label} threads: {error}"
+      none_found: "No native threads to link on this host."
+      list_header: "Native threads on this host:"
+      pick_hint: "Type a number to link that thread, or /link-thread <agent> <thread-id>."
+      pick_out_of_range: "No thread {index} in that list; nothing was linked."
     branch:
       branched_one: "⑂ Branched session \"{title}\" ({count} user message)"
       branched_other: "⑂ Branched session \"{title}\" ({count} user messages)"
@@ -4144,3 +4159,4 @@ shared:
   undo_rollback:
     list: "↶ Files changed in the undone turns: {files}. Run /rollback to see checkpoints and restore them."
     more: "+{count} more"
+

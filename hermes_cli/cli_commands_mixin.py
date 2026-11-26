@@ -34,7 +34,8 @@ from agent.turn_context import extract_api_content_sidecar
 from hermes_cli.cli_agent_setup_mixin import _gateway_open, _retire_agent
 from hermes_cli.cli_commands_session_tools import (
     CLICommandsSessionToolsMixin, _TTYBuf, _accent, _accent_line, _command_arg, _cp, _dim,
-    _dim_line, _gt, _lines, _pr, _probe, _rollback_kept, _save, _say_block, _shlex_args, _t, _tn)
+    _dim_line, _gt, _lines, _pr, _probe, _rollback_kept, _save, _say_block, _shlex_args, _t, _tn,
+    persist_display_choice)
 from hermes_cli.cli_session_switch import (
     _end_current_session, _sync_agent_to_session)
 from hermes_cli.browser_connect import (
@@ -132,14 +133,6 @@ _DIFF_MODES = {
     "all": "all", "--all": "all", "head": "all", "session": "session"}
 # /diff mode -> stat headline catalog key (``cli.commands.diff.*``).
 _DIFF_LABELS = {"working": "diff.label_working", "staged": "diff.label_staged", "all": "diff.label_all"}
-
-
-def _persist_display_choice(key: str, value: str, label: str, note: str) -> None:
-    """Save a /busy-style choice to config and report saved vs session-only."""
-    if _save(key, value):
-        _cp(_accent_line(_t("shared.set_saved", label=label, value=value)), _dim_line(note))
-    else:
-        _cp(_accent_line(_t("shared.set_session_only", label=label, value=value)))
 
 
 def _split_scope_flags(raw: str):
@@ -755,6 +748,11 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin, CLIHandoffMixin):
             _cp(_db_unavailable_line())
         elif not self._show_recent_sessions(reason="sessions"):
             _cp(f"  {_t('sessions.none_yet')}")
+
+    def _handle_link_thread_command(self, cmd_original: str) -> None:
+        """``/link-thread [agent] [thread-id]`` — body in ``cli_link_thread_command``."""
+        from hermes_cli.cli_link_thread_command import handle_link_thread_command
+        return handle_link_thread_command(self, cmd_original)
 
     def _handle_branch_command(self, cmd_original: str) -> None:
         """Handle /branch [name] — fork the current session into a new independent copy of the
@@ -1891,7 +1889,7 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin, CLIHandoffMixin):
         if arg not in _BUSY_MODES:
             return _cp(_dim_line(_t("shared.unknown_argument", arg=arg)), usage)
         self.busy_input_mode = arg
-        _persist_display_choice("display.busy_input_mode", arg, _t("busy.label"), _t(f"busy.long_{arg}"))
+        persist_display_choice("display.busy_input_mode", arg, _t("busy.label"), _t(f"busy.long_{arg}"))
 
     def _handle_indicator_command(self, cmd: str):
         """Handle /indicator [status|kaomoji|emoji|unicode|ascii] — pick the TUI busy-indicator style.
@@ -1905,7 +1903,7 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin, CLIHandoffMixin):
         if arg not in INDICATOR_STYLES:
             return _cp(_dim_line(_t("indicator.unknown_style", arg=arg)), usage)
         self.config.setdefault("display", {})["tui_status_indicator"] = arg
-        _persist_display_choice("display.tui_status_indicator", arg, _t("indicator.label"), _t("indicator.note"))
+        persist_display_choice("display.tui_status_indicator", arg, _t("indicator.label"), _t("indicator.note"))
 
     def _handle_fast_command(self, cmd: str):
         """Handle /fast — toggle fast mode (OpenAI Priority Processing / Anthropic Fast Mode).

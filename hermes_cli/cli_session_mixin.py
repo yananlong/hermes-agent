@@ -691,6 +691,29 @@ class CLISessionMixin:
         self._handle_resume_command(f"/resume {index}")
         return True
 
+    def _consume_pending_link_selection(self, text: str) -> bool:
+        """Resolve a bare numeric reply following a bare ``/link-thread`` listing.
+
+        One-shot like :meth:`_consume_pending_resume_selection`: the pending state is cleared on
+        the first input regardless of outcome, so a stray later number is never hijacked into a
+        link. Returns True if the input was consumed (caller must not treat it as chat).
+        """
+        from cli import _cprint
+        pending = getattr(self, "_pending_link_threads", None)
+        if not pending:
+            return False
+        self._pending_link_threads = None
+        if not isinstance(text, str) or not text.strip().isdigit():
+            return False
+        index = int(text.strip())
+        if not 1 <= index <= len(pending):
+            _cprint("  " + t("cli.commands.link_thread.pick_out_of_range", index=index))
+            _cprint("  " + t("cli.commands.link_thread.pick_hint"))
+            return True
+        row = pending[index - 1]
+        self._handle_link_thread_command(f"/link-thread {row['agent']} {row['id']}")
+        return True
+
     def save_conversation(self, cmd: str = "/save"):
         """Handle ``/save [json|md|html] [filename] [redact]``.
 

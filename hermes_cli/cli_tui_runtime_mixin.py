@@ -137,6 +137,9 @@ class CLITuiRuntimeMixin:
             # A bare number right after a bare `/resume` selects that session (never sent to the agent).
             if self._pending_resume_sessions and self._consume_pending_resume_selection(user_input):
                 return
+            # ...and the same after a bare `/link-thread` lists native threads.
+            if getattr(self, "_pending_link_threads", None) and self._consume_pending_link_selection(user_input):
+                return
             if not is_seeded_query:
                 if self.handle_bang_shell(user_input):
                     return

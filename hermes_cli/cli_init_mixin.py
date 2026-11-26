@@ -538,6 +538,7 @@ class CLIInitMixin:
             self._composer_placeholder = ""
         self._command_palette_state = self._secret_state = None
         self._pending_resume_sessions = None  # armed by a bare `/resume`; the next bare number selects
+        self._pending_link_threads = None  # armed by a bare `/link-thread`; the next bare number links
         self._pending_agent_seed = None  # one-shot seed from a slash handler
         self._secret_deadline = 0
         self._tool_start_time: float = 0.0
