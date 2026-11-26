@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
 from ..core.artifacts import SessionArtifacts
 from ..core.errors import Conflict
 from ..core.identity import JsonValue, SessionId
+from ..conversation.sessions import parse_model_config
 
 if TYPE_CHECKING:
     from ..conversation.sessions import SessionRecord
@@ -35,6 +36,8 @@ __all__ = [
     "RoutingRepository",
     "TopicAlreadyLinked",
     "TopicBinding",
+    "LINKED_POINTER_API_MODES",
+    "LINKED_POINTER_FLAGS",
     "gateway_runtime",
     "normalize_topic_profile_name",
     "resume_route",
@@ -157,12 +160,60 @@ class GatewayRuntime:
 
 _ROUTE_KEYS = ("provider", "base_url", "api_mode")
 
+#: Top-level ``model_config`` flags that mark a linked foreign pointer row (the native tool owns
+#: the transcript; the Hermes row only stores the binding). Mirrors
+#: ``persistence.conversation.sessions.LINKED_FOREIGN_FLAGS``.
+LINKED_POINTER_FLAGS = ("codex_linked_thread", "claude_linked_thread", "mistral_linked_thread")
+
+#: ``api_mode`` values only a linked pointer row carries: the Codex app-server binding the link
+#: path stamps, and the read-only-era pointer shapes kept for older Claude/Mistral rows. A
+#: per-model HTTP route (``gateway_runtime``) never legitimately carries one of these.
+LINKED_POINTER_API_MODES = (
+    "codex_app_server",
+    "claude_linked_readonly", "claude_linked_resume",
+    "mistral_linked_readonly", "mistral_linked_resume",
+)
+
 
 def _route(members: Mapping[str, JsonValue], *, keep_falsy: bool) -> GatewayRuntime:
     picked = {
         key: value
         for key in _ROUTE_KEYS
         if isinstance(value := members.get(key), str) and (keep_falsy or value)
+    }
+    return GatewayRuntime(**picked)
+
+
+def _linked_pointer_config(model_config: Optional[Mapping[str, JsonValue]]) -> Optional[Mapping[str, JsonValue]]:
+    """The row's ``model_config`` when it marks a linked foreign pointer, else ``None``.
+
+    A pointer row stores the native tool's transcript binding at the TOP level
+    (``codex_linked_thread`` + ``api_mode: codex_app_server``, or the Claude/Mistral flags with
+    their ``*_linked_*`` row modes); the link paths (``hermes_cli/*_linked_threads.py``) are the
+    only writers. A later gateway turn or /model switch may stamp an ordinary per-model HTTP route
+    under ``gateway_runtime`` next to them — a routing preference, never a structural binding.
+    """
+    config = model_config or {}
+    if not any(config.get(flag) is True for flag in LINKED_POINTER_FLAGS):
+        return None
+    return parse_model_config(config)
+
+
+def _linked_pointer_route(model_config: Mapping[str, JsonValue]) -> GatewayRuntime:
+    """The route a linked pointer row resumes on: its own binding, nested HTTP route excluded.
+
+    The row's top-level ``api_mode`` is which runtime owns the transcript (Codex: the app-server
+    that appends with ``resume_thread_id``; Claude/Mistral: the pointer mode the send path reads),
+    so it always wins over any ``gateway_runtime`` stamped beside it. The pointer's own top-level
+    ``provider`` / ``base_url`` (the link path's binding route) are the rest of the projection;
+    nothing falls down to the nested object, whose provider and endpoint name the HTTP route some
+    later turn ran, not this row's owner.
+    """
+    config = parse_model_config(model_config)
+    picked = {
+        key: value
+        for key in _ROUTE_KEYS
+        if isinstance(value := config.get(key), str) and value
     }
     return GatewayRuntime(**picked)
 
@@ -175,9 +226,17 @@ def gateway_runtime(
 ) -> GatewayRuntime:
     """Project the runtime route persisted on a session row.
 
-    A nested ``gateway_runtime`` object with a truthy ``provider`` wins whole (its ``None`` members dropped). Otherwise the truthy top-level ``provider`` / ``base_url`` / ``api_mode``, with ``billing_provider`` (stripped) filling a missing provider unless it is a bare bucket of :data:`BARE_BILLING_PROVIDERS`; a bare ``custom`` bucket with no top-level provider surfaces as ``provider='custom'`` with ``billing_base_url`` when that endpoint is stored. When nothing above is set, a provider-less nested object's non-``None`` members; else the empty route. Members that are not strings read ``None``.
+    A nested ``gateway_runtime`` object with a truthy ``provider`` wins whole (its ``None`` members dropped).
+    Otherwise the truthy top-level ``provider`` / ``base_url`` / ``api_mode``, with ``billing_provider`` (stripped) filling a missing provider unless it is a bare bucket of :data:`BARE_BILLING_PROVIDERS`; a bare ``custom`` bucket with no top-level provider surfaces as ``provider='custom'`` with ``billing_base_url`` when that endpoint is stored. When nothing above is set, a provider-less nested object's non-``None`` members; else the empty route. Members that are not strings read ``None``.
+
+    A linked foreign pointer row keeps its own top-level ``api_mode`` (the structural binding that
+    says which runtime owns the transcript): the nested HTTP route stamped beside it by a later
+    model switch or gateway turn names a per-model wire, never a pointer's owner, so the binding
+    wins back the ``api_mode`` and (when it names no provider itself) the provider slot too.
     """
     raw: Mapping[str, JsonValue] = model_config or {}
+    if _linked_pointer_config(raw) is not None:
+        return _linked_pointer_route(raw)
     nested = raw.get("gateway_runtime")
     runtime = nested if isinstance(nested, Mapping) else None
     if runtime is not None and runtime.get("provider"):
@@ -221,7 +280,12 @@ def resume_route(
     column = (model or "").strip()
     picked = str(config.get("model") or "").strip()
     nested, lock = config.get("gateway_runtime"), config.get("browser_model_lock")
-    if isinstance(nested, Mapping) and nested.get("provider"):
+    if _linked_pointer_config(config) is not None:
+        # A pointer row's model is its column / its own top-level pick (the codex link sync keeps
+        # the native thread's effective model there): the nested HTTP route stamped beside the
+        # binding names a per-model wire, not the pointer's transcript owner.
+        chosen = picked or column
+    elif isinstance(nested, Mapping) and nested.get("provider"):
         chosen = str(nested.get("model") or "").strip() or column or picked
     elif isinstance(lock, Mapping) and lock.get("confirmed") and str(lock.get("model") or "").strip() == column:
         chosen = column or picked

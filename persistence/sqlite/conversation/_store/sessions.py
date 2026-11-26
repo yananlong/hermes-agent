@@ -683,7 +683,9 @@ def update_session_model(
     model with the provider that serves it (#79536). ``base_url``/``api_mode`` are always
     replaced then (``None`` deletes): the previous provider's endpoint must not survive a switch,
     or resume sends the new provider's model to the old host. Callers without provider knowledge
-    leave the stored route untouched.
+    leave the stored route untouched — except on a linked foreign pointer row, whose top-level
+    ``api_mode`` is the binding naming which runtime owns the transcript: it is never overwritten
+    by a per-model switch route.
     """
     # Flush first: a still-queued pre-switch delta applied after this UPDATE would trip the
     # first_accounted_route overwrite and resurrect the old route.
@@ -691,6 +693,8 @@ def update_session_model(
     patch: dict[str, Any] = {"browser_model_lock": None}
     if model:
         patch["model"] = model
+    if provider and _row_is_linked_pointer(holder, session_id):
+        provider = None  # the binding route keeps the pointer's own api_mode/provider untouched
     if provider:
         route = {"provider": provider, "base_url": base_url or None, "api_mode": api_mode or None}
         # The nested route names its model: the first accounted call may later rewrite the model
@@ -700,6 +704,17 @@ def update_session_model(
         session_id, patch, "UPDATE sessions SET model = ?, model_config = ? WHERE id = ?",
         lambda merged: (model, merged, session_id),
     )
+
+
+def _row_is_linked_pointer(holder: StoreHolder, session_id: str) -> bool:
+    """Whether the row marks a linked foreign pointer (its top-level api_mode is a binding)."""
+    with holder._read_ctx() as conn:
+        row = conn.execute("SELECT model_config FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    if row is None:
+        return False
+    config = _parse_model_config(row[0])
+    return any(config.get(flag) is True for flag in (
+        "codex_linked_thread", "claude_linked_thread", "mistral_linked_thread"))
 
 
 def _write_model_config_patch(

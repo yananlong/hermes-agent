@@ -629,7 +629,8 @@ class CLIAgentSetupMixin:
                 f"[bold {_accent_hex()}]{_escape(title_part)}[/] {counts}")
             self._restore_session_state(session_meta, quiet=_quiet_mode)
         else:
-            no_messages = t("cli.resume.session_no_messages", session_id=self.session_id)
+            no_messages = t("cli.resume.session_no_messages", session_id=self.session_id,
+                            title=f' "{session_meta["title"]}"' if session_meta.get("title") else "")
             _say(no_messages, f"[bold {_accent_hex()}]{_escape(no_messages)}[/]")
         self._reopen_session()
         return True
@@ -848,8 +849,9 @@ class CLIAgentSetupMixin:
         restored, display_history = self._session_db.get_resume_conversations(self._resume_read_id)
         accent_color = _accent_hex()
         if not restored:
-            self._console_print(
-                f"[{accent_color}]{_escape(t('cli.resume.session_no_messages', session_id=self.session_id))}[/]")
+            no_messages = t("cli.resume.session_no_messages", session_id=self.session_id,
+                            title=f' "{session_meta["title"]}"' if session_meta.get("title") else "")
+            self._console_print(f"[{accent_color}]{_escape(no_messages)}[/]")
             return False
         restored = [m for m in restored if m.get("role") != "session_meta"]
         self.conversation_history = restored

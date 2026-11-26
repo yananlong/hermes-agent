@@ -64,9 +64,35 @@ def handle_link_thread_command(cli, cmd_original: str) -> None:
     session_id = (created or {}).get("session_id")
     if not session_id:
         return _cp("  " + _t("link_thread.invalid_response", method=link_method(agent)))
+    linked_title = _linked_row_title(store, session_id) if store is not None else ""
     if (created or {}).get("already_linked"):
-        _cp("  " + _t("link_thread.already_linked", label=_LINK_AGENT_LABELS[agent], thread_id=target))
+        _cp("  " + _t("link_thread.already_linked",
+                      label=_LINK_AGENT_LABELS[agent], thread_id=target, title=linked_title))
+    else:
+        _cp("  " + _t("link_thread.linked", label=_LINK_AGENT_LABELS[agent],
+                      title=linked_title, session_id=session_id))
     cli._handle_resume_command(f"/resume {session_id}")
+
+
+def _linked_row_title(store, session_id: str) -> str:
+    """The linked pointer row's title, read back from the CLI's own (read-only) store view.
+
+    The link RPC keeps its contract (``session_id`` / ``already_linked``); the title it stored is
+    read from the row so the CLI can name the thread it linked. Unavailable reads answer ``""``
+    (the line then falls back to the label without a title, never fails the link).
+    """
+    getter = getattr(store, "get_session", None)
+    if not callable(getter):
+        return ""
+    try:
+        row = getter(session_id)
+    except Exception:  # health: allow BLE001 -- the link already succeeded; a read must not undo it
+        return ""
+    if isinstance(row, dict):
+        title = row.get("title")
+    else:
+        title = getattr(row, "title", None)
+    return title if isinstance(title, str) else ""
 
 
 def _agent_for(call, states: list[dict], agent: str | None, thread_id: str) -> str | None:

@@ -386,6 +386,14 @@ class GatewayTurnPrepareMixin:
             gateway_runtime = dict(config.get("gateway_runtime") or {})
             if row.model == model and all(gateway_runtime.get(k) == v for k, v in runtime.items()):
                 return
+            if any(config.get(flag) is True for flag in (
+                    "codex_linked_thread", "claude_linked_thread", "mistral_linked_thread")):
+                # A linked foreign pointer row's binding (its top-level api_mode) names which runtime
+                # owns the transcript; a per-model HTTP route stamped beside it loses on every
+                # resume (persistence.gateway.routing routes a linked row from its own binding) and
+                # only misleads readers. Keep the model column, skip the route write.
+                store.sessions.update_model(session_id, model)
+                return
             config["gateway_runtime"] = runtime
             store.sessions.replace_session_config(session_id, ReplaceSessionConfig(model_config=config, model=model))
         except Exception:

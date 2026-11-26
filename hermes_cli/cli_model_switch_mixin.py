@@ -14,6 +14,7 @@ import copy
 import logging
 import sys
 import threading
+from typing import Any
 
 from rich.markup import escape as _escape
 from agent.i18n import t
@@ -47,6 +48,36 @@ def _resolve_cli_reasoning(cli) -> None:
     # getattr: tests drive /new unbound on a SimpleNamespace without ``model`` (blank -> config default).
     cli.reasoning_config = resolve_reasoning_config(CLI_CONFIG, getattr(cli, "model", None) or "")
     cli._reasoning_user_set = False
+
+
+def linked_row_binding_api_mode(session_meta) -> str | None:
+    """The top-level ``api_mode`` a linked foreign pointer row resumes on, or None.
+
+    A pointer row's ``api_mode`` is a structural binding — which runtime owns the transcript
+    (``codex_app_server`` for Codex; the legacy ``claude_linked_*`` / ``mistral_linked_*`` modes for
+    the older read-only rows) — never a per-model wire. Only read for rows carrying a linked flag;
+    an ordinary row's api_mode keeps its ordinary meaning (see ``stored_session_route``).
+    """
+    from persistence.conversation.sessions import parse_model_config
+    from persistence.gateway.routing import LINKED_POINTER_API_MODES, LINKED_POINTER_FLAGS
+    config = parse_model_config((session_meta or {}).get("model_config"))
+    if not any(config.get(flag) is True for flag in LINKED_POINTER_FLAGS):
+        return None
+    api_mode = config.get("api_mode")
+    return api_mode if isinstance(api_mode, str) and api_mode in LINKED_POINTER_API_MODES else None
+
+
+def _apply_linked_binding_api_mode(cli, session_meta) -> None:
+    """Set a linked pointer row's binding ``api_mode`` when nothing else had to be restored.
+
+    Same model, same provider means ``stored_session_route`` answers ``None`` and there is nothing
+    to restore — except the binding. ``agent/conversation_loop.py`` refuses a linked Codex row whose
+    agent is not on ``codex_app_server`` (the no-fork boundary), so an ambient wire that happens to
+    match the pointer's model and provider must not leave the binding unset.
+    """
+    binding = linked_row_binding_api_mode(session_meta)
+    if binding and binding != getattr(cli, "api_mode", None):
+        cli.api_mode = binding
 
 
 def stored_session_route(session_meta, *, current_model, current_provider):
@@ -433,6 +464,27 @@ def _show_model_picker(cli, ctx, force_refresh: bool) -> None:
         custom_provs=ctx.custom_providers if ctx is not None else None)
 
 
+def _stored_row_model_config(db, session_id) -> Any:
+    """The stored ``model_config`` cell of *session_id*, or ``None`` when the row cannot be read.
+
+    Both CLI store shapes are tolerated (``get_session`` dict rows with JSON text; a persistence
+    handle's session records already carry a dict). A read failure reads ``None``: the caller
+    treats it as "not a linked pointer" and keeps its ordinary write.
+    """
+    getter = getattr(db, "get_session", None)
+    if not callable(getter):
+        return None
+    try:
+        row = getter(session_id)
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        # A store that cannot answer reads as "not a linked pointer": the caller keeps its
+        # ordinary model-switch write, which is the pre-existing behaviour for such a row.
+        logger.debug("Could not read the session's model_config before a model switch: %s", exc,
+                     exc_info=True)
+        return None
+    return (row or {}).get("model_config") if isinstance(row, dict) else getattr(row, "model_config", None)
+
+
 class CLIModelSwitchMixin:
     """Model picker, /model switch application, runtime snapshot/restore, and codex runtime handling for the interactive CLI"""
 
@@ -549,6 +601,15 @@ class CLIModelSwitchMixin:
         sid = getattr(self, "session_id", None)
         if not db or not sid:
             return
+        if linked_row_binding_api_mode({"model_config": _stored_row_model_config(db, sid)}) is not None:
+            # A linked foreign pointer row's api_mode is the binding naming which runtime owns the
+            # transcript; a /model switch writes the model column only, never a per-model route
+            # over the binding (resume routes the row from the binding, but readers dupe it).
+            try:
+                db.update_session_model(sid, result.new_model)
+            except (KeyError, OSError, TypeError, ValueError) as exc:
+                logger.debug("Failed to persist model switch to session DB: %s", exc, exc_info=True)
+            return
         route = {
             "provider": _heal_bare_custom_provider(
                 result.target_provider, base_url=result.base_url, model=result.new_model,
@@ -580,6 +641,7 @@ class CLIModelSwitchMixin:
             return
         route = stored_session_route(session_meta, current_model=self.model, current_provider=self.provider)
         if route is None:
+            _apply_linked_binding_api_mode(self, session_meta)
             return
         stored_model, stored_provider, stored_base_url, stored_api_mode, provider_changed = route
         from hermes_cli.local_runtime.endpoint import LLAMACPP_ALIASES
