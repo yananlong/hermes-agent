@@ -88,6 +88,15 @@ def test_claude_and_mistral_pointer_rows_keep_their_row_modes():
         assert gateway_runtime(config).api_mode == row_mode, flag
 
 
+def test_gateway_runtime_reads_a_json_text_pointer_row():
+    # CONTRACT: session rows store ``model_config`` as JSON text, and the gateway's own resume
+    # path (gateway/session_local_migration.py::legacy_launch_params) hands that text straight to
+    # ``gateway_runtime``. It used to test the linked flags on the raw value, so a text row raised
+    # "'str' object has no attribute 'get'" instead of routing from its binding.
+    assert gateway_runtime(json.dumps(_codex_pointer_row())) == GatewayRuntime(
+        provider="openai", api_mode="codex_app_server")
+
+
 def test_an_ordinary_rows_nested_route_precedence_is_unchanged():
     # CONTRACT: the nested gateway_runtime route keeps winning on ordinary rows (the #125942 /
     # legacy precedence); only linked pointer rows route from their own binding.

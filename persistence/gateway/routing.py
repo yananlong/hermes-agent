@@ -193,10 +193,10 @@ def _linked_pointer_config(model_config: Optional[Mapping[str, JsonValue]]) -> O
     only writers. A later gateway turn or /model switch may stamp an ordinary per-model HTTP route
     under ``gateway_runtime`` next to them — a routing preference, never a structural binding.
     """
-    config = model_config or {}
+    config = parse_model_config(model_config)
     if not any(config.get(flag) is True for flag in LINKED_POINTER_FLAGS):
         return None
-    return parse_model_config(config)
+    return config
 
 
 def _linked_pointer_route(model_config: Mapping[str, JsonValue]) -> GatewayRuntime:
@@ -219,7 +219,7 @@ def _linked_pointer_route(model_config: Mapping[str, JsonValue]) -> GatewayRunti
 
 
 def gateway_runtime(
-    model_config: Optional[Mapping[str, JsonValue]],
+    model_config: Optional[Mapping[str, JsonValue] | str],
     *,
     billing_provider: Optional[str] = None,
     billing_base_url: Optional[str] = None,
@@ -234,7 +234,8 @@ def gateway_runtime(
     model switch or gateway turn names a per-model wire, never a pointer's owner, so the binding
     wins back the ``api_mode`` and (when it names no provider itself) the provider slot too.
     """
-    raw: Mapping[str, JsonValue] = model_config or {}
+    raw: Mapping[str, JsonValue] = (
+        parse_model_config(model_config) if isinstance(model_config, str) else (model_config or {}))
     if _linked_pointer_config(raw) is not None:
         return _linked_pointer_route(raw)
     nested = raw.get("gateway_runtime")
