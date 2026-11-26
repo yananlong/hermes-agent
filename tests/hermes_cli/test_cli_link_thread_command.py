@@ -218,6 +218,74 @@ def test_one_agents_failing_store_does_not_hide_anothers_threads(outputs):
     assert [row["id"] for row in cli._pending_link_threads] == ["c1"]
 
 
+def test_a_thread_id_alone_resolves_its_owning_agent_from_the_stores(outputs):
+    """The id names its agent: ask each writable store, and link the unique match."""
+    owner = Owner(status={"agents": [_writable("codex", "Codex"), _writable("claude", "Claude Code")]},
+                  listings={"session.claude.list": {"threads": [{"id": "0b2c", "title": "claude work"}]},
+                            "session.codex.list": {"threads": [{"id": "0a1b", "title": "codex work"}]}},
+                  links={"session.claude.link": {"session_id": "s-4", "already_linked": False}})
+    cli = CLI(owner)
+    cli._handle_link_thread_command("/link-thread 0b2c")
+    assert owner.calls[-1] == ("session.claude.link", {"session_id": "0b2c"})
+    assert cli.resumed == ["/resume s-4"]
+
+
+def test_an_id_no_store_lists_still_asks_which_agent(outputs):
+    owner = Owner(status={"agents": [_writable("codex", "Codex"), _writable("claude", "Claude Code")]},
+                  listings={"session.codex.list": {"threads": [{"id": "0a1b", "title": "x"}]},
+                            "session.claude.list": {"threads": [{"id": "0b2c", "title": "y"}]}})
+    cli = CLI(owner)
+    cli._handle_link_thread_command("/link-thread 0d4e")
+    assert any("Name the agent" in line for line in outputs)
+    assert not any(method.endswith(".link") for method, _ in owner.calls)
+
+
+def test_an_id_listed_by_two_stores_is_not_guessed(outputs):
+    """Two stores claiming one id is ambiguous: linking the wrong one fails on the next send."""
+    owner = Owner(status={"agents": [_writable("codex", "Codex"), _writable("claude", "Claude Code")]},
+                  listings={"session.codex.list": {"threads": [{"id": "dup", "title": "x"}]},
+                            "session.claude.list": {"threads": [{"id": "dup", "title": "y"}]}})
+    cli = CLI(owner)
+    cli._handle_link_thread_command("/link-thread dup")
+    assert any("Name the agent" in line for line in outputs)
+    assert not any(method.endswith(".link") for method, _ in owner.calls)
+
+
+def test_a_number_after_the_picker_links_that_row_without_naming_an_agent(outputs):
+    """The picker already named the agent, so `/link 1` must not ask for one again."""
+    owner = Owner(
+        status={"agents": [_writable("codex", "Codex"), _writable("claude", "Claude Code")]},
+        listings={"session.codex.list": {"threads": [{"id": "01a212d9", "title": "Hermes: add caps"}]}},
+        links={"session.codex.link": {"session_id": "s-5", "already_linked": False}})
+    cli = CLI(owner)
+    cli._handle_link_thread_command("/link-thread")
+    assert cli._pending_link_threads
+    cli._handle_link_thread_command("/link-thread 1")
+    assert owner.calls[-1] == ("session.codex.link", {"thread_id": "01a212d9"})
+    assert cli.resumed == ["/resume s-5"]
+
+
+def test_an_out_of_range_number_after_the_picker_is_reported_as_such(outputs):
+    owner = Owner(status={"agents": [_writable("codex", "Codex")]},
+                  listings={"session.codex.list": {"threads": [{"id": "a", "title": "t"}]}})
+    cli = CLI(owner)
+    cli._handle_link_thread_command("/link-thread")
+    cli._handle_link_thread_command("/link-thread 9")
+    assert any("No thread 9" in line for line in outputs)
+    assert not any(method.endswith(".link") for method, _ in owner.calls)
+
+
+def test_a_uuid_after_the_picker_is_still_a_thread_id_not_an_index(outputs):
+    """Native ids are never bare integers, so a real id must ignore the pending list."""
+    owner = Owner(status={"agents": [_writable("codex", "Codex")]},
+                  links={"session.codex.link": {"session_id": "s-6", "already_linked": False}})
+    cli = CLI(owner)
+    cli._pending_link_threads = [{"agent": "claude", "id": "other", "title": "t", "label": "Claude Code"}]
+    cli._handle_link_thread_command("/link-thread codex 01a212d9")
+    assert owner.calls[-1] == ("session.codex.link", {"thread_id": "01a212d9"})
+    assert cli.resumed == ["/resume s-6"]
+
+
 def test_no_threads_anywhere_says_so_without_arming_a_selection(outputs):
     owner = Owner(status={"agents": [_writable("codex", "Codex")]})
     cli = CLI(owner)

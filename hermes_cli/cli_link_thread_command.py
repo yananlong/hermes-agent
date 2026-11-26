@@ -30,6 +30,14 @@ def handle_link_thread_command(cli, cmd_original: str) -> None:
     agent, thread_id = parse_link_arg(_command_arg(cmd_original))
     if not thread_id:
         return _show_linked_thread_picker(cli, agent)
+    # `/link-thread 2` right after a bare `/link-thread` selects that row: the picker already
+    # named its agent, so asking again would be ceremony. Native ids are UUIDs, never bare
+    # integers, so a number here is unambiguously an index.
+    if _pending_pick_armed(cli, thread_id):
+        picked = _take_pending_pick(cli, thread_id)
+        if picked is None:
+            return _cp("  " + _t("link_thread.pick_out_of_range", index=thread_id))
+        agent, thread_id = picked["agent"], picked["id"]
     store = getattr(cli, "_session_db", None)
     call = getattr(store, "call", None)
     if not callable(call):
@@ -42,10 +50,16 @@ def handle_link_thread_command(cli, cmd_original: str) -> None:
         if not writable:
             return _cp("  " + _t("link_thread.no_agent", reasons="; ".join(
                 f"{state['label']}: {state['reason']}" for state in states)))
-        if len(writable) > 1:
-            return _cp("  " + _t("link_thread.name_the_agent", thread_id=thread_id,
-                                  agents=", ".join(state["agent"] for state in writable)))
+        # One writable agent needs no disambiguation: the id can only belong to it, and a wrong
+        # id fails on the link itself. With several, the stores are asked rather than the user —
+        # a unique match is a resolution, anything else stays a question, because a pointer row
+        # on the wrong agent would fail on the next send instead of here.
         agent = writable[0]["agent"]
+        if len(writable) > 1:
+            agent = _agent_owning_thread(call, writable, thread_id)
+            if agent is None:
+                return _cp("  " + _t("link_thread.name_the_agent", thread_id=thread_id,
+                                      agents=", ".join(state["agent"] for state in writable)))
     else:
         state = next((row for row in states if row["agent"] == agent), None)
         if not state or not state["writable"]:
@@ -61,6 +75,45 @@ def handle_link_thread_command(cli, cmd_original: str) -> None:
     if (created or {}).get("already_linked"):
         _cp("  " + _t("link_thread.already_linked", label=_LINK_AGENT_LABELS[agent], thread_id=thread_id))
     cli._handle_resume_command(f"/resume {session_id}")
+
+
+def _pending_pick_armed(cli, thread_id: str) -> bool:
+    """Whether *thread_id* is a picker index at all: a bare number with a pending list armed."""
+    return bool(getattr(cli, "_pending_link_threads", None)) and thread_id.isdigit()
+
+
+def _take_pending_pick(cli, thread_id: str) -> dict | None:
+    """The row a bare ``/link-thread <number>`` selects, consuming the one-shot pending list.
+
+    Returns ``None`` when the number is outside the list, so the caller can report it as an
+    out-of-range pick rather than treating it as a thread id.
+    """
+    pending = getattr(cli, "_pending_link_threads", None)
+    if not pending or not thread_id.isdigit():
+        return None
+    index = int(thread_id)
+    if not 1 <= index <= len(pending):
+        return None
+    cli._pending_link_threads = None
+    return pending[index - 1]
+
+
+def _agent_owning_thread(call, writable: list[dict], thread_id: str) -> str | None:
+    """The one writable agent whose store lists *thread_id*, or ``None`` when that is not unique.
+
+    One page per agent: a thread old enough to fall off the first page stays a question rather
+    than a guess, because a pointer row on the wrong agent fails on the next send.
+    """
+    found: list[str] = []
+    for state in writable:
+        try:
+            page = call(f"session.{state['agent']}.list", limit=25) or {}
+        except Exception:  # health: allow BLE001 -- an unreadable store cannot own the id
+            continue
+        if any(str(row.get("id")) == thread_id for row in (page.get("threads") or [])):
+            found.append(state["agent"])
+    return found[0] if len(found) == 1 else None
+
 
 def _show_linked_thread_picker(cli, agent: str | None = None) -> None:
     """List what this host can link, and the native threads it can offer, then one-shot select.
