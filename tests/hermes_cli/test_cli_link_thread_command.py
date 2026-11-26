@@ -286,6 +286,51 @@ def test_a_uuid_after_the_picker_is_still_a_thread_id_not_an_index(outputs):
     assert cli.resumed == ["/resume s-6"]
 
 
+def test_a_number_selects_without_a_bare_link_first(outputs):
+    """/link 1 must work as a first command: the list is fetched rather than demanded."""
+    owner = Owner(
+        status={"agents": [_writable("codex", "Codex"), _writable("claude", "Claude Code")]},
+        listings={"session.codex.list": {"threads": [{"id": "01a212d9", "title": "Hermes: add caps"},
+                                                     {"id": "0b2c", "title": "second"}]}},
+        links={"session.codex.link": {"session_id": "s-7", "already_linked": False}})
+    cli = CLI(owner)
+    cli._handle_link_thread_command("/link-thread 2")
+    assert owner.calls[-1] == ("session.codex.link", {"thread_id": "0b2c"})
+    assert cli.resumed == ["/resume s-7"]
+
+
+def test_a_number_out_of_range_on_a_first_command_lists_and_says_so(outputs):
+    owner = Owner(status={"agents": [_writable("codex", "Codex")]},
+                  listings={"session.codex.list": {"threads": [{"id": "a", "title": "only one"}]}})
+    cli = CLI(owner)
+    cli._handle_link_thread_command("/link-thread 5")
+    joined = " ".join(outputs)
+    assert "only one" in joined          # the list it referred to is shown
+    assert "No thread 5" in joined
+    assert not any(method.endswith(".link") for method, _ in owner.calls)
+
+
+def test_a_number_browses_only_the_agent_it_named(outputs):
+    owner = Owner(status={"agents": [_writable("codex", "Codex"), _writable("claude", "Claude Code")]},
+                  listings={"session.claude.list": {"threads": [{"id": "c1", "title": "claude work"}]}},
+                  links={"session.claude.link": {"session_id": "s-8", "already_linked": False}})
+    cli = CLI(owner)
+    cli._handle_link_thread_command("/link-thread claude 1")
+    assert [m for m, _ in owner.calls if m.endswith(".list")] == ["session.claude.list"]
+    assert owner.calls[-1] == ("session.claude.link", {"session_id": "c1"})
+
+
+def test_a_number_is_never_mistaken_for_a_thread_id(outputs):
+    """Real ids are UUIDs, so a digit run is unambiguously a list position."""
+    owner = Owner(status={"agents": [_writable("codex", "Codex")]},
+                  listings={"session.codex.list": {"threads": [{"id": "01a212d9", "title": "t"}]}},
+                  links={"session.codex.link": {"session_id": "s-9b", "already_linked": False}})
+    cli = CLI(owner)
+    cli._handle_link_thread_command("/link-thread 1")
+    linked_id = owner.calls[-1][1].get("thread_id")
+    assert linked_id == "01a212d9"
+
+
 def test_no_threads_anywhere_says_so_without_arming_a_selection(outputs):
     owner = Owner(status={"agents": [_writable("codex", "Codex")]})
     cli = CLI(owner)
