@@ -85,7 +85,11 @@ const SYMBOLS: Record<string, string> = {
   // Calculus
   '\\partial': '∂',
   '\\nabla': '∇',
+  // `\sqrt` stays here as the fallback for a bare command with no argument;
+  // `replaceSqrts` consumes the `\sqrt{...}` form before the symbol pass runs.
   '\\sqrt': '√',
+  '\\hbar': 'ℏ',
+  '\\hslash': 'ℏ',
 
   // Sets
   '\\emptyset': '∅',
@@ -682,6 +686,83 @@ const wrapForFrac = (expr: string) => {
   return trimmed
 }
 
+// `\sqrt` and `\frac` are the two commands whose meaning depends on an
+// argument, so both need the balanced-brace parser rather than a table entry.
+// A table entry has no notion of arity: `\sqrt{\nu\pi}` substituted only the
+// command and left the braces attached (`√{νπ}`), which reads as unrendered
+// LaTeX. `\sqrt[n]{x}` keeps the degree as a Unicode superscript prefix
+// (`ⁿ√x`), matching how the script pass already renders `^n`.
+//
+// The radicand is itself converted recursively, so `\sqrt{\frac{a}{b}}`
+// resolves inside-out. Radicands that need grouping keep their parens —
+// `\sqrt{b^2-4ac}` → `√(b²-4ac)` — because a vinculum over a sum is the one
+// thing a flat string cannot express; `√b²-4ac` would read as √b² minus 4ac.
+const replaceSqrts = (input: string): string => {
+  let out = ''
+  let i = 0
+
+  while (i < input.length) {
+    const idx = input.indexOf('\\sqrt', i)
+
+    if (idx < 0) {
+      out += input.slice(i)
+
+      return out
+    }
+
+    const after = input[idx + 5]
+
+    // `(?![A-Za-z])` — protect hypothetical commands like `\sqrtb`.
+    if (after && /[A-Za-z]/.test(after)) {
+      out += input.slice(i, idx + 5)
+      i = idx + 5
+
+      continue
+    }
+
+    out += input.slice(i, idx)
+
+    let p = idx + 5
+
+    while (input[p] === ' ' || input[p] === '\t') {
+      p++
+    }
+
+    // Optional `[n]` degree.
+    let degree = ''
+
+    if (input[p] === '[') {
+      const close = input.indexOf(']', p + 1)
+
+      if (close > 0) {
+        degree = input.slice(p + 1, close).trim()
+        p = close + 1
+
+        while (input[p] === ' ' || input[p] === '\t') {
+          p++
+        }
+      }
+    }
+
+    const arg = readBraced(input, p)
+
+    if (!arg) {
+      out += input.slice(idx, p + 1)
+      i = p + 1
+
+      continue
+    }
+
+    const radicand = wrapForFrac(replaceSqrts(replaceFracs(arg.content)))
+    const prefix = degree ? convertScript(degree, SUPERSCRIPT, '^') : ''
+
+    out += `${prefix}√${radicand}`
+    i = arg.end
+  }
+
+  return out
+}
+
 export function texToUnicode(input: string): string {
   let s = input
 
@@ -703,6 +784,11 @@ export function texToUnicode(input: string): string {
   s = s.replace(/\\ddot\s*\{([^{}]+)\}/g, (_, c: string) => `${c}\u0308`)
 
   s = replaceFracs(s)
+
+  // AFTER `replaceFracs` so a radicand that *contains* a fraction is already
+  // collapsed when `\sqrt` measures it, and before the symbol pass so the
+  // `√` it emits is not re-consumed as a bare `\sqrt` table hit.
+  s = replaceSqrts(s)
 
   // `\boxed{X}` / `\fbox{X}` highlight a final answer. Terminals can't
   // draw a real box, so we wrap the content in U+0001 / U+0002 control
