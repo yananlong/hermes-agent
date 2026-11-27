@@ -210,7 +210,7 @@ def read_display_history(thread_id: str, *, session_id: str, model: str | None =
                     session_db, session_id, thread_id, [record["id"] for record in records])
             rows = display_native_turns(records, session_id=session_id, thread_id=thread_id,
                                         model=model, max_bytes=32 * 1024 * 1024, overlays=overlays,
-                                        require_overlay=True, platform=platform)
+                                        require_overlay=True, trust_unrecorded=True, platform=platform)
             _trace_cache_save_display(cache_key, records)
     except (CodexAppServerError, OSError, TimeoutError, ValueError) as exc:
         raise AuthorityRefusal("storage_unavailable", field="session_id",
@@ -326,7 +326,7 @@ def read_display_history_window(thread_id: str, *, session_id: str, model: str |
                             session_db, session_id, thread_id, [record["id"] for record in records])
                     page_rows = display_native_turns(records, session_id=session_id, thread_id=thread_id,
                                                      model=model, max_bytes=max_bytes, overlays=overlays,
-                                                     require_overlay=True, platform=platform)
+                                                     require_overlay=True, trust_unrecorded=True, platform=platform)
                     if skipped < offset and page_rows:
                         # offset is row-space: for latest it skips the newest rows (the tail
                         # of the ascending page), otherwise the oldest (the head).
@@ -512,7 +512,7 @@ def _latest_projected_page(client, thread_id, cursor, page_size, *, session_id, 
     overlays = linked_turn_display_overlays(store, session_id, thread_id, [record["id"] for record in records])
     records = display_native_turn_records(records, session_id=session_id, thread_id=thread_id, model=model,
                                           max_bytes=32 * 1024 * 1024, overlays=overlays,
-                                          require_overlay=True, platform=platform)
+                                          require_overlay=True, trust_unrecorded=True, platform=platform)
     result = []
     for record in records:
         rows = display_projection(record["rows"], profile_home, image_urls=inline_images)

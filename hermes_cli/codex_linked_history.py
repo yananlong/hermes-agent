@@ -218,22 +218,38 @@ def _current_policy_rows(record: dict, *, manager, held: bool, callbacks, sessio
     return _redact_projected_rows(rows)
 
 
-def _display_record_signature(overlay, require_overlay, manager, held, callbacks, platform):
-    if overlay is not None or require_overlay:
+def _display_record_signature(overlay, require_overlay, manager, held, callbacks, platform,
+                              trust_unrecorded: bool):
+    if overlay is not None or (require_overlay and not trust_unrecorded):
         return "settled", json.dumps(overlay, sort_keys=True, ensure_ascii=False)
     return _transform_signature(manager, held, callbacks, platform)
 
 
 def _cached_display_rows(record: dict, *, overlay, require_overlay, manager, held, callbacks,
-                         session_id: str, thread_id: str, model: str | None, platform: str) -> list[dict]:
-    signature = _display_record_signature(overlay, require_overlay, manager, held, callbacks, platform)
+                         session_id: str, thread_id: str, model: str | None, platform: str,
+                         trust_unrecorded: bool) -> list[dict]:
+    signature = _display_record_signature(overlay, require_overlay, manager, held, callbacks,
+                                          platform, trust_unrecorded)
     cached = record.get("_display_rows")
     if record.get("_display_signature") == signature and isinstance(cached, list):
         return cached
-    rows = (_overlay_display_rows(record, overlay, required=require_overlay)
-            if overlay is not None or require_overlay else
-            _current_policy_rows(record, manager=manager, held=held, callbacks=callbacks,
-                                 session_id=session_id, thread_id=thread_id, model=model, platform=platform))
+    if overlay is not None:
+        rows = _overlay_display_rows(record, overlay, required=require_overlay)
+    elif require_overlay and not trust_unrecorded:
+        # Strict: no stored policy means we cannot know what the turn's transforms would have
+        # shown, so hide it behind one notice rather than present it as if policy had run.
+        rows = _overlay_display_rows(record, overlay, required=True)
+    else:
+        # Trusted-native: this turn has no stored overlay, so Hermes never ran it and no output
+        # transform can ever have applied to it (overlays are written only by the turn path,
+        # agent/codex_runtime.py::persist_linked_turn_display). Render it under the CURRENT
+        # policy instead of hiding it — otherwise every turn of a thread created in the Codex
+        # CLI/app is invisible, which is not "as if in codex CLI". Redaction stays forced:
+        # _current_policy_rows ends in _redact_projected_rows and the history projector is
+        # built with force_reasoning_redaction=True.
+        rows = _current_policy_rows(record, manager=manager, held=held, callbacks=callbacks,
+                                    session_id=session_id, thread_id=thread_id, model=model,
+                                    platform=platform)
     _redact_projected_rows(rows)
     record["_display_rows"], record["_display_signature"] = rows, signature
     return rows
@@ -273,12 +289,18 @@ def _safe_native_text(value: str) -> str:
 def display_native_turn_records(records: list[dict], *, session_id: str, thread_id: str,
                                 model: str | None, max_bytes: int = 8 * 1024 * 1024,
                                 overlays: dict[str, dict] | None = None, require_overlay: bool = False,
+                                trust_unrecorded: bool = False,
                                 platform: str = "") -> list[dict]:
     """Apply profile output filters and redaction once per native turn, then return safe records.
 
     Held-stream profiles hide interim assistant text and run their held transforms on the final
     response. Other profiles retain redacted commentary and transform only the final response.
     A session identity is required so hooks receive the same stable per-turn context as live use.
+
+    ``require_overlay`` refuses to guess a turn's display policy: a turn with no stored overlay is
+    hidden behind one notice. ``trust_unrecorded`` narrows that to turns whose overlay COULD exist
+    — a turn Hermes never ran cannot carry a stored transform, so hiding it only loses the native
+    transcript. Such a turn renders under the current policy with redaction still forced.
     """
     if not isinstance(session_id, str) or not session_id or not isinstance(thread_id, str) or not thread_id:
         raise ValueError("Linked Codex display requires its owning session and thread")
@@ -288,8 +310,8 @@ def display_native_turn_records(records: list[dict], *, session_id: str, thread_
         model = None
 
     overlays = overlays if isinstance(overlays, dict) else {}
-    needs_current_policy = not require_overlay and any(record.get("id") not in overlays for record in records
-                                                        if isinstance(record, dict))
+    needs_current_policy = (not require_overlay or trust_unrecorded) and any(
+        record.get("id") not in overlays for record in records if isinstance(record, dict))
     manager = None
     held, callbacks = False, ()
     if needs_current_policy:
@@ -305,7 +327,7 @@ def display_native_turn_records(records: list[dict], *, session_id: str, thread_
         rows = _cached_display_rows(
             record, overlay=overlay, require_overlay=require_overlay, manager=manager,
             held=held, callbacks=callbacks, session_id=session_id, thread_id=thread_id,
-            model=model, platform=platform)
+            model=model, platform=platform, trust_unrecorded=trust_unrecorded)
         safe_record = _safe_display_record(record, rows, max_bytes - total_bytes)
         total_bytes += len(json.dumps(safe_record, ensure_ascii=False, default=str).encode("utf-8"))
         safe_records.append(safe_record)
@@ -315,11 +337,13 @@ def display_native_turn_records(records: list[dict], *, session_id: str, thread_
 def display_native_turns(records: list[dict], *, session_id: str, thread_id: str,
                          model: str | None, max_bytes: int = 8 * 1024 * 1024,
                          overlays: dict[str, dict] | None = None, require_overlay: bool = False,
+                         trust_unrecorded: bool = False,
                          platform: str = "") -> list[dict]:
     """Flatten safely filtered native turns into the ordinary Hermes transcript row shape."""
     safe_records = display_native_turn_records(records, session_id=session_id, thread_id=thread_id,
                                                model=model, max_bytes=max_bytes, overlays=overlays,
-                                               require_overlay=require_overlay, platform=platform)
+                                               require_overlay=require_overlay,
+                                               trust_unrecorded=trust_unrecorded, platform=platform)
     return [row for record in safe_records for row in record["rows"]]
 
 
@@ -572,7 +596,7 @@ def display_native_turn_page(thread_id: str, *, session_id: str, model: str | No
             session_db, session_id, thread_id, [record["id"] for record in records])
     safe_turns = display_native_turn_records(records, session_id=session_id, thread_id=thread_id,
                                              model=model, max_bytes=max_bytes, overlays=overlays,
-                                             require_overlay=True, platform=platform)
+                                             require_overlay=True, trust_unrecorded=True, platform=platform)
     return {"turns": safe_turns, "next_cursor": _next_cursor(page)}
 
 
@@ -603,7 +627,7 @@ def read_display_history(thread_id: str, *, session_id: str, model: str | None =
             session_db, session_id, thread_id, [record["id"] for record in records])
     rows = display_native_turns(records, session_id=session_id, thread_id=thread_id,
                                 model=model, max_bytes=max_bytes, overlays=overlays,
-                                require_overlay=True, platform=platform)
+                                require_overlay=True, trust_unrecorded=True, platform=platform)
     if latest:
         end = len(rows) - offset
         start = max(0, end - limit) if limit is not None else 0
