@@ -270,6 +270,46 @@ class TestAgentMessageProjection:
         assert message["reasoning"] == "summary\nvisible content"
         assert "must never" not in message["reasoning"]
 
+    def test_typed_reasoning_summary_and_content_parts_are_projected(self) -> None:
+        """Codex documents these arrays as typed parts, not strings (``ReasoningItemReasoningSummary``)."""
+        p = CodexEventProjector()
+        p.project({"method": "item/completed", "params": {"item": {
+            "type": "reasoning", "id": "r1",
+            "summary": [{"type": "summary_text", "text": "checked the recipient"}],
+            "content": [{"type": "reasoning_text", "text": "the address is a fixture"},
+                        {"type": "text", "text": "so sending is safe"}],
+        }}})
+        message = p.project({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "id": "a1", "text": "answer",
+        }}}).messages[0]
+        assert message["reasoning"] == ("checked the recipient\n"
+                                        "the address is a fixture\nso sending is safe")
+
+    def test_encrypted_only_reasoning_yields_no_text_and_is_never_decoded(self, monkeypatch) -> None:
+        """An item carrying only ``encrypted_content`` is not displayable: it is skipped, not decoded."""
+        p = CodexEventProjector()
+        p.project({"method": "item/completed", "params": {"item": {
+            "type": "reasoning", "id": "r1", "summary": [], "content": [],
+            "encrypted_content": "gAAAAA-opaque-carrier",
+        }}})
+        message = p.project({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "id": "a1", "text": "answer",
+        }}}).messages[0]
+        assert "reasoning" not in message
+
+    def test_reasoning_parts_that_are_neither_strings_nor_text_dicts_are_skipped(self) -> None:
+        p = CodexEventProjector()
+        p.project({"method": "item/completed", "params": {"item": {
+            "type": "reasoning", "id": "r1",
+            "summary": [None, 7, {"type": "summary_text"}, {"type": "summary_text", "text": ""},
+                        {"type": "summary_text", "text": "only this"}],
+            "content": "not a list",
+        }}})
+        message = p.project({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "id": "a1", "text": "answer",
+        }}}).messages[0]
+        assert message["reasoning"] == "only this"
+
     def test_reasoning_without_a_following_item_flushes_at_turn_boundary(self) -> None:
         p = CodexEventProjector()
         p.project({"method": "item/completed", "params": {"item": {

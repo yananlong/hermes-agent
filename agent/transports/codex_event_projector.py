@@ -45,6 +45,25 @@ def _bounded_tool_text(text: str) -> str:
     return text[:_MAX_PROJECTED_TOOL_TEXT - len(suffix)] + suffix
 
 
+def reasoning_text_parts(values: Any) -> list[str]:
+    """Runnable reasoning text Codex exposes in a ``summary``/``content`` array, in order.
+
+    Codex documents two shapes for those arrays and both occur on the wire: plain strings
+    (``["step one"]``) and typed parts (``[{"type": "summary_text", "text": "step one"}]``,
+    ``ReasoningItemReasoningSummary``/``ReasoningItemContent`` in the app-server schema). A part
+    whose payload is not exposed as text is skipped, never guessed at: ``encrypted_content`` is a
+    separate field and must not be decoded, so an item carrying only that yields no text here.
+    """
+    if not isinstance(values, list):
+        return []
+    parts: list[str] = []
+    for value in values:
+        text = value if isinstance(value, str) else value.get("text") if isinstance(value, dict) else None
+        if isinstance(text, str) and text:
+            parts.append(text)
+    return parts
+
+
 def _bounded_reasoning_text(text: str, *, force_redaction: bool = True) -> str:
     """Cap Codex reasoning after applying the redaction policy for its destination."""
     text = _redact(text, force=force_redaction)
@@ -203,11 +222,9 @@ class CodexEventProjector:
             # Only plain text the app-server explicitly exposes is displayable. In particular,
             # never inspect or decode encrypted reasoning fields that newer servers may add.
             for key in ("summary", "content"):
-                values = item.get(key)
-                if isinstance(values, list):
-                    text = "\n".join(value for value in values if isinstance(value, str) and value)
-                    if text:
-                        self._pending_reasoning.append(self._reasoning(text))
+                parts = reasoning_text_parts(item.get(key))
+                if parts:
+                    self._pending_reasoning.append(self._reasoning("\n".join(parts)))
             if self._pending_reasoning:
                 self._pending_reasoning = [self._reasoning("\n".join(self._pending_reasoning))]
             return ProjectionResult()

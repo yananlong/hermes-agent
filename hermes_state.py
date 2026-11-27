@@ -340,6 +340,7 @@ class _SessionDB:
         search_query: "Optional[str]" = None, compact_rows: "bool" = False, include_pinned: "bool" = False,
         session_key: "Optional[str]" = None, include_hidden: "bool" = False, include_subagents: "bool" = False,
         local_created_sources: "Optional[list[str]]" = None, workspace_key: "Optional[str]" = None,
+        include_linked_pointers: "bool" = False,
     ) -> "list[dict[str, Any]]":
         from persistence.conversation.sessions import SessionOrder, SessionQuery, SessionWindow
 
@@ -353,7 +354,7 @@ class _SessionDB:
             search_text=search_query, include_pinned=include_pinned, session_key=session_key,
             include_hidden=include_hidden, include_subagents=include_subagents,
             local_created_sources=tuple(local_created_sources) if local_created_sources else None,
-            workspace_key=workspace_key)
+            workspace_key=workspace_key, include_linked_pointers=include_linked_pointers)
         # The old class handed both to SQLite, where a negative LIMIT means every row and a negative OFFSET none.
         window = SessionWindow(limit=None if limit is not None and limit < 0 else limit, offset=max(offset, 0))
         entries = self._store.sessions.list_sessions(query, window, compact_rows=compact_rows)

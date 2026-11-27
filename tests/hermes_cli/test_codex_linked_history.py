@@ -103,23 +103,141 @@ def test_display_history_flushes_reasoning_at_each_native_turn_boundary(monkeypa
     assert rows[2]["content"] == "Continuing now."
 
 
-def test_unrecorded_linked_turns_hide_unknown_policy_with_explicit_notice(monkeypatch):
+def test_unrecorded_linked_turns_are_hidden_only_while_the_strict_policy_is_asked_for(monkeypatch):
+    """The fail-closed path still EXISTS (``trust_unrecorded=False``); it is no longer the default.
+
+    A turn with no stored overlay cannot have run a profile output transform — overlays are written
+    only by Hermes' own turn path — so the production call sites pass ``trust_unrecorded=True`` and
+    the turn renders under the current policy. The strict contract is preserved for any caller that
+    must not guess; this test pins BOTH halves so neither can be deleted silently.
+    """
     turn = codex_linked_history.native_turn_record({
         "id": "pre-overlay-turn",
         "items": [
             {"type": "userMessage", "content": [{"type": "text", "text": "question"}]},
-            {"type": "agentMessage", "text": "unknown previously-filtered answer"},
+            {"type": "agentMessage", "text": "answer with no stored policy"},
         ],
     })
-    result = codex_linked_history.display_native_turn_records(
+    strict = codex_linked_history.display_native_turn_records(
         [turn], session_id="stored-session", thread_id="native-thread", model="codex-model",
         require_overlay=True)
-    rows = result[0]["rows"]
-    assert rows[0]["content"] == "question"
-    assert rows[1]["display_kind"] == "hidden"
-    assert rows[1]["content"] is None
-    assert rows[2]["role"] == "system"
-    assert "saved display policy is unavailable" in rows[2]["content"]
+    strict_rows = strict[0]["rows"]
+    assert strict_rows[0]["content"] == "question"
+    assert strict_rows[1]["display_kind"] == "hidden"
+    assert strict_rows[1]["content"] is None
+    assert strict_rows[2]["role"] == "system"
+    assert strict_rows[2]["display_kind"] == "codex_history_unavailable"
+    assert "saved display policy is unavailable" in strict_rows[2]["content"]
+
+    trusted = codex_linked_history.display_native_turn_records(
+        [turn], session_id="stored-session", thread_id="native-thread", model="codex-model",
+        require_overlay=True, trust_unrecorded=True)
+    trusted_rows = trusted[0]["rows"]
+    assert trusted_rows[0]["content"] == "question"
+    assert trusted_rows[1]["content"] == "answer with no stored policy"
+    assert all(row.get("display_kind") != "codex_history_unavailable" for row in trusted_rows)
+
+
+def test_a_trusted_unrecorded_turn_renders_its_whole_native_transcript(monkeypatch):
+    """The user's acceptance standard: user rows, CoT, tool call+args+result, final answer — no notice.
+
+    No profile transform can have applied to a turn Hermes never ran, so the trusted path projects
+    the native transcript as-is (redacted) instead of hiding it behind ``codex_history_unavailable``.
+    """
+    turn = codex_linked_history.native_turn_record({
+        "id": "native-cli-turn",
+        "status": "completed",
+        "items": [
+            {"id": "u", "type": "userMessage", "content": [{"type": "text", "text": "list /tmp"}]},
+            {"id": "r", "type": "reasoning",
+             "summary": [{"type": "summary_text", "text": "I should read the directory."}]},
+            {"id": "c", "type": "commandExecution", "command": "ls /tmp", "cwd": "/tmp",
+             "aggregatedOutput": "alpha\nbeta\n", "exitCode": 0},
+            {"id": "a", "type": "agentMessage", "text": "Two entries: alpha and beta."},
+        ],
+    }, thread_id="native-thread")
+
+    rows = codex_linked_history.display_native_turn_records(
+        [turn], session_id="stored-session", thread_id="native-thread", model="codex-model",
+        require_overlay=True, trust_unrecorded=True)[0]["rows"]
+
+    assert [row["role"] for row in rows] == ["user", "assistant", "tool", "assistant"]
+    assert rows[0]["content"] == "list /tmp"
+    assert rows[1]["reasoning"] == "I should read the directory."
+    assert rows[1]["tool_calls"][0]["function"]["name"] == "exec_command"
+    assert json.loads(rows[1]["tool_calls"][0]["function"]["arguments"]) == {
+        "command": "ls /tmp", "cwd": "/tmp"}
+    assert json.loads(rows[2]["content"]) == {"exit_code": 0, "output": "alpha\nbeta\n"}
+    assert rows[2]["tool_call_id"] == rows[1]["tool_calls"][0]["id"]
+    assert rows[3]["content"] == "Two entries: alpha and beta."
+    assert all(row.get("display_kind") != "codex_history_unavailable" for row in rows)
+
+
+def test_a_trusted_turn_still_obeys_a_stored_overlay_strictly(monkeypatch):
+    """Trusting an UNRECORDED turn must not loosen a turn that DOES have a stored policy.
+
+    ``held`` hides the interim rows, ``final_visible=False`` hides the final, and a missing
+    ``final_text`` keeps the native text instead of inventing one.
+    """
+    turn = codex_linked_history.native_turn_record({
+        "id": "recorded-turn",
+        "items": [
+            {"id": "u", "type": "userMessage", "content": [{"type": "text", "text": "hi"}]},
+            {"id": "interim", "type": "agentMessage", "text": "working on it"},
+            {"id": "final", "type": "agentMessage", "text": "native final"},
+        ],
+    }, thread_id="native-thread")
+
+    held_rows = codex_linked_history.display_native_turn_records(
+        [turn], session_id="s", thread_id="native-thread", model=None,
+        overlays={"recorded-turn": {"held": True, "final_visible": True, "final_text": "stored final"}},
+        require_overlay=True, trust_unrecorded=True)[0]["rows"]
+    assert held_rows[1]["display_kind"] == "hidden" and held_rows[1]["content"] is None
+    assert held_rows[2]["content"] == "stored final"
+
+    hidden_final = codex_linked_history.display_native_turn_records(
+        [turn], session_id="s", thread_id="native-thread", model=None,
+        overlays={"recorded-turn": {"held": False, "final_visible": False, "final_text": None}},
+        require_overlay=True, trust_unrecorded=True)[0]["rows"]
+    assert hidden_final[1]["content"] == "working on it"
+    assert hidden_final[2]["display_kind"] == "hidden" and hidden_final[2]["content"] is None
+
+    # ``final_visible=True`` without ``final_text`` is an overlay that claims output it cannot
+    # produce: it still hides, because the stored policy is the authority, not the native text.
+    missing_text = codex_linked_history.display_native_turn_records(
+        [turn], session_id="s", thread_id="native-thread", model=None,
+        overlays={"recorded-turn": {"held": False, "final_visible": True}},
+        require_overlay=True, trust_unrecorded=True)[0]["rows"]
+    assert missing_text[2]["display_kind"] == "hidden" and missing_text[2]["content"] is None
+
+
+def test_the_trusted_path_still_redacts_reasoning_and_tool_content(monkeypatch):
+    """Rendering an unrecorded turn must not turn the display path into a secret leak."""
+    from agent import redact as redact_module
+
+    secret = "sk-live-ABCDEFGHIJKLMNOPQRSTUVWX"
+    monkeypatch.setattr(redact_module, "redact_sensitive_text",
+                        lambda value, force=False: value.replace(secret, "[redacted]"))
+    turn = codex_linked_history.native_turn_record({
+        "id": "leaky-turn",
+        "items": [
+            {"id": "r", "type": "reasoning",
+             "summary": [{"type": "summary_text", "text": f"the key is {secret}"}]},
+            {"id": "c", "type": "commandExecution", "command": f"export KEY={secret}",
+             "cwd": "/tmp", "aggregatedOutput": f"exported {secret}", "exitCode": 0},
+            {"id": "a", "type": "agentMessage", "text": f"used {secret}"},
+        ],
+    }, thread_id="native-thread")
+
+    rendered = codex_linked_history.display_native_turn_records(
+        [turn], session_id="s", thread_id="native-thread", model=None,
+        require_overlay=True, trust_unrecorded=True)
+
+    assert secret not in json.dumps(rendered)
+    rows = rendered[0]["rows"]
+    assert rows[0]["reasoning"] == "the key is [redacted]"
+    assert json.loads(rows[1]["content"])["output"] == "exported [redacted]"
+    assert rows[2]["content"] == "used [redacted]"
 
 
 def test_display_history_projects_full_native_items_with_tools_and_reasoning(monkeypatch):
@@ -200,6 +318,53 @@ def test_display_history_projects_full_native_items_with_tools_and_reasoning(mon
     assert display[5]["content"] == rows[5]["content"]
     assert display[6]["tool_calls"] == rows[6]["tool_calls"]
     assert display[7]["content"] == rows[7]["content"]
+
+
+def test_history_ask_is_the_richest_view_codex_serves_and_makes_reasoning_optional(monkeypatch):
+    """The history read already sends the maximum ``itemsView``; reasoning may still be absent.
+
+    Codex's ``TurnItemsView`` has only ``notLoaded`` / ``summary`` / ``full``: there is no deeper
+    reasoning flag to ask for. When the model ran with reasoning summaries off, an item is recorded
+    with ``summary: []``/``content: []`` and every view — live item/completed, thread/items/read —
+    returns it empty. The display layer must therefore treat empty reasoning as normal, and must
+    still show the turn's user row, tool call, tool result and final answer.
+    """
+    thread_id = "01a212d9-09be-7fb3-b8c7-90082e4fb805"
+    seen = {}
+
+    class Client:
+        def request(self, method, params):
+            seen["params"] = params
+            return {"data": [{"id": "t", "status": "completed", "items": [
+                {"id": "u", "type": "userMessage",
+                 "content": [{"type": "text", "text": "what is in /tmp"}]},
+                # The real shape observed on the user's thread: both arrays empty.
+                {"id": "r", "type": "reasoning", "summary": [], "content": [],
+                 "encrypted_content": "opaque"},
+                {"id": "c", "type": "commandExecution", "command": "ls /tmp",
+                 "cwd": "/tmp", "aggregatedOutput": "a\nb\n", "exitCode": 0},
+                {"id": "a", "type": "agentMessage", "text": "two entries"},
+            ]}], "nextCursor": None}
+
+    assert codex_linked_threads.read_codex_history(thread_id, client=Client())["turns"]
+    assert seen["params"]["itemsView"] == "full"
+    assert set(seen["params"]) == {"cursor", "limit", "threadId", "sortDirection", "itemsView"}, \
+        "the request must not grow a parameter Codex does not serve"
+
+    @contextmanager
+    def client():
+        yield Client()
+
+    monkeypatch.setattr(codex_linked_threads, "_codex_client", client)
+    rows = codex_linked_history.read_display_history(
+        thread_id, session_id="s", display_overlays=_overlay("t", "two entries"))
+
+    assert [row["role"] for row in rows] == ["user", "assistant", "tool", "assistant"]
+    assert rows[0]["content"] == "what is in /tmp"
+    assert rows[1]["tool_calls"][0]["function"]["name"] == "exec_command"
+    assert "reasoning" not in rows[1], "an empty reasoning item must not invent CoT"
+    assert json.loads(rows[2]["content"])["output"] == "a\nb\n"
+    assert rows[3]["content"] == "two entries"
 
 
 def test_native_projection_preserves_fallback_timestamps_and_policy_filtered_rows(monkeypatch):

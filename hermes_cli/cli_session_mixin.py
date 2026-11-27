@@ -383,6 +383,7 @@ class CLISessionMixin:
             return query_session_listing(
                 self._session_db, source="cli", current_session_id=self.session_id,
                 include_all_sources=False, include_unnamed=True, limit=limit,
+                include_linked_pointers=True,
                 exclude_sources=list(INTERNAL_LISTING_SOURCES))
         except Exception:
             return []

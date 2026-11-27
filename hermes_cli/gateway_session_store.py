@@ -562,11 +562,13 @@ class SurfaceLabelReader:
             source, limit, offset,
             lambda src, lim, off, surfaces: self._search(src, lim, off, surfaces, **kw))
 
-    def _search(self, source, limit, offset, local_created_sources, *, workspace_key=None, skip_launch_stubs=False):
+    def _search(self, source, limit, offset, local_created_sources, *, workspace_key=None, skip_launch_stubs=False,
+                include_linked_pointers=False):
         entries = self.persistence.sessions.search_sessions(
             sources=([source] if isinstance(source, str) else list(source)) if source else None,
             workspace_key=workspace_key, local_created_sources=local_created_sources,
-            skip_launch_stubs=skip_launch_stubs, window=_window(limit, offset))
+            skip_launch_stubs=skip_launch_stubs, include_linked_pointers=include_linked_pointers,
+            window=_window(limit, offset))
         return [{**entry.session.as_session_row(), "last_active": entry.last_active} for entry in entries]
 
     def list_sessions_rich(self, source=None, sources=None, limit=20, offset=0, **kw):

@@ -913,6 +913,7 @@ class SQLiteSessionRepository:
                 compact_rows=compact_rows, include_pinned=query.include_pinned, session_key=query.session_key,
                 include_hidden=query.include_hidden, include_subagents=query.include_subagents,
                 local_created_sources=_optional_list(query.local_created_sources), workspace_key=query.workspace_key,
+                include_linked_pointers=query.include_linked_pointers,
             )
         return tuple(_list_entry(holder, row, compact=compact_rows) for row in rows)
 
@@ -923,6 +924,7 @@ class SQLiteSessionRepository:
         workspace_key: Optional[str] = None,
         local_created_sources: Optional[Sequence[str]] = None,
         skip_launch_stubs: bool = False,
+        include_linked_pointers: bool = False,
         window: SessionWindow = SessionWindow(limit=20),
     ) -> tuple[SessionRecencyEntry, ...]:
         holder = self._store.holder()
@@ -930,6 +932,7 @@ class SQLiteSessionRepository:
             rows = search_sessions(holder,
                 source=_listed(sources), limit=_sql_limit(window), offset=window.offset, workspace_key=workspace_key,
                 local_created_sources=_optional_list(local_created_sources), skip_launch_stubs=skip_launch_stubs,
+                include_linked_pointers=include_linked_pointers,
             )
         return tuple(_recency_entry(row) for row in rows)
 
@@ -977,6 +980,7 @@ class SQLiteSessionRepository:
                 include_archived=query.include_archived, archived_only=query.archived_only,
                 exclude_children=query.exclude_children, exclude_sources=_listed(query.exclude_sources),
                 include_subagents=query.include_subagents, local_created_sources=_optional_list(query.local_created_sources),
+                include_linked_pointers=query.include_linked_pointers,
             ))
 
     def count_at_least(self, minimum: int = 1) -> bool:

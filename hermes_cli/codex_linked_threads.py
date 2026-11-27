@@ -160,6 +160,22 @@ def list_codex_threads(cursor=None, limit=25):
 
 
 def read_codex_history(thread_id, cursor=None, limit=50, sort_direction="asc", client=None):
+    """One native turn page; ``itemsView="full"`` is already the richest view Codex serves.
+
+    ``TurnItemsView`` (app-server v2 schema) offers only ``notLoaded``, ``summary`` and ``full``,
+    and ``full`` is documented as "every ThreadItem available from persisted app-server history".
+    There is no reasoning detail flag beyond it: ``thread/items/list`` returns the same
+    ``ThreadItemEntry`` shape (`deferOutput` covers command/MCP *output* only) and the experimental
+    ``thread/items/read`` returns a reasoning item byte-identical to this page's.
+
+    Reasoning text can therefore only arrive when Codex GENERATED it. ``TurnStartParams.summary``
+    ("Override the reasoning summary for this turn and subsequent turns") is echoed per turn in the
+    rollout's ``turn_context.summary``: on a profile whose value is ``none`` every reasoning item is
+    recorded with ``summary: []`` and ``content: []`` — in the live ``item/completed`` stream, in
+    ``ReasoningItem`` events (``summary_text``/``raw_content``), and in every history view alike.
+    Nothing in this module can recover text that was never produced, and nothing here decodes
+    ``encrypted_content``.
+    """
     if sort_direction not in ("asc", "desc"):
         raise ValueError("Invalid Codex history direction")
     params = {**_page(cursor, limit), "threadId": _thread_id(thread_id),

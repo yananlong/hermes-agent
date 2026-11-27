@@ -530,6 +530,9 @@ class SessionQuery:
     local_created_sources: Optional[tuple[str, ...]] = None
     #: Only rows in this workspace (``hermes -c``'s rule): the git repo root equals it, or a row without one has its cwd at or under it.
     workspace_key: Optional[str] = None
+    #: Also admit foreign-transcript pointer rows whatever surface created them (their transcript lives
+    #: in Codex/Claude/Mistral, so a pointer linked from Desktop is still openable from the CLI).
+    include_linked_pointers: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,6 +548,8 @@ class SessionCountQuery:
     exclude_children: bool = False
     include_subagents: bool = False
     local_created_sources: Optional[tuple[str, ...]] = None
+    #: Count foreign-transcript pointer rows whatever surface created them; see ``SessionQuery``.
+    include_linked_pointers: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1236,9 +1241,10 @@ class SessionRepository(Protocol):
         workspace_key: Optional[str] = None,
         local_created_sources: Optional[Sequence[str]] = None,
         skip_launch_stubs: bool = False,
+        include_linked_pointers: bool = False,
         window: SessionWindow = SessionWindow(limit=20),
     ) -> tuple[SessionRecencyEntry, ...]:
-        """Every row, most recently active first, filtered by source and workspace; ``skip_launch_stubs`` drops rows with no messages and no admission."""
+        """Every row, most recently active first, filtered by source and workspace; ``skip_launch_stubs`` drops rows with no messages and no admission; ``include_linked_pointers`` admits foreign-transcript pointer rows whatever surface created them."""
         ...
 
     def list_row(self, session_id: SessionId) -> Optional[SessionListRow]:

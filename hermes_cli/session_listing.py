@@ -86,6 +86,7 @@ def query_session_listing(
     search_query: str | None = None,
     limit: int = 10,
     exclude_sources: list[str] | None = None,
+    include_linked_pointers: bool = False,
     persistence: Any = None,
 ) -> list[dict[str, Any]]:
     """Return session rows for interactive listing surfaces (shared CLI/gateway policy).
@@ -94,8 +95,11 @@ def query_session_listing(
     current session hidden unless requested (then marked ``is_current_session``); ``session_key``
     restricts gateway callers to one lane before the DB limit applies. With ``search_query`` rows
     are filtered by title/id in SQL, ordered by recent activity, and unnamed sessions stay visible
-    since an id match may be the only handle. Rows are read through ``persistence`` (a storage
-    interface handle) when given, else through ``session_db``.
+    since an id match may be the only handle. ``include_linked_pointers`` also admits
+    foreign-transcript pointer rows created by another surface: their transcript lives in Codex /
+    Claude / Mistral, so this list can open them even though a different surface linked them.
+    Rows are read through ``persistence`` (a storage interface handle) when given, else through
+    ``session_db``.
     """
     search = (search_query or "").strip()
     if persistence is not None:
@@ -107,6 +111,7 @@ def query_session_listing(
             exclude_sources=tuple(exclude_sources or ()),
             search_text=search or None,
             order=SessionOrder.LAST_ACTIVE if search else SessionOrder.STARTED_AT,
+            include_linked_pointers=include_linked_pointers,
         ), SessionWindow(limit=max(limit * 4, limit)))
         rows = [entry.as_list_row() for entry in entries]
     else:
@@ -117,6 +122,7 @@ def query_session_listing(
             limit=max(limit * 4, limit),
             search_query=search or None,
             order_by_last_active=bool(search),
+            include_linked_pointers=include_linked_pointers,
         )
     result: list[dict[str, Any]] = []
     for row in rows:

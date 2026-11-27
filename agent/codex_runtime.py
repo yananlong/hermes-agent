@@ -436,7 +436,7 @@ def make_codex_app_server_event_bridge(agent) -> Callable[[dict], None]:
     # Reasoning may contain credential-like text split across arbitrarily many delta notifications.
     # Buffer a bounded item and redact the contiguous text only when Codex completes that item.
     from agent.transports.codex_event_projector import (
-        _MAX_REASONING_DISPLAY_CHARS, _bounded_reasoning_text,
+        _MAX_REASONING_DISPLAY_CHARS, _bounded_reasoning_text, reasoning_text_parts,
     )
     max_reasoning_chars = _MAX_REASONING_DISPLAY_CHARS
     max_reasoning_item_source_chars = max_reasoning_chars * 4
@@ -531,11 +531,14 @@ def make_codex_app_server_event_bridge(agent) -> Callable[[dict], None]:
 
         # Completed app-server item fields are authoritative and ordered as summary then content,
         # matching stored history. Delta text is a fallback for servers that omit those arrays.
+        #
+        # This is also why LIVE CoT can show on a turn whose stored history has none: the deltas
+        # (item/reasoning/summaryTextDelta, buffered above) exist only in the live stream and are
+        # never persisted by Codex when it ran with reasoning summaries off. History can only
+        # replay what was RECORDED, so a turn read back from the thread legitimately has no text.
         pieces: list[str] = []
         for field in ("summary", "content"):
-            values = item.get(field)
-            if isinstance(values, list):
-                pieces.extend(value for value in values if isinstance(value, str) and value)
+            pieces.extend(reasoning_text_parts(item.get(field)))
         if pieces:
             length = sum(map(len, pieces)) + len(pieces) - 1
             # The reasoning helper displays up to 256 KiB after redaction. Keep a larger but
