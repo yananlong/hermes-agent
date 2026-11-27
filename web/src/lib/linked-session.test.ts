@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { isLinkedForeignSession, linkedForeignAgent, linkedResumeBlocked, linkedResumeOverlay } from './linked-session'
+import {
+  isLinkedForeignSession,
+  linkedForeignAgent,
+  linkedResumeBlocked,
+  linkedResumeOverlay,
+  linkedResumeReadonly,
+} from './linked-session'
 
 describe('linkedForeignAgent', () => {
   it('returns null for ordinary sessions and missing rows', () => {
@@ -32,8 +38,7 @@ describe('isLinkedForeignSession', () => {
 })
 
 describe('linkedResumeBlocked', () => {
-  it('blocks a linked row and never lets a pending or failed lookup spawn a PTY', () => {
-    expect(linkedResumeBlocked({ id: 'a', agent: 'claude', verified: true }, 'a')).toBe(true)
+  it('never lets a pending or failed lookup spawn a PTY', () => {
     // Pending: the answer for THIS id has not landed yet.
     expect(linkedResumeBlocked(null, 'a')).toBe(true)
     expect(linkedResumeBlocked({ id: 'b', agent: null, verified: true }, 'a')).toBe(true)
@@ -41,10 +46,26 @@ describe('linkedResumeBlocked', () => {
     expect(linkedResumeBlocked({ id: 'a', agent: null, verified: false }, 'a')).toBe(true)
   })
 
-  it('allows the ordinary resume path only for a verified non-pointer row', () => {
+  it('opens a verified linked row instead of refusing it', () => {
+    // The embedded TUI is a canonical client: the gateway serves a linked pointer's native
+    // transcript and appends to that same thread, so the row must not be walled off.
+    expect(linkedResumeBlocked({ id: 'a', agent: 'claude', verified: true }, 'a')).toBe(false)
+    expect(linkedResumeBlocked({ id: 'a', agent: 'codex', verified: true }, 'a')).toBe(false)
+    // Ordinary rows are unaffected.
     expect(linkedResumeBlocked({ id: 'a', agent: null, verified: true }, 'a')).toBe(false)
     // No resume target at all: nothing to gate.
     expect(linkedResumeBlocked(null, null)).toBe(false)
+  })
+})
+
+describe('linkedResumeReadonly', () => {
+  it('marks exactly a verified linked row as read-only, and nothing else', () => {
+    expect(linkedResumeReadonly({ id: 'a', agent: 'codex', verified: true }, 'a')).toBe(true)
+    expect(linkedResumeReadonly({ id: 'a', agent: null, verified: true }, 'a')).toBe(false)
+    expect(linkedResumeReadonly({ id: 'a', agent: 'codex', verified: false }, 'a')).toBe(false)
+    expect(linkedResumeReadonly({ id: 'b', agent: 'codex', verified: true }, 'a')).toBe(false)
+    expect(linkedResumeReadonly(null, 'a')).toBe(false)
+    expect(linkedResumeReadonly(null, null)).toBe(false)
   })
 })
 
@@ -57,9 +78,10 @@ describe('linkedResumeOverlay', () => {
     expect(linkedResumeOverlay({ id: 'b', agent: 'claude', verified: true }, 'a')).toBe('loading')
   })
 
-  it('reserves the verdict panel for a linked or unverifiable target', () => {
-    expect(linkedResumeOverlay({ id: 'a', agent: 'claude', verified: true }, 'a')).toBe('blocked')
+  it('reserves the verdict panel for an unverifiable target only', () => {
     expect(linkedResumeOverlay({ id: 'a', agent: null, verified: false }, 'a')).toBe('blocked')
+    // A verified linked row opens, so it gets no covering panel at all.
+    expect(linkedResumeOverlay({ id: 'a', agent: 'claude', verified: true }, 'a')).toBe('none')
   })
 
   it('covers nothing when there is no resume target or the row is ordinary', () => {

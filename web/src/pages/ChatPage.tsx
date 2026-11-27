@@ -109,6 +109,7 @@ import {
   linkedForeignAgent,
   linkedResumeBlocked as linkedResumeBlockedFor,
   linkedResumeOverlay,
+  linkedResumeReadonly,
   type LinkedResumeCheck,
 } from "@/lib/linked-session";
 import { sendCopyLastCommand } from "@/lib/chat-copy-last";
@@ -429,12 +430,16 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // with the verdict panel would flash an empty overlay with a lone "New chat"
   // on every resume. `linkedResumeOverlay` decides between them in one place.
   const resumeOverlay = linkedResumeOverlay(linkedResumeCheck, resumeParam);
+  // A linked pointer is OPENED, not refused: the embedded TUI is a canonical client, and the
+  // gateway serves its transcript from the native store and appends new turns to that same native
+  // thread. It stays read-only here (no model/workspace controls, no second transcript), which is
+  // an adapter on the pane rather than a wall in front of it.
+  const linkedResumeReadOnly = linkedResumeReadonly(linkedResumeCheck, resumeParam);
   // The linked row itself lives on the gateway host, so the dashboard asks THAT
   // host what it can serve (`session.foreign.status`) instead of assuming. An
   // older gateway answers -32601 → undefined, and every line below keeps the
   // read-only copy it had before this capability existed.
-  const linkedAgent =
-    linkedResumeBlocked && linkedResumeCheck?.agent ? linkedResumeCheck.agent : null;
+  const linkedAgent = linkedResumeReadOnly ? linkedResumeCheck?.agent ?? null : null;
   const linkedResumeUnverifiedNote =
     linkedResumeUnverified && !linkedAgent ? t.sessions.linkedResumeUnverified : null;
   const linkedCapability = useForeignCapability(Boolean(linkedAgent), scopedProfile);
@@ -590,11 +595,10 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     // page. Sticky, so switching away from /chat keeps the PTY alive.
     if (!hasActivated) return;
 
-    // Linked foreign sessions (Codex / Claude / Mistral pointer rows) are
-    // read-only here: never spawn a PTY resuming one, and while the flag
-    // lookup for the current resume target is still in flight, wait for it
-    // rather than racing a linked row into a fresh terminal. The render path
-    // shows a read-only notice instead.
+    // A linked foreign row (Codex / Claude / Mistral pointer) DOES open here: the embedded TUI is a
+    // canonical client that pages its native transcript and appends new turns to the same thread.
+    // What must still wait is an UNANSWERED lookup — spawning a PTY for a row we cannot vouch for is
+    // the bug this gate exists for, and a failed lookup stays refused (see linkedResumeBlocked).
     if (linkedResumeBlocked || linkedResumeCheckPending) return;
 
     const host = hostRef.current;
@@ -1883,7 +1887,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         mobilePanelOpen={mobilePanelOpen} closeMobilePanel={closeMobilePanel} modelToolsLabel={modelToolsLabel}
         channel={channel} scopedProfile={scopedProfile} startFreshDashboardChat={startFreshDashboardChat}
         handleSessionTitleChange={handleSessionTitleChange} resumeParam={resumeParam}
-        workspaceCwd={workspaceCwd} setWorkspaceCwd={setWorkspaceCwd} readOnly={linkedResumeBlocked} />
+        workspaceCwd={workspaceCwd} setWorkspaceCwd={setWorkspaceCwd} readOnly={linkedResumeReadOnly} />
 
       {visibleBanner && (
         <div
@@ -2096,7 +2100,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
               <ChatSidebar
                 channel={channel}
                 profile={scopedProfile}
-                readOnly={linkedResumeBlocked}
+                readOnly={linkedResumeReadOnly}
                 onDashboardNewSessionRequest={startFreshDashboardChat}
                 onSessionTitleChange={handleSessionTitleChange}
               />

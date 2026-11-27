@@ -562,7 +562,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
     [scrollRef, scrollToBottom]
   )
 
-  const { olderAvailable, expandWindow, isHistorical, returnToLatest } = useTranscriptWindow()
+  const { olderAvailable, expandWindow, historyError, isHistorical, returnToLatest } = useTranscriptWindow()
 
   useEffect(() => {
     $mountedTranscriptPanes.set($mountedTranscriptPanes.get() + 1)
@@ -1381,6 +1381,10 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // first; only when that is exhausted pull more messages out of the session
   // store (#55191).
   const showEarlier = useCallback(() => {
+    if (historyError === 'changed') {
+      void growWindow()
+      return
+    }
     const action = resolveShowEarlierAction(hiddenCount, olderAvailable)
 
     if (!action) {
@@ -1393,7 +1397,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
       anchorBeforePrepend()
       setRenderBudget(budget => budget + paneBudget)
     }
-  }, [anchorBeforePrepend, growWindow, hiddenCount, olderAvailable, paneBudget])
+  }, [anchorBeforePrepend, growWindow, hiddenCount, historyError, olderAvailable, paneBudget])
 
   useTimelineReveal({
     viewport: scrollRef,
@@ -1439,7 +1443,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
         // the existing automatic "Show earlier" path. Treat PageUp there like
         // an upward wheel notch before moving the viewport.
         if (
-          direction < 0 &&
+          direction < 0 && !historyError &&
           shouldAutoShowEarlier({
             action: resolveShowEarlierAction(hiddenCount, olderAvailable),
             isAtBottom,
@@ -1456,7 +1460,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
 
         el.scrollTop += direction * el.clientHeight
       }, sessionKey ?? null),
-    [hiddenCount, isAtBottom, olderAvailable, scrollRef, sessionKey, showEarlier, stopScroll]
+    [hiddenCount, historyError, isAtBottom, olderAvailable, scrollRef, sessionKey, showEarlier, stopScroll]
   )
 
   // Scroll/wheel at the top edge pages older turns through the same showEarlier
@@ -1471,7 +1475,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
 
     const tryShowEarlier = (wheelDeltaY?: number) => {
       if (
-        shouldAutoShowEarlier({
+        !historyError && shouldAutoShowEarlier({
           action: resolveShowEarlierAction(hiddenCount, olderAvailable),
           isAtBottom,
           loadSettled: loadSettledRef.current,
@@ -1494,7 +1498,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
       el.removeEventListener('scroll', onScroll)
       el.removeEventListener('wheel', onWheel)
     }
-  }, [hiddenCount, isAtBottom, olderAvailable, scrollRef, showEarlier])
+  }, [hiddenCount, historyError, isAtBottom, olderAvailable, scrollRef, showEarlier])
 
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -1636,13 +1640,18 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
           data-slot="aui_thread-content"
           ref={contentRef as React.RefCallback<HTMLDivElement>}
         >
-          {!renderEmpty && (hiddenCount > 0 || olderAvailable) && (
+          {historyError && (
+            <p role="status" className="mx-auto mb-2 text-center text-xs text-muted-foreground">
+              {historyError === 'changed' ? t.assistant.thread.historyChanged : t.assistant.thread.historyLoadFailed}
+            </p>
+          )}
+          {(!renderEmpty || historyError) && (hiddenCount > 0 || olderAvailable) && (
             <button
               className="mx-auto mb-(--conversation-turn-gap) rounded-full border border-border/65 bg-(--composer-fill) px-3 py-1 text-xs text-muted-foreground hover:text-foreground"
               onClick={showEarlier}
               type="button"
             >
-              {t.assistant.thread.showEarlier}
+              {historyError === 'changed' ? t.assistant.thread.reloadHistory : t.assistant.thread.showEarlier}
             </button>
           )}
           {renderEmpty ? (

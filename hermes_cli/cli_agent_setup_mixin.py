@@ -206,6 +206,9 @@ def _collect_resume_entries(display_history, disp: dict, clean_assistant):
         tool_calls = msg.get("tool_calls") or []
         if display_kind == "hidden":
             continue
+        if display_kind == "codex_history_unavailable":
+            entries.append(("event", _sanitize_display_text(str(content or "Linked Codex history is unavailable."))))
+            continue
         if display_kind in _RESUME_EVENT_KEYS:
             metadata = msg.get("display_metadata") or {}
             label = metadata.get("display_text") if display_kind in ("async_delegation_complete", "process_complete") else None
@@ -683,6 +686,7 @@ class CLIAgentSetupMixin:
             return False
         if (
             self._resumed and self._session_db and not self.conversation_history
+            and getattr(self, "_resume_history_loaded_for", None) != self.session_id
             and not self._load_resumed_history_late()):
             return False
         try:
@@ -862,7 +866,7 @@ class CLIAgentSetupMixin:
             return False
         restored, display_history = self._session_db.get_resume_conversations(self._resume_read_id)
         accent_color = _accent_hex()
-        if not restored:
+        if not restored and not display_history:
             no_messages = t("cli.resume.session_no_messages", session_id=self.session_id,
                             title=f' "{session_meta["title"]}"' if session_meta.get("title") else "")
             self._console_print(f"[{accent_color}]{_escape(no_messages)}[/]")
@@ -870,6 +874,7 @@ class CLIAgentSetupMixin:
         restored = [m for m in restored if m.get("role") != "session_meta"]
         self.conversation_history = restored
         self._resume_display_history = [m for m in display_history if m.get("role") != "session_meta"]
+        self._resume_history_loaded_for = self.session_id
         from agent.context_compressor import is_user_originated_turn
         # Count only user-originated turns: legacy compaction handoffs are durable
         # role=user rows without display_kind.
@@ -936,3 +941,6 @@ class CLIAgentSetupMixin:
         _record_output_history_entry(lambda: self._render_resume_history_panel_lines(panel))
         with _suspend_output_history():
             self._console_print(panel)
+        linked = getattr(getattr(self, "_session_db", None), "_linked_histories", {})
+        if isinstance(linked, dict) and getattr(self, "_resume_read_id", None) in linked:
+            self._console_print("[dim]Use /history to browse linked history and scroll up for older messages.[/]")

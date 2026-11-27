@@ -29,6 +29,15 @@ export const sessionEn = {
       saveLogin: (site: string) => `save login for ${site}`,
       verificationCode: (site: string) => `verification code for ${site}`
     },
+    // The linked (native-tool-owned) transcript: one honest line when its pager cannot read the
+    // native history. The session stays usable — this is a notice row, never a blanked transcript.
+    // {0}=the gateway/client error text.
+    linked: {
+      historyUnavailable: (reason: string) => `linked history is unavailable: ${reason}`,
+      olderUnavailable: (reason: string) => `could not load older linked history: ${reason}`,
+      newerUnavailable: (reason: string) => `could not load newer linked history: ${reason}`,
+      reopen: 'linked history changed — reopen the session to refresh it'
+    },
     // Shared by the rpc wrapper (useMainApp) and the lifecycle paths; `error: ` prefix stays literal.
     common: {
       invalidResponse: (method: string) => `invalid response: ${method}`,

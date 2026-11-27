@@ -35,6 +35,9 @@ export const arAssistant = {
     thread: {
       loadingSession: 'جار تحميل الجلسة...',
       showEarlier: 'عرض الرسائل الأقدم',
+      historyChanged: "تغير سجل المحادثة. أعد تحميله لعرض الرسائل الأقدم.",
+      historyLoadFailed: "تعذر تحميل الرسائل الأقدم. حاول مرة أخرى.",
+      reloadHistory: "إعادة تحميل السجل",
       loadingResponse: 'جار تحميل الرد...',
       resumeWhenBackgroundDone: count =>
         count === 1 ? 'سيُستأنف عند انتهاء المهمة الخلفية' : `سيُستأنف عند انتهاء ${count} مهام خلفية`,

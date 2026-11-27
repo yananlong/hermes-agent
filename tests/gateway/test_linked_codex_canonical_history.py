@@ -114,6 +114,93 @@ async def test_canonical_resume_history_and_transcript_read_codex_native_turns(t
 
 
 @pytest.mark.asyncio
+async def test_linked_resume_can_attach_without_reading_native_history(tmp_path, monkeypatch):
+    async def handle(_event):
+        return "ok"
+
+    store, db, _authority, owner, ref = _owner(tmp_path, monkeypatch, handle)
+    _linked(db, ref.session_id)
+    reads = []
+
+    def native_history(_thread, **_kwargs):
+        reads.append(1)
+        return [{"role": "user", "content": "native message"}]
+
+    monkeypatch.setattr("gateway.session_linked_codex.read_display_history", native_history)
+    try:
+        resumed = await owner.dispatch({"id": 1, "method": "session.resume", "params": {
+            "session_id": ref.session_id, "omit_messages": True}})
+        assert "result" in resumed, resumed
+        assert resumed["result"]["messages_omitted"] is True
+        assert resumed["result"]["messages"] == []
+        assert resumed["result"]["message_count"] is None
+        assert not reads
+
+    finally:
+        await owner.close()
+        store.close_all_db_handles()
+
+
+@pytest.mark.asyncio
+async def test_latest_native_history_pages_without_reading_the_entire_thread(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
+    async def handle(_event):
+        return "ok"
+
+    store, db, _authority, owner, ref = _owner(tmp_path, monkeypatch, handle)
+    _linked(db, ref.session_id)
+
+    def turn(number):
+        return {"id": f"turn-{number}", "status": "completed", "items": [
+            {"type": "userMessage", "id": f"user-{number}", "content": [
+                {"type": "text", "text": f"question {number}"}]},
+        ]}
+
+    class Native:
+        def __init__(self):
+            self.turns = [turn(number) for number in range(83)]
+            self.returned = 0
+
+        def request(self, method, params):
+            assert method == "thread/turns/list"
+            data = list(reversed(self.turns)) if params["sortDirection"] == "desc" else list(self.turns)
+            start = int(params.get("cursor") or 0)
+            end = min(len(data), start + params["limit"])
+            self.returned += end - start
+            return {"data": data[start:end], "nextCursor": str(end) if end < len(data) else None}
+
+    native = Native()
+    monkeypatch.setattr("hermes_cli.codex_linked_threads._codex_client", lambda **_kwargs: nullcontext(native))
+    try:
+        params = {"session_id": ref.session_id, "order": "latest", "limit": 7}
+        page = await owner.dispatch({"id": 1, "method": "session.transcript", "params": params})
+        assert "result" in page, page
+        assert [row["text"] for row in page["result"]["rows"]] == [f"question {n}" for n in range(76, 83)]
+        assert native.returned <= 14, "the initial page must not read the full thread"
+
+        # The fake's native cursor is an offset, which shifts when a new turn is appended.
+        # Earlier pages must still walk the original snapshot without dropping or duplicating rows.
+        native.turns.extend([turn(83), turn(84), turn(85)])
+        pages = [page["result"]["rows"]]
+        cursor = page["result"]["next_cursor"]
+        for request_id in range(2, 30):
+            if cursor is None:
+                break
+            page = await owner.dispatch({"id": request_id, "method": "session.transcript", "params": {
+                **params, "cursor": cursor}})
+            assert "result" in page, page
+            assert page["result"]["reset"] is False
+            pages.insert(0, page["result"]["rows"])
+            cursor = page["result"]["next_cursor"]
+        assert cursor is None
+        assert [row["text"] for group in pages for row in group] == [f"question {n}" for n in range(83)]
+    finally:
+        await owner.close()
+        store.close_all_db_handles()
+
+
+@pytest.mark.asyncio
 async def test_canonical_linked_mutations_refuse_local_forks_and_policy_edits(tmp_path, monkeypatch):
     async def handle(_event):
         return "ok"

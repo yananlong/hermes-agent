@@ -236,12 +236,12 @@ export const en: Translations = {
     linkedResumeUnverified:
       "Hermes could not confirm what this session stores, so it is not opened in a terminal here. Reload the page, then reopen it from the Sessions list.",
     linkedReadonlyWarning:
-      "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript; new turns cannot be appended to the native session from the web dashboard.",
+      "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript, so its model and workspace controls stay read-only here.",
     linkedResumeDisabled:
-      "Linked sessions are read-only in the web dashboard; open the conversation in the native app to continue it.",
+      "Opens read-only here: the transcript lives in the native tool, and its model is chosen there.",
     linkedHostStore: (label: string, host: string) => `No readable ${label} session store on ${host}.`,
     linkedHostWritable: (label: string) =>
-      `This host can append to ${label} threads; continue this one from the Hermes Desktop app.`,
+      `This host can append to ${label} threads, so new turns from here continue the same one.`,
     linkedHostUnnamed: "the gateway host",
     newChat: "New chat",
     workspace: "workspace",

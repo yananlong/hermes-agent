@@ -35,6 +35,9 @@ export const zhHantAssistant = {
     thread: {
       loadingSession: '正在載入工作階段',
       showEarlier: '顯示較早的訊息',
+      historyChanged: "對話記錄已變更。請重新載入以查看較早的訊息。",
+      historyLoadFailed: "無法載入較早的訊息，請重試。",
+      reloadHistory: "重新載入記錄",
       loadingResponse: 'Hermes 正在載入回覆',
       resumeWhenBackgroundDone: count =>
         count === 1 ? '背景工作完成後將自動繼續' : `${count} 個背景工作完成後將自動繼續`,

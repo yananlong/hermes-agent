@@ -3,6 +3,7 @@ import { createContext, type ReactNode, useContext, useMemo } from 'react'
 import type { ChatMessage } from '@/lib/chat-messages'
 
 export interface TranscriptWindowValue {
+  historyError?: 'changed' | 'unavailable' | null
   /** Store holds older messages the runtime window has not materialized. */
   olderAvailable: boolean
   /** Direct row addressing replaces only the display page; null means no jump. */
@@ -21,6 +22,7 @@ export interface TranscriptWindowValue {
 
 const DEFAULT_TRANSCRIPT_WINDOW: Required<TranscriptWindowValue> = {
   olderAvailable: false,
+  historyError: null,
   expandWindow: () => {},
   revealRow: async () => null,
   returnToLatest: () => {},

@@ -501,6 +501,7 @@ class TranscriptFolder {
   readonly result: ChatMessage[] = []
   private pendingToolParts: ChatMessagePart[] = []
   private pendingToolTimestamp: number | undefined
+  private pendingNativeRowId: string | undefined
   private pendingToolRows = 0
   private activeAssistantIndex: number | null = null
   private nearestAssistant: SessionMessage | null = null
@@ -592,7 +593,7 @@ class TranscriptFolder {
 
   private foldTool(message: SessionMessage, index: number): void {
     if (isTodoToolName(message.tool_name) && !this.isPairedTodoResult(message)) {
-      this.queueTool(storedToolMessagePart(message, index), message.timestamp)
+      this.queueTool(storedToolMessagePart(message, index), message.timestamp, message.codex_native_row_id)
       return
     }
     const updated = applyStoredToolResultToParts(this.pendingToolParts, message)
@@ -602,19 +603,21 @@ class TranscriptFolder {
       return
     }
     if (!applyStoredToolResult(this.result, message)) {
-      this.queueTool(storedToolMessagePart(message, index), message.timestamp)
+      this.queueTool(storedToolMessagePart(message, index), message.timestamp, message.codex_native_row_id)
     }
   }
 
-  private queueTool(part: ChatMessagePart, timestamp?: number): void {
+  private queueTool(part: ChatMessagePart, timestamp?: number, nativeRowId?: string): void {
     this.pendingToolParts = [...this.pendingToolParts, part]
     this.pendingToolTimestamp ??= timestamp
+    this.pendingNativeRowId ??= nativeRowId
     this.pendingToolRows += 1
   }
 
   private clearPendingTools(): void {
     this.pendingToolParts = []
     this.pendingToolTimestamp = undefined
+    this.pendingNativeRowId = undefined
     this.pendingToolRows = 0
   }
 
@@ -647,7 +650,7 @@ class TranscriptFolder {
     }
     if (!this.appendPartsToActiveAssistant(this.pendingToolParts, this.pendingToolTimestamp)) {
       this.result.push({
-        id: `${this.pendingToolTimestamp || Date.now()}-${index}-tools`,
+        id: this.pendingNativeRowId ? `codex:${this.pendingNativeRowId}` : `${this.pendingToolTimestamp || Date.now()}-${index}-tools`,
         role: 'assistant',
         parts: this.pendingToolParts,
         durableComplete: false,
@@ -690,7 +693,7 @@ class TranscriptFolder {
     }
     if (message.role === 'assistant' && parts.length > 0 && parts.every(part => part.type === 'tool-call')) {
       for (const part of parts) {
-        this.queueTool(part, message.timestamp)
+        this.queueTool(part, message.timestamp, message.codex_native_row_id)
       }
       return
     }
@@ -758,7 +761,7 @@ class TranscriptFolder {
   ): void {
     const reactions = messageReactions(message.display_metadata)
     this.result.push({
-      id: `${message.timestamp || Date.now()}-${index}-${projection.displayRole}`,
+      id: message.codex_native_row_id ? `codex:${message.codex_native_row_id}` : `${message.timestamp || Date.now()}-${index}-${projection.displayRole}`,
       role: projection.displayRole,
       parts,
       ...(message.role === 'assistant' && durableComplete !== undefined ? { durableComplete } : {}),

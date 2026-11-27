@@ -33,10 +33,12 @@ def _native_timestamp_ms_or_seconds(value_ms, value_seconds) -> int | float | No
     return _positive_epoch_seconds(value_seconds)
 
 
-def project_codex_turn(turn: dict) -> list[dict]:
+def project_codex_turn(turn: dict, *, thread_id: str | None = None) -> list[dict]:
     """Project one already-read native turn with the live item's projector semantics."""
     projector = CodexEventProjector(force_reasoning_redaction=True)
     rows = []
+    turn_id = turn.get("id")
+    scope = {"threadId": thread_id, "turnId": turn_id}
     turn_timestamp = (
         _native_timestamp_ms_or_seconds(turn.get("startedAtMs"), turn.get("startedAt"))
         or _native_timestamp_ms_or_seconds(turn.get("completedAtMs"), turn.get("completedAt"))
@@ -44,7 +46,7 @@ def project_codex_turn(turn: dict) -> list[dict]:
     for item in turn.get("items", []):
         if not isinstance(item, dict):
             raise ValueError("Codex returned an invalid history item")
-        result = projector.project({"method": "item/completed", "params": {"item": item}})
+        result = projector.project({"method": "item/completed", "params": {**scope, "item": item}})
         timestamp = (
             _native_timestamp_ms_or_seconds(item.get("startedAtMs"), item.get("startedAt"))
             or turn_timestamp
@@ -53,7 +55,7 @@ def project_codex_turn(turn: dict) -> list[dict]:
             if timestamp is not None:
                 row["timestamp"] = timestamp
             rows.append(row)
-    completed = projector.project({"method": "turn/completed", "params": {"turn": turn}})
+    completed = projector.project({"method": "turn/completed", "params": {**scope, "turn": turn}})
     timestamp = _native_timestamp_ms_or_seconds(turn.get("completedAtMs"), turn.get("completedAt"))
     if timestamp is None:
         timestamp = next((_native_timestamp_ms_or_seconds(item.get("startedAtMs"), item.get("startedAt"))
@@ -67,7 +69,7 @@ def project_codex_turn(turn: dict) -> list[dict]:
     return rows
 
 
-def native_turn_record(turn: dict) -> dict:
+def native_turn_record(turn: dict, *, thread_id: str | None = None) -> dict:
     """Project one validated native turn while retaining the boundary needed by output policy."""
     if not isinstance(turn, dict) or not isinstance(turn.get("items", []), list):
         raise ValueError("Codex returned an invalid history turn")
@@ -81,7 +83,7 @@ def native_turn_record(turn: dict) -> dict:
     if not isinstance(status, str) or len(status) > 64:
         status = None
     return {"id": turn_id, "status": status, "final_text": final_text,
-            "rows": project_codex_turn(turn)}
+            "rows": project_codex_turn(turn, thread_id=thread_id)}
 
 
 def _next_cursor(page: dict) -> str | None:

@@ -33,6 +33,8 @@ class StoredTranscriptRow(TranscriptMessage):
     the parts written for the model), ``compacted_messages``, ``timestamp`` and the stored ``row_id``."""
 
     row_kind: Literal['message', 'compaction']
+    # Opaque native-row identity for paged Codex history (not a writable Hermes row id).
+    codex_native_row_id: str | None = None
     # How many messages the compaction summarized, when its handoff names it (compaction rows only).
     compacted_messages: int | None = None
     # A row too large for a page alone keeps only its role, kind, time, ids and the head of its text.
@@ -41,6 +43,10 @@ class StoredTranscriptRow(TranscriptMessage):
 
 class StoredTranscriptResult(Result):
     session_id: str
+    # True for a linked Codex pointer. The first latest page can identify the read path before attach.
+    linked_codex: bool = False
+    # Stable opaque binding for a linked native thread, checked across pre- and post-attach reads.
+    linked_history_identity: str | None = None
     # Oldest first in either order.
     rows: list[StoredTranscriptRow]
     # Opaque, bound to this session, child and order. Oldest order: never null while the transcript is

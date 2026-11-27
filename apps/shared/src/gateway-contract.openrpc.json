@@ -11434,6 +11434,11 @@
             "title": "Messages",
             "type": "array"
           },
+          "linked_codex": {
+            "default": false,
+            "title": "Linked Codex",
+            "type": "boolean"
+          },
           "messages_omitted": {
             "anyOf": [
               {
@@ -42059,6 +42064,7 @@
       },
       "SessionResumeResult": {
         "additionalProperties": false,
+        "description": "The canonical owner's resume snapshot ALSO carries `linked_codex`, but this stdio method\nnever sets it: a linked pointer's native transcript is paged by the canonical\n``session.transcript`` read, which is the only transport that serves one.",
         "properties": {
           "session_id": {
             "title": "Session Id",
@@ -46066,6 +46072,23 @@
             "title": "Session Id",
             "type": "string"
           },
+          "linked_codex": {
+            "default": false,
+            "title": "Linked Codex",
+            "type": "boolean"
+          },
+          "linked_history_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Linked History Identity"
+          },
           "rows": {
             "items": {
               "$ref": "#/components/schemas/StoredTranscriptRow"
@@ -46305,6 +46328,18 @@
             ],
             "title": "Row Kind",
             "type": "string"
+          },
+          "codex_native_row_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Codex Native Row Id"
           },
           "compacted_messages": {
             "anyOf": [

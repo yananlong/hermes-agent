@@ -6,7 +6,7 @@ import { memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { useLocation } from 'react-router'
 
 import type { SubmitTextOptions } from '@/app/session/hooks/use-prompt-actions/utils'
-import { sessionShouldHaveTranscript } from '@/app/session/hooks/use-session-actions/utils'
+import { preserveLocalPendingTurnMessages, sessionShouldHaveTranscript } from '@/app/session/hooks/use-session-actions/utils'
 import { Thread } from '@/components/assistant-ui/thread'
 import { TranscriptWindowProvider } from '@/components/assistant-ui/thread/transcript-window'
 import { Backdrop } from '@/components/Backdrop'
@@ -361,7 +361,7 @@ export function ChatRuntimeBoundary({
   // appears/retires as tail hydrations and backfill pages record their state.
   const transcriptTailStates = useStore($transcriptTailBySessionId)
   const tailState = storedId && transcriptTailStates ? transcriptTailState(storedId, tailProfile) : undefined
-  const restBackfillAvailable = Boolean(tailState?.possiblyTruncated)
+  const restBackfillAvailable = Boolean(tailState?.possiblyTruncated || tailState?.native?.error)
 
   const expandWindow = useCallback(
     async (beforePrepend?: () => void) => {
@@ -374,7 +374,7 @@ export function ChatRuntimeBoundary({
       // Network latency is not scroll intent. Capture at arrival, immediately
       // before the store prepend, and only grow a window that has a page to show.
       if (
-        !windowStateRef.current.get(runtimeIdRef.current ?? '')?.state.window.windowed &&
+        (tailState?.native?.error === 'changed' || !windowStateRef.current.get(runtimeIdRef.current ?? '')?.state.window.windowed) &&
         runtimeId &&
         storedId &&
         transcriptBackfillAvailable(storedId, tailProfile)
@@ -388,6 +388,14 @@ export function ChatRuntimeBoundary({
           // resolves after the user moved on — same pattern as isCurrentResume.
           isCurrent: () => view.$storedId.get() === storedId && view.$runtimeId.get() === runtimeId,
           heldMessages: () => view.$messages.get(),
+          applyResetPage: page => {
+            beforePrepend?.()
+            sessionTileDelegate()?.updateSession(runtimeId, state => ({
+              ...state,
+              messages: preserveLocalPendingTurnMessages(page, state.messages.filter(message => !message.id.startsWith('codex:')))
+            }))
+            grew = true
+          },
           applyOlderPage: olderPage => {
             const current = view.$messages.get()
 
@@ -416,7 +424,7 @@ export function ChatRuntimeBoundary({
 
       return true
     },
-    [runtimeId, storedId, tailProfile, view, history.page, history.revealOlder]
+    [runtimeId, storedId, tailProfile, tailState?.native?.error, view, history.page, history.revealOlder]
   )
 
   // An open history page carries its own reach: its first prompt is the anchor,
@@ -432,6 +440,7 @@ export function ChatRuntimeBoundary({
   const transcriptWindow = useMemo(
     () => ({
       olderAvailable,
+      historyError: tailState?.native?.error ?? null,
       expandWindow,
       revealRow,
       returnToLatest,
@@ -441,7 +450,7 @@ export function ChatRuntimeBoundary({
       isHistorical,
       newerAvailable
     }),
-    [expandWindow, olderAvailable, revealRow, returnToLatest, historicalMessages, isHistorical, newerAvailable]
+    [expandWindow, olderAvailable, revealRow, returnToLatest, historicalMessages, isHistorical, newerAvailable, tailState?.native?.error]
   )
 
   const runtime = useIncrementalExternalStoreRuntime<ThreadMessage>({

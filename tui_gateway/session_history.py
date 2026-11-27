@@ -375,6 +375,12 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
         # Durable row identity (_rows_to_conversation); reactions etc. address persisted messages by it.
         if m.get("_row_id") is not None:
             msg["row_id"] = m["_row_id"]
+        # A native (linked Codex) row's identity inside its own thread. Display-only, like
+        # ``row_id``: it is not a Hermes row, so nothing may address it as a rewind/regenerate
+        # target, but a paging client keys its rows by it (a native page has no ``row_id``).
+        native_row_id = m.get("codex_native_row_id")
+        if isinstance(native_row_id, str) and native_row_id:
+            msg["codex_native_row_id"] = native_row_id
         # A user turn shows its skill invocation, never the expanded body (rewind re-sends by ordinal).
         invocation = _skill_scaffold_projection(content_text) if role == "user" else ""
         if invocation:

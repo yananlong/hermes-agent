@@ -454,32 +454,25 @@ function SessionRow({
         {session.source ? sourceLabel(session.source) : "local"}
       </Badge>
 
-      {resumeInChatEnabled &&
-        (isLinkedForeignSession(session) ? (
-          // Linked foreign rows (Codex / Claude / Mistral) are read-only in
-          // the web dashboard — no resume-into-chat affordance.
-          <Badge
-            tone="outline"
-            className="text-xs"
-            title={t.sessions.linkedResumeDisabled}
-          >
-            {t.sessions.linkedReadonlyBadge}
-          </Badge>
-        ) : (
-          <Button
-            ghost
-            size="icon"
-            className="text-muted-foreground hover:text-success"
-            aria-label={t.sessions.resumeInChat}
-            title={t.sessions.resumeInChat}
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate(`/chat?resume=${encodeURIComponent(session.id)}`);
-            }}
-          >
-            <Play />
-          </Button>
-        ))}
+      {resumeInChatEnabled && (
+        // A linked foreign row (Codex / Claude / Mistral) opens in chat like any other session: the
+        // pane is read-only for it (the native tool owns its transcript and its model), which only
+        // the tooltip says. Refusing to open it hid the transcript entirely, which read as "no
+        // history" for a thread that has plenty.
+        <Button
+          ghost
+          size="icon"
+          className="text-muted-foreground hover:text-success"
+          aria-label={t.sessions.resumeInChat}
+          title={isLinkedForeignSession(session) ? t.sessions.linkedResumeDisabled : t.sessions.resumeInChat}
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(`/chat?resume=${encodeURIComponent(session.id)}`);
+          }}
+        >
+          <Play />
+        </Button>
+      )}
 
       <Button
         ghost

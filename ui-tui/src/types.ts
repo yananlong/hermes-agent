@@ -141,6 +141,8 @@ export interface PasteSection {
 }
 
 export interface Msg {
+  /** Display-only rows owned by the linked native-history window. */
+  linkedHistory?: boolean
   info?: SessionInfo
   kind?: 'diff' | 'event' | 'image' | 'intro' | 'panel' | 'slash' | 'trail'
   // Local image paths shown inline under the row: a user turn's attachments,

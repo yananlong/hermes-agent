@@ -3614,6 +3614,9 @@ export const ruOverrides = {
       errorRateLimitResetBody: (provider, time) => `Вы достигли лимита запросов ${provider}. Он сбросится в ${time}.`,
       loadingSession: 'Загрузка сеанса',
       showEarlier: 'Показать ранние сообщения',
+      historyChanged: "История изменилась. Обновите её, чтобы загрузить более ранние сообщения.",
+      historyLoadFailed: "Не удалось загрузить предыдущие сообщения. Попробуйте ещё раз.",
+      reloadHistory: "Обновить историю",
       loadingResponse: 'Hermes загружает ответ',
       resumeWhenBackgroundDone: count =>
         count === 1

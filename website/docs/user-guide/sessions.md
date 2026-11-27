@@ -257,6 +257,13 @@ display:
   resume_display: minimal   # default: full
 ```
 
+For a linked Codex thread, the classic CLI loads a recent, bounded window of the native
+transcript for display. Use `/history` to open the full-text history viewer; scroll with the
+arrow keys or Page Up and Page Down. Scrolling up at the beginning of the loaded window fetches
+older messages, and `q` returns to chat. The recap above is still a short preview. Some older
+assistant responses may be hidden when their saved display policy is unavailable; the history
+shows a notice where that occurs.
+
 :::tip
 Session IDs follow the format `YYYYMMDD_HHMMSS_<hex>` — CLI/TUI sessions use a 6-char hex suffix (e.g. `20250305_091523_a1b2c3`), gateway sessions use an 8-char suffix (e.g. `20250305_091523_a1b2c3d4`). You can resume by ID (full or unique prefix) or by title — both work with `-c` and `-r`.
 :::

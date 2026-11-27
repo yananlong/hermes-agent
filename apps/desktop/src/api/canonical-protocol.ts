@@ -406,7 +406,8 @@ export class CanonicalDesktopProtocol {
     if (method === 'session.create') { return this.prepareCreate(params) }
 
     if (method === 'session.activate') {
-      return { session_id: params.session_id, source: 'desktop', ...(params.profile ? { profile: params.profile } : {}) }
+      return { session_id: params.session_id, source: 'desktop', ...(params.profile ? { profile: params.profile } : {}),
+        ...(params.omit_messages === true ? { omit_messages: true } : {}) }
     }
 
     // N93: a watch window's legacy `lazy` attach is not in the owner's resume contract (the owner

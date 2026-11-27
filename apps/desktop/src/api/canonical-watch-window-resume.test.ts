@@ -25,3 +25,12 @@ test.each([
 
   if (watchWindow) { expect(frame).toMatchObject({ omit_messages: false, defer_history: false }) }
 })
+
+test.each([['watch', true, false], ['snapshot', false, true]])(
+  'linked Codex %s resumes without downloading the full native history',
+  (_label, watch, snapshot) => {
+    const frame = new CanonicalDesktopProtocol().prepare('session.resume', primaryResumeParams('s', watch, snapshot, 'work', true))
+    expect(frame).toMatchObject({ session_id: 's', profile: 'work', omit_messages: true })
+    expect(frame).not.toHaveProperty('lazy')
+  }
+)

@@ -4962,6 +4962,9 @@ export const deOverrides = {
     thread: {
       loadingSession: 'Session wird geladen',
       showEarlier: 'Frühere Nachrichten anzeigen',
+      historyChanged: "Der Gesprächsverlauf hat sich geändert. Lade ihn neu, um ältere Nachrichten zu sehen.",
+      historyLoadFailed: "Frühere Nachrichten konnten nicht geladen werden. Versuche es erneut.",
+      reloadHistory: "Verlauf neu laden",
       loadingResponse: 'Hermes lädt eine Antwort',
       loadingLocalModel: model => `${model} wird in den Speicher geladen`,
       processingPrompt: 'Verarbeite Prompt',

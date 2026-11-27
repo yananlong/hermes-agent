@@ -52,9 +52,11 @@ export interface LinkedResumeCheck {
  * The linked-resume gate for `/chat?resume=<id>`, and it FAILS CLOSED: a PTY is spawned only when
  * a pending-or-answered lookup positively says this id is not a native-tool pointer.
  *
- * - a linked row is blocked (its transcript lives in the native tool, so a terminal has nothing to
- *   attach to),
- * - a lookup that has not landed yet is blocked (the caller waits; racing a pointer row into a
+ * - a linked row is ALLOWED: the embedded TUI is a canonical client, and the gateway serves a
+ *   linked pointer's transcript from the native tool (`session.transcript`, order `latest`) and
+ *   appends new turns to that same native thread. The browser simply never gets a second
+ *   transcript of its own — the terminal pane is the one viewer, as for any other session.
+ * - a lookup that has not landed yet is blocked (the caller waits; racing an unknown row into a
  *   fresh PTY is the bug this gate exists for),
  * - a lookup that failed is blocked, because "we could not tell" is not "ordinary session".
  *
@@ -62,11 +64,26 @@ export interface LinkedResumeCheck {
  * exist, so it cannot be a pointer.
  */
 export function linkedResumeBlocked(check: LinkedResumeCheck | null, resumeId: string | null | undefined): boolean {
-  if (!resumeId || !check || check.id !== resumeId) {
-    return Boolean(resumeId)
+  if (!resumeId) {
+    return false
   }
 
-  return check.agent !== null || !check.verified
+  // Unanswered (or answered for a different target) is still "we cannot tell yet": wait.
+  if (!check || check.id !== resumeId) {
+    return true
+  }
+
+  // "Could not tell" must never spawn a PTY we cannot vouch for.
+  return !check.verified
+}
+
+/** True when the `?resume=` target is a linked pointer whose transcript the TUI will page. The
+ *  dashboard marks the pane read-only for it (the adapter below), but it still OPENS. */
+export function linkedResumeReadonly(
+  check: LinkedResumeCheck | null,
+  resumeId: string | null | undefined
+): boolean {
+  return Boolean(resumeId && check?.id === resumeId && check.verified && check.agent)
 }
 
 /**

@@ -179,21 +179,26 @@ class CodexEventProjector:
     def __init__(self, *, force_reasoning_redaction: bool = False) -> None:
         self._pending_reasoning: list[str] = []
         self._force_reasoning_redaction = force_reasoning_redaction
+        self._native_thread_id: str | None = None
+        self._native_turn_id: str | None = None
 
     def _reasoning(self, text: str) -> str:
         return _bounded_reasoning_text(text, force_redaction=self._force_reasoning_redaction)
 
     def project(self, notification: dict) -> ProjectionResult:
         """Project completed items; a turn boundary also flushes otherwise-unpaired readable reasoning."""
-        if notification.get("method", "") == "turn/completed":
-            return self._flush_pending_reasoning()
-        if notification.get("method", "") != "item/completed":
+        method = notification.get("method", "")
+        params = notification.get("params", {}) or {}
+        self._remember_native_scope(params)
+        if method == "turn/completed":
+            return self._stamp_native_rows(self._flush_pending_reasoning(), "turn/completed")
+        if method != "item/completed":
             return ProjectionResult()
-        item = (notification.get("params", {}) or {}).get("item") or {}
+        item = params.get("item") or {}
         item_type = item.get("type") or ""
         item_id = item.get("id") or ""
         if item_type == "agentMessage":
-            return self._project_agent_message(item)
+            return self._stamp_native_rows(self._project_agent_message(item), item_id)
         if item_type == "reasoning":
             # Only plain text the app-server explicitly exposes is displayable. In particular,
             # never inspect or decode encrypted reasoning fields that newer servers may add.
@@ -207,12 +212,35 @@ class CodexEventProjector:
                 self._pending_reasoning = [self._reasoning("\n".join(self._pending_reasoning))]
             return ProjectionResult()
         if item_type == "userMessage":
-            return self._project_user_message(item)
+            return self._stamp_native_rows(self._project_user_message(item), item_id)
         tool_projection = self._TOOL_PROJECTIONS.get(item_type)
         if tool_projection is not None:
-            return self._project_tool_item(item, item_id, tool_projection)
+            return self._stamp_native_rows(self._project_tool_item(item, item_id, tool_projection), item_id)
         # Unknown / rare items (plan, hookPrompt, ...): opaque note, no fabricated tool_call structure.
-        return self._project_opaque(item, item_type)
+        return self._stamp_native_rows(self._project_opaque(item, item_type), item_id)
+
+    def _remember_native_scope(self, params: dict) -> None:
+        thread_id = params.get("threadId")
+        if isinstance(thread_id, str) and thread_id:
+            self._native_thread_id = thread_id
+        turn_id = params.get("turnId")
+        if not isinstance(turn_id, str) or not turn_id:
+            turn = params.get("turn")
+            turn_id = turn.get("id") if isinstance(turn, dict) else None
+        if isinstance(turn_id, str) and turn_id:
+            self._native_turn_id = turn_id
+
+    def _stamp_native_rows(self, result: ProjectionResult, item_id: str) -> ProjectionResult:
+        if not self._native_thread_id or not self._native_turn_id:
+            return result
+        identity = item_id if item_id else "turn-completed"
+        for index, row in enumerate(result.messages):
+            digest = hashlib.sha256(json.dumps(
+                [self._native_thread_id, self._native_turn_id, identity, index],
+                ensure_ascii=False, separators=(",", ":"),
+            ).encode("utf-8")).hexdigest()
+            row["codex_native_row_id"] = f"codex:{digest}"
+        return result
 
     def _assistant_message(self, content: Optional[str], **extra: Any) -> dict[str, Any]:
         msg: dict[str, Any] = {"role": "assistant", "content": content, **extra}

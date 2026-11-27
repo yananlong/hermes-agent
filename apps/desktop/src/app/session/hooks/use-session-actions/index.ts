@@ -4,6 +4,7 @@ import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 import type { NavigateFunction } from 'react-router'
 
 import { NO_PROJECT_ID } from '@/app/chat/sidebar/projects/workspace-groups'
+import { LinkedHistoryChangedError } from '@/api/native-session-history'
 import {
   extendRefreshPageToOverlap,
   graftRefreshedTailOntoBackfill,
@@ -1204,7 +1205,7 @@ export function useSessionActions({
         }
       }
 
-      const resumeStartMessages = resumedSameSelectedSession ? $messages.get() : []
+      let resumeStartMessages = resumedSameSelectedSession ? $messages.get() : []
 
       // Paint the click before the profile-resolve / gateway-swap awaits below,
       // so there's zero dead air: highlight the row instantly (the sidebar reads
@@ -1271,9 +1272,13 @@ export function useSessionActions({
       // this session's route, and a re-entrant resume of this target would
       // snapshot it as this session's local pending turn (resumeStartMessages).
       const warmAtEntry = takeWarmCache()
+      const listedStored = ownerLookupSessionRows().find(session => sessionMatchesStoredId(session, storedSessionId))
+      const cachedNative = Boolean(warmAtEntry?.state.messages.some(message => message.id.startsWith('codex:')))
+      const mayBeLinked = Boolean(!listedStored || listedStored.codex_linked || cachedNative)
+      let linkedForResume = mayBeLinked
       const foregroundIsTarget = warmAtEntry !== null && warmAtEntry.runtimeId === activeSessionIdRef.current
 
-      if (!foregroundIsTarget) {
+      if (!foregroundIsTarget || mayBeLinked) {
         setActiveSessionId(null)
         activeSessionIdRef.current = null
         // History load is not turn-busy. Drop the previous session's leftover
@@ -1281,7 +1286,7 @@ export function useSessionActions({
         busyRef.current = false
         setBusy(false)
 
-        if (!resumedSameSelectedSession) {
+        if (!resumedSameSelectedSession || mayBeLinked) {
           setMessages([])
         }
       }
@@ -1304,37 +1309,22 @@ export function useSessionActions({
 
       const provisional = provisionalTranscriptPaint(
         storedSessionId,
-        () => isCurrentResume() && !resumedSameSelectedSession && !takeWarmCache()
+        () => isCurrentResume() && !resumedSameSelectedSession && !linkedForResume && !takeWarmCache()
       )
-
-      const listedStored = ownerLookupSessionRows().find(session => sessionMatchesStoredId(session, storedSessionId))
-
-      if (ownerRoute || listedStored?.profile) {
-        provisional.paint(transcriptRestScope(ownerRoute, listedStored, ambientConnectionId))
-      }
-
-      // An unbound warm target whose transcript is already persisted-display
-      // authority paints now, display-only, instead of waiting out the awaits
-      // below; the fast path re-proves it against the resolved owner before
-      // binding. An unproven warm cache can be a compressed runtime tail, so it
-      // keeps the loader (#73646).
-      if (warmAtEntry && !foregroundIsTarget && listedStored) {
-        const entryProvenance = createPersistedDisplayTranscriptProvenance({
-          lineageRootId: listedStored._lineage_root_id ?? null,
-          scope: transcriptRestScope(ownerRoute, listedStored, ambientConnectionId),
-          storedSessionId
-        })
-
-        if (hasPersistedDisplayTranscriptProvenance(warmAtEntry.state, entryProvenance)) {
-          setMessages(warmAtEntry.state.messages)
-        }
-      }
 
       const storedForProfile = await resolveStoredSession(storedSessionId, ownerRoute)
       const sessionProfile = storedForProfile?.profile
 
       if (!isCurrentResume()) {
         return
+      }
+
+      linkedForResume = cachedNative || Boolean(storedForProfile?.codex_linked || (!storedForProfile && listedStored?.codex_linked))
+      if (linkedForResume) {
+        resumeStartMessages = []
+        setActiveSessionId(null)
+        activeSessionIdRef.current = null
+        setMessages([])
       }
 
       const { resolvedConnectionId, sessionOwner } = resolveResumeOwner(
@@ -1374,7 +1364,7 @@ export function useSessionActions({
       // purges a cross-wired mapping before we trust the fast-path.
       const warmHit = takeWarmCache()
 
-      if (warmHit && !options?.authoritativeSnapshot) {
+      if (warmHit && !options?.authoritativeSnapshot && !linkedForResume) {
         const cachedRuntimeId = warmHit.runtimeId
         const cachedState = warmHit.state
 
@@ -1972,6 +1962,7 @@ export function useSessionActions({
 
       try {
         const watchWindow = isWatchWindow()
+        const linkedCodex = Boolean(stored?.codex_linked || storedForProfile?.codex_linked)
 
         let localSnapshot = resumedSameSelectedSession
           ? preserveLocalPendingTurnMessages(viewMessagesForReconcile(), resumeStartMessages)
@@ -1988,7 +1979,7 @@ export function useSessionActions({
         // transcript as soon as it lands; the RPC binds the runtime id.
         // Watch windows skip the prefetch — lazy resume attaches the live mirror.
         const prefetchPromise =
-          watchWindow || options?.authoritativeSnapshot
+          !linkedCodex && (watchWindow || options?.authoritativeSnapshot)
             ? null
             : getLatestSessionMessages(storedSessionId, sessionRestScope)
 
@@ -2001,9 +1992,9 @@ export function useSessionActions({
           () =>
             requestForSession<SessionResumeResult>(
               'session.resume',
-              primaryResumeParams(storedSessionId, watchWindow, options?.authoritativeSnapshot, sessionProfile)
+              primaryResumeParams(storedSessionId, watchWindow, options?.authoritativeSnapshot, sessionProfile, linkedCodex)
             ),
-          { requiresMessages: options?.authoritativeSnapshot, scope: sessionOwner }
+          { requiresMessages: options?.authoritativeSnapshot && !linkedCodex, scope: sessionOwner }
         ).then(resumed => {
           resumeRuntimeBaselineMessages =
             sessionStateByRuntimeIdRef.current.get(resumed.session_id)?.messages ?? resumeRuntimeBaselineMessages
@@ -2017,13 +2008,28 @@ export function useSessionActions({
 
         let prefetchedResult: SessionMessagesResponse | null = null
 
+        let prefetchError: unknown = null
         try {
           if (prefetchPromise) {
             prefetchedResult = await prefetchPromise
           }
-        } catch {
-          // Non-fatal: gateway resume below can still hydrate the session.
+        } catch (error) {
+          prefetchError = error
         }
+
+        // Attach also establishes the native identity. This barrier protects
+        // against a pointer becoming linked while an ordinary REST read was in flight.
+        const attached = await resumePromise
+        if (attached.linked_history_identity && !linkedForResume) {
+          linkedForResume = true
+          resumeStartMessages = []
+          localSnapshot = []
+          setMessages([])
+        }
+        if (attached.linked_history_identity && !prefetchedResult) {
+          prefetchedResult = await getLatestSessionMessages(storedSessionId, sessionRestScope)
+        }
+        if (linkedCodex && !prefetchedResult && prefetchError) throw prefetchError
 
         // The socket can drop and redial while REST is in flight. Painting now
         // would let the new socket's replay append the same turn again; a lost
@@ -2032,6 +2038,12 @@ export function useSessionActions({
 
         if (prefetchedResult && viewReplayAtReturn && !(await viewReplayAtReturn)) {
           prefetchedResult = null
+        }
+
+        // A linked pointer can be retargeted between the prefetch and attach.
+        // Do not publish the page until the owner confirms the same native thread.
+        if (prefetchedResult && (attached.linked_history_identity || prefetchedResult.native_history)) {
+          if (attached.linked_history_identity !== prefetchedResult.native_history?.identity) throw new LinkedHistoryChangedError()
         }
 
         // A completed read still warms its exact durable scope after navigation.
@@ -2351,6 +2363,13 @@ export function useSessionActions({
         )
       } catch (err) {
         if (!isCurrentResume()) {
+          return
+        }
+
+        if (err instanceof LinkedHistoryChangedError) {
+          setMessages(viewMessagesForReconcile().filter(message => !message.id.startsWith('codex:')))
+          setResumeFailedSessionId(storedSessionId)
+          notifyResumeFailed(err, copy.resumeFailed, storedSessionId, options)
           return
         }
 

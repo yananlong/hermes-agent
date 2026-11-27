@@ -14,6 +14,7 @@ import threading
 import time
 from collections import OrderedDict
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 
 from persistence.core.errors import AuthorityRefusal
@@ -50,6 +51,12 @@ def linked_thread_id(store, session_id: str) -> str | None:
     except ValueError as exc:
         raise AuthorityRefusal("storage_unavailable", field="session_id",
                                 detail="linked Codex thread identity is invalid") from exc
+
+
+def linked_history_identity(profile_id: str, session_id: str, owner_session_id: str, thread_id: str) -> str:
+    """Opaque binding for an authorized profile/session pair and its current native thread."""
+    value = json.dumps([profile_id, session_id, owner_session_id, thread_id], separators=(",", ":"))
+    return "codex:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 #: Turn-path copy for a row whose stored settings cannot be decoded (``linked_codex_runtime``).
@@ -276,7 +283,7 @@ def read_display_history_window(thread_id: str, *, session_id: str, model: str |
                     turn_id = turn.get("id")
                     if not isinstance(turn_id, str) or not turn_id or len(turn_id) > 256:
                         raise ValueError("Codex returned a native turn without a stable ID")
-                    record = native_turn_record(turn)
+                    record = native_turn_record(turn, thread_id=thread_id)
                     try:
                         size = len(json.dumps(record, ensure_ascii=False, default=str).encode("utf-8"))
                     except (TypeError, ValueError):
@@ -438,6 +445,137 @@ def _display_native_turns(turns: list[dict], *, session_id: str, thread_id: str,
                                 platform=platform)
 
 
+@dataclass(frozen=True)
+class _LatestNativeCursor:
+    native_cursor: str | None
+    turn_id: str
+    consumed: int
+    digest: str
+    page_size: int
+
+
+def _encode_latest_cursor(session_id: str, thread_id: str, state: _LatestNativeCursor) -> str:
+    value = ["codex-latest-v1", session_id, thread_id, state.native_cursor, state.turn_id,
+             state.consumed, state.digest, state.page_size]
+    return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode().rstrip("=")
+
+
+def _decode_latest_cursor(cursor: str, session_id: str, thread_id: str) -> _LatestNativeCursor | None:
+    from binascii import Error as Base64Error
+
+    try:
+        if len(cursor) > 8192:
+            raise ValueError
+        value = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        if isinstance(value, list) and value[:1] == [_CURSOR_VERSION]:
+            _decode_cursor(cursor, session_id=session_id, thread_id=thread_id, order="latest")
+            return None  # The old snapshot cursor cannot name a native page; restart at the tip.
+        version, session, thread, native, turn_id, consumed, digest, page_size = value
+    except (TypeError, ValueError, Base64Error):
+        raise AuthorityRefusal("invalid_params", field="cursor") from None
+    if ((version, session, thread) != ("codex-latest-v1", session_id, thread_id)
+            or not (native is None or (isinstance(native, str) and len(native) <= 4096))
+            or not isinstance(turn_id, str) or not 0 < len(turn_id) <= 256
+            or type(consumed) is not int or not 0 < consumed <= 100_000
+            or not isinstance(digest, str) or len(digest) != 64
+            or any(ch not in "0123456789abcdef" for ch in digest)
+            or type(page_size) is not int or not 1 <= page_size <= 20):
+        raise AuthorityRefusal("invalid_params", field="cursor")
+    return _LatestNativeCursor(native, turn_id, consumed, digest, page_size)
+
+
+def _latest_projected_page(client, thread_id, cursor, page_size, *, session_id, store, model, platform,
+                           profile_home, inline_images):
+    """Read and project one native page under the owning profile's display policy."""
+    from gateway.session_controls import display_projection
+    from hermes_cli.codex_linked_history import (display_native_turn_records, linked_turn_display_overlays,
+                                                 native_turn_record, _next_cursor)
+    from hermes_cli.codex_linked_threads import read_codex_history
+
+    page = read_codex_history(thread_id, cursor=cursor, limit=page_size,
+                              sort_direction="desc", client=client)
+    turns = page.get("turns")
+    if not isinstance(turns, list) or len(turns) > page_size:
+        raise ValueError("Codex returned an invalid history page")
+    records = [native_turn_record(turn, thread_id=thread_id) for turn in turns]
+    overlays = linked_turn_display_overlays(store, session_id, thread_id, [record["id"] for record in records])
+    records = display_native_turn_records(records, session_id=session_id, thread_id=thread_id, model=model,
+                                          max_bytes=32 * 1024 * 1024, overlays=overlays,
+                                          require_overlay=True, platform=platform)
+    result = []
+    for record in records:
+        rows = display_projection(record["rows"], profile_home, image_urls=inline_images)
+        result.append((record["id"], rows, _history_digest(rows, len(rows))))
+    return result, _next_cursor(page)
+
+
+def _latest_native_window(connection, session_id, thread_id, *, cursor, limit, inline_images, owner_session_id,
+                          output_model):
+    """Walk backward from a page anchor, detecting shifts caused by newly appended turns."""
+    from agent.transports.codex_app_server import CodexAppServerError
+    from gateway.session_persistence import authority_persistence
+    from gateway.session_stored_reads import PAGE_BYTES, _bounded, _size
+    from hermes_cli.codex_linked_threads import _codex_client
+
+    store = authority_persistence(connection.authority)
+    owner = store.sessions.get(owner_session_id)
+    model = output_model if output_model is not None else owner.model if owner is not None else None
+    platform = owner.source if owner is not None else ""
+    held = _decode_latest_cursor(cursor, session_id, thread_id) if cursor is not None else None
+    reset = cursor is None or held is None
+    page_size = held.page_size if held else min(limit, 20)
+    page_cursor = held.native_cursor if held else None
+    seek = held
+    selected, last, seen = [], None, set()
+    try:
+        with _codex_client(profile_home=store.scope.profile_dir) as client:
+            for _ in range(128):
+                current = page_cursor
+                records, next_cursor = _latest_projected_page(
+                    client, thread_id, current, page_size, session_id=owner_session_id, store=store,
+                    model=model, platform=platform, profile_home=connection.authority.profile_id,
+                    inline_images=inline_images)
+                for index, (turn_id, full_rows, digest) in enumerate(records):
+                    rows = full_rows
+                    if seek is not None:
+                        if turn_id != seek.turn_id:
+                            continue
+                        if digest != seek.digest or seek.consumed > len(rows):
+                            return _latest_native_window(connection, session_id, thread_id, cursor=None,
+                                                         limit=limit, inline_images=inline_images,
+                                                         owner_session_id=owner_session_id, output_model=output_model)
+                        rows = rows[:len(rows) - seek.consumed]
+                        seek = None
+                    for row_index in range(len(rows) - 1, -1, -1):
+                        row = {**rows[row_index], "row_kind": "message"}
+                        if _size([*selected, row]) > PAGE_BYTES:
+                            if selected:
+                                return {"rows": list(reversed(selected)),
+                                        "next_cursor": _encode_latest_cursor(session_id, thread_id, last),
+                                        "reset": reset}
+                            row = _bounded(row, PAGE_BYTES - 128)
+                        selected.append(row)
+                        last = _LatestNativeCursor(current, turn_id, len(full_rows) - row_index, digest, page_size)
+                        if len(selected) == limit:
+                            more = row_index > 0 or index + 1 < len(records) or next_cursor is not None
+                            return {"rows": list(reversed(selected)), "reset": reset,
+                                    "next_cursor": _encode_latest_cursor(session_id, thread_id, last) if more else None}
+                if next_cursor is None:
+                    if seek is not None:
+                        return _latest_native_window(connection, session_id, thread_id, cursor=None, limit=limit,
+                                                     inline_images=inline_images, owner_session_id=owner_session_id,
+                                                     output_model=output_model)
+                    return {"rows": list(reversed(selected)), "next_cursor": None, "reset": reset}
+                if next_cursor in seen or not records:
+                    raise ValueError("Codex returned a repeating history cursor")
+                seen.add(next_cursor)
+                page_cursor = next_cursor
+    except (CodexAppServerError, OSError, TimeoutError, ValueError) as exc:
+        raise AuthorityRefusal("storage_unavailable", field="session_id",
+                               detail="linked Codex history is unavailable") from exc
+    raise AuthorityRefusal("storage_unavailable", field="session_id", detail="linked Codex history page exceeded its work limit")
+
+
 def transcript_page(connection, session_id: str, thread_id: str, *, cursor: str | None, limit: int,
                     order: str, inline_images: bool, history: list[dict] | None = None,
                     output_model: str | None = None, owner_session_id: str | None = None) -> dict:
@@ -450,6 +588,10 @@ def transcript_page(connection, session_id: str, thread_id: str, *, cursor: str 
     from gateway.session_stored_reads import PAGE_BYTES, _bounded, _size
     from gateway.session_controls import display_projection
 
+    if history is None and order == "latest":
+        return _latest_native_window(connection, session_id, thread_id, cursor=cursor, limit=limit,
+                                     inline_images=inline_images, owner_session_id=owner_session_id or session_id,
+                                     output_model=output_model)
     if history is None:
         owner_session_id = owner_session_id or session_id
         from gateway.session_persistence import authority_persistence
@@ -508,10 +650,10 @@ def transcript_page(connection, session_id: str, thread_id: str, *, cursor: str 
             "next_cursor": next_cursor, "reset": reset}
 
 
-def _trace_turn_record(turn: dict) -> dict:
+def _trace_turn_record(turn: dict, thread_id: str) -> dict:
     from hermes_cli.codex_linked_history import native_turn_record
 
-    return native_turn_record(turn)
+    return native_turn_record(turn, thread_id=thread_id)
 
 
 def _read_all_trace_turns(client, thread_id: str) -> list[dict]:
@@ -556,7 +698,7 @@ def _read_trace_turns(client, thread_id: str, cache_key: tuple, *, running: bool
         if not isinstance(raw_turns, list):
             raise ValueError("Codex returned an invalid history page")
         for raw_turn in raw_turns:
-            record = _trace_turn_record(raw_turn)
+            record = _trace_turn_record(raw_turn, thread_id)
             newest_first.append(record)
             if record["id"] == anchor:
                 found = True

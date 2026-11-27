@@ -528,13 +528,19 @@ async def transcript(connection, ref, params):
 
     def read():
         store = authority_persistence(authority)
-        from gateway.session_linked_codex import linked_thread_id, transcript_page
+        from gateway.session_linked_codex import linked_history_identity, linked_thread_id, transcript_page
         if thread_id := linked_thread_id(store, target):
             from gateway.session_authorities import owner_scope
             with owner_scope(authority):
-                return {'session_id': ref.session_id, **transcript_page(
-                    connection, ref.session_id, thread_id, cursor=cursor, limit=limit,
-                    order=order, inline_images=inline_images, owner_session_id=target)}
+                return {'session_id': ref.session_id, 'linked_codex': True,
+                        # The binding a client checks across pre- and post-attach reads: a re-link
+                        # or a damaged pointer changes it, and a page from the old thread must not
+                        # be spliced onto the new one.
+                        'linked_history_identity': linked_history_identity(
+                            authority.profile_id, ref.session_id, target, thread_id),
+                        **transcript_page(
+                            connection, ref.session_id, thread_id, cursor=cursor, limit=limit,
+                            order=order, inline_images=inline_images, owner_session_id=target)}
         held = None if cursor is None else _decode_cursor(cursor, binding)
         return {'session_id': ref.session_id, **read_transcript(
             store, target, store.lineage.resume_lineage_ids(target), binding, held, limit,

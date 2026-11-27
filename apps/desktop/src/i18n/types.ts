@@ -3991,6 +3991,9 @@ export interface Translations extends NoticeTranslations {
     thread: {
       loadingSession: string
       showEarlier: string
+      historyChanged: string
+      historyLoadFailed: string
+      reloadHistory: string
       loadingResponse: string
       loadingLocalModel: (model: string) => string
       processingPrompt: string

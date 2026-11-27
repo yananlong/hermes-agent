@@ -129,6 +129,13 @@ export const MessageLine = memo(function MessageLine({
   }
 
   if (msg.role === 'tool') {
+    if (msg.linkedHistory) {
+      return (
+        <Box alignSelf="flex-start" borderColor={t.color.muted} borderStyle="round" marginLeft={3} paddingX={1}>
+          <Text color={t.color.muted}>{sanitizeAnsiForRender(msg.text)}</Text>
+        </Box>
+      )
+    }
     const maxChars = Math.max(24, cols - 14)
     const stripped = hasAnsi(msg.text) ? stripAnsi(msg.text) : msg.text
     const safeAnsi = hasAnsi(msg.text) ? sanitizeAnsiForRender(msg.text) : msg.text

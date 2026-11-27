@@ -498,7 +498,7 @@ export function searchSessions(query: string, profile?: null | string): Promise<
 // the given `profile`). The backend resolves exact ids and unique prefixes and
 // 404s when the id isn't on that profile — so a cheap by-id lookup replaces the
 // cross-profile list scan when locating an unknown id's owner.
-export function getSession(id: string, profile?: ProfileScope): Promise<SessionInfo> {
+export function getSession(id: string, profile?: ProfileScope, options: { passive?: boolean } = {}): Promise<SessionInfo> {
   // Pin the read to the session's OWNER connection (#125372): the ambient dial
   // 404s on the wrong backend whenever two connections expose a same-named
   // profile.
@@ -507,7 +507,8 @@ export function getSession(id: string, profile?: ProfileScope): Promise<SessionI
 
   return hermesApi<SessionInfo>({
     ...scope,
-    path: `/api/sessions/${encodeURIComponent(id)}${suffix}`
+    path: `/api/sessions/${encodeURIComponent(id)}${suffix}`,
+    ...(options.passive ? { passive: true } : {})
   })
 }
 
@@ -564,7 +565,7 @@ export function getSessionMessages(
  */
 export const LATEST_SESSION_MESSAGES_LIMIT = 120
 
-export function getLatestSessionMessages(
+export async function getLatestSessionMessages(
   id: string,
   profile?: ProfileScope,
   options: { passive?: boolean } = {}
@@ -577,6 +578,24 @@ export function getLatestSessionMessages(
   // Only the lookup key is normalized — backfill replays `route` verbatim.
   const ambientConnectionId = route.connectionId || ambientOwnerConnectionId()
   const ambientProfile = getApiRequestProfile() || 'default'
+
+  // Resolve the owner before picking a history transport: the REST linked
+  // history endpoint uses shifting offsets, which are unsafe across appends.
+  // Capture the route first so a later foreground switch cannot move this read.
+  const detail = await getSession(id, route, options)
+  if (detail?.codex_linked) {
+    const owner = {
+      connectionId: ambientConnectionId ?? null,
+      profile: route.profile || detail.profile || ambientProfile
+    }
+    const { readNativeTranscriptPage } = await import('./native-session-history')
+    const page = await readNativeTranscriptPage(detail.id || id, owner, undefined, options.passive)
+    recordTranscriptTail(id, page, owner, owner)
+    if (page.session_id !== id) {
+      recordTranscriptTail(page.session_id, page, owner, owner)
+    }
+    return page
+  }
 
   // includeCompacted: durable display history must include rows preserved by
   // in-place compaction (active=0, compacted=1); without them the transcript

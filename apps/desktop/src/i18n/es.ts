@@ -4947,6 +4947,9 @@ export const esOverrides = {
     thread: {
       loadingSession: 'Cargando sesión',
       showEarlier: 'Mostrar mensajes anteriores',
+      historyChanged: "El historial cambió. Vuelve a cargarlo para ver mensajes anteriores.",
+      historyLoadFailed: "No se pudieron cargar los mensajes anteriores. Inténtalo de nuevo.",
+      reloadHistory: "Recargar historial",
       loadingResponse: 'Hermes está cargando una respuesta',
       loadingLocalModel: (model: string) => `Cargando ${model} en memoria`,
       processingPrompt: 'Procesando el prompt',

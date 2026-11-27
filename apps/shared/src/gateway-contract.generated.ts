@@ -3526,6 +3526,7 @@ export interface SessionResumeParams {
   close_on_disconnect?: boolean
   inline_images?: boolean
 }
+/** The canonical owner's resume snapshot ALSO carries `linked_codex`, but this stdio method never sets it: a linked pointer's native transcript is paged by the canonical ``session.transcript`` read, which is the only transport that serves one. */
 export interface SessionResumeResult {
   session_id: string
   message_count: number
@@ -5458,6 +5459,7 @@ export interface CanonicalSnapshot {
   session_id: string
   stored_session_id: string
   messages: TranscriptMessage[]
+  linked_codex?: boolean
   messages_omitted?: boolean | null
   display_messages?: TranscriptMessage[] | null
   message_count: number
@@ -5832,6 +5834,8 @@ export interface StoredTranscriptParams {
 }
 export interface StoredTranscriptResult {
   session_id: string
+  linked_codex?: boolean
+  linked_history_identity?: string | null
   rows: StoredTranscriptRow[]
   next_cursor: string | null
   reset: boolean
@@ -5856,6 +5860,7 @@ export interface StoredTranscriptRow {
   labels?: ToolLabel[] | null
   reasoning?: string | null
   row_kind: 'message' | 'compaction'
+  codex_native_row_id?: string | null
   compacted_messages?: number | null
   truncated?: boolean | null
   [key: string]: unknown

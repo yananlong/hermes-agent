@@ -145,10 +145,17 @@ class CanonicalSnapshot(Result):
     session_id: str
     stored_session_id: str
     messages: list[TranscriptMessage]
-    # True when the resume asked ``omit_messages``: ``messages`` is empty and the client pages the transcript.
+    # True when the owner directs the client to page the authoritative linked Codex transcript.
+    linked_codex: bool = False
+    # Opaque binding of the linked native thread this snapshot answered for (profile, session, owner
+    # row, thread): a client holds it across its pages and refuses a page whose binding differs,
+    # so a re-link mid-read can never splice two threads. Absent for an ordinary session.
+    linked_history_identity: str | None = None
+    # True when the resume asked ``omit_messages`` or ``linked_codex``: the client pages the transcript.
     messages_omitted: bool | None = None
     # Present only when ``display_projection`` was asked: the rows as main's TUI rendered them.
     display_messages: list[TranscriptMessage] | None = None
+    # A linked native transcript may have no cheap count when history is omitted.
     message_count: int
     running: bool
     authority_epoch: int

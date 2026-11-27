@@ -36,6 +36,10 @@ function detachFixture() {
     const wire = canonicalRequest(method, original)
     const sid = String(wire.params.session_id)
 
+    if (wire.method === 'session.transcript') {
+      return Promise.resolve({ session_id: sid, rows: [], next_cursor: null, reset: true })
+    }
+
     if (wire.method === 'session.resume') {
       const token = subscriptions.get(sid) ?? `sub-${subscriptions.size + 1}`
       subscriptions.set(sid, token)

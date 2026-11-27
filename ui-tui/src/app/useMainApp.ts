@@ -325,13 +325,27 @@ export function useMainApp(gw: GatewayClient) {
 
   const [historyItems, setHistoryItemsState] = useState<Msg[]>(() => [{ kind: 'intro', role: 'system', text: '' }])
   const [historyGeneration, setHistoryGeneration] = useState(0)
+  const linkedHistoryMode = useRef(false)
+  const linkedHistoryLoader = useRef<(direction: 'older' | 'newer') => void>(() => {})
+  const setLinkedHistoryMode = useCallback((linked: boolean) => {
+    linkedHistoryMode.current = linked
+  }, [])
 
   const setHistoryItems = useCallback<StateSetter<Msg[]>>(value => {
     if (typeof value !== 'function') {
       setHistoryGeneration(generation => generation + 1)
     }
 
-    setHistoryItemsState(previous => capTranscriptHistory(typeof value === 'function' ? value(previous) : value))
+    setHistoryItemsState(previous => {
+      const next = typeof value === 'function' ? value(previous) : value
+      if (!linkedHistoryMode.current) return capTranscriptHistory(next)
+      // Native pages have their own byte budget; the live tail keeps the ordinary row cap.
+      const linked = next.filter(message => message.linkedHistory)
+      const ordinary = capTranscriptHistory(next.filter(message => !message.linkedHistory))
+      return ordinary[0]?.kind === 'intro'
+        ? [ordinary[0], ...linked, ...ordinary.slice(1)]
+        : [...linked, ...ordinary]
+    })
   }, [])
 
   const [lastUserMsg, setLastUserMsg] = useState('')
@@ -584,7 +598,18 @@ export function useMainApp(gw: GatewayClient) {
   })
 
   const scrollWithSelection = useCallback(
-    (delta: number) => scrollWithSelectionBy(delta, { scrollRef, selection }),
+    (delta: number) => {
+      const scroll = scrollRef.current
+      const reachesTop = delta < 0 && scroll && scroll.getScrollTop() + scroll.getPendingDelta() + delta <= 0
+      const reachesBottom = delta > 0 && scroll && scroll.getScrollTop() + scroll.getPendingDelta() + delta +
+        scroll.getViewportHeight() >= scroll.getScrollHeight()
+      scrollWithSelectionBy(delta, { scrollRef, selection })
+      if (reachesTop) {
+        linkedHistoryLoader.current('older')
+      } else if (reachesBottom) {
+        linkedHistoryLoader.current('newer')
+      }
+    },
     [selection]
   )
 
@@ -673,6 +698,7 @@ export function useMainApp(gw: GatewayClient) {
     rpc,
     scrollRef,
     setHistoryItems,
+    setLinkedHistoryMode,
     setLastUserMsg,
     setSessionStartedAt,
     setStickyPrompt,
@@ -680,6 +706,8 @@ export function useMainApp(gw: GatewayClient) {
     setVoiceRecording,
     sys
   })
+
+  linkedHistoryLoader.current = session.loadLinkedHistory
 
   exitClose.close = session.closeForExit
 

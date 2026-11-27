@@ -283,6 +283,9 @@ export interface SessionActivateResponse {
   info?: SessionInfo
   message_count?: number
   messages: TranscriptMessage[]
+  /** True when the row is a linked Codex pointer: its transcript is native, so `messages` is empty
+   *  and the client pages `session.transcript` (order `latest`). */
+  linked_codex?: boolean
   pending_connection?: ConnectionRequestPayload | null
   running?: boolean
   session_id: string

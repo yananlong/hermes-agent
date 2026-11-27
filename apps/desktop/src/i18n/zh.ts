@@ -4356,6 +4356,9 @@ export const zhOverrides = {
     thread: {
       loadingSession: '正在加载会话',
       showEarlier: '显示更早的消息',
+      historyChanged: "对话历史已更改。请重新加载以查看更早的消息。",
+      historyLoadFailed: "无法加载更早的消息，请重试。",
+      reloadHistory: "重新加载历史",
       loadingResponse: 'Hermes 正在加载回复',
       loadingLocalModel: model => `正在将 ${model} 载入内存`,
       processingPrompt: '正在处理提示词',

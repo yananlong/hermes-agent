@@ -4551,6 +4551,9 @@ export const en: Translations = {
     thread: {
       loadingSession: 'Loading session',
       showEarlier: 'Show earlier messages',
+      historyChanged: "The conversation history changed. Reload it to continue paging.",
+      historyLoadFailed: "Could not load earlier messages. Try again.",
+      reloadHistory: "Reload history",
       loadingResponse: 'Hermes is loading a response',
       loadingLocalModel: model => `Loading ${model} into memory`,
       processingPrompt: 'Processing prompt',

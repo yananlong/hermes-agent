@@ -28,6 +28,8 @@ export interface TranscriptTailState {
    *  resolved OWNER is the map key, not this field: an ambient read must stay
    *  ambient even once the server has named its profile. */
   profile?: TranscriptProfileScope
+  /** Cursor is scoped to this owner and anchored to the native history snapshot. */
+  native?: { identity: string; cursor: string | null; latestIds: string[]; error?: 'changed' | 'unavailable' }
 }
 
 export type TranscriptProfileScope =
@@ -42,7 +44,7 @@ export const $transcriptTailBySessionId = atom<Record<string, TranscriptTailStat
 const TRANSCRIPT_TAIL_LIMIT = 256
 let transcriptTailOrder: string[] = []
 
-type TailPage = Pick<SessionMessagesResponse, 'messages' | 'pagination'>
+type TailPage = Pick<SessionMessagesResponse, 'messages' | 'pagination' | 'native_history'>
 
 function normalizedScope(profile?: TranscriptProfileScope): { connectionId: string; profile: string } | null {
   // A bare string is the legacy "named profile" spelling: it always names a
@@ -130,6 +132,18 @@ export function pageHonorsLatestOrder(page: TailPage): boolean {
 
 /** Paging state after `page`: the next older offset and whether older rows may exist. */
 export function tailStateFromPage(page: TailPage, profile?: TranscriptProfileScope): TranscriptTailState {
+  if (page.native_history) {
+    return {
+      nextOffset: 0,
+      possiblyTruncated: page.native_history.next_cursor !== null,
+      profile,
+      native: {
+        identity: page.native_history.identity,
+        cursor: page.native_history.next_cursor,
+        latestIds: page.messages.flatMap(row => row.codex_native_row_id ? [row.codex_native_row_id] : [])
+      }
+    }
+  }
   const pagination = page.pagination
 
   // No pagination metadata is a legacy backend that ignored the paging query
@@ -156,6 +170,7 @@ function sameTailState(a: TranscriptTailState, b: TranscriptTailState): boolean 
   return (
     a.nextOffset === b.nextOffset &&
     a.possiblyTruncated === b.possiblyTruncated &&
+    JSON.stringify(a.native ?? null) === JSON.stringify(b.native ?? null) &&
     JSON.stringify(a.profile ?? null) === JSON.stringify(b.profile ?? null)
   )
 }
@@ -206,6 +221,24 @@ export function recordTranscriptTail(
   const key = transcriptTailKey(storedSessionId, owner)
   const existing = $transcriptTailBySessionId.get()[key]
 
+  // Refreshing the newest page must not move the cursor past older pages
+  // already loaded. Native cursors remain anchored when new turns append.
+  if (existing?.native && page.native_history) {
+    const latestIds = page.messages.flatMap(row => row.codex_native_row_id ? [row.codex_native_row_id] : [])
+    const oldIds = new Set(existing.native.latestIds)
+    const noOverlap = existing.native.identity !== page.native_history.identity ||
+      (latestIds.length > 0 && oldIds.size > 0 && !latestIds.some(id => oldIds.has(id)))
+    setTranscriptTailEntry(key, {
+      ...existing,
+      native: {
+        ...existing.native,
+        latestIds: noOverlap ? existing.native.latestIds : latestIds,
+        ...(noOverlap ? { error: 'changed' as const } : {})
+      }
+    })
+    return
+  }
+
   // This runs before the active refresh decides whether the page is
   // authoritative (use-background-sync). A transient zero-row read must not
   // turn a known-truncated tail into "nothing earlier", or "Show earlier"
@@ -228,7 +261,33 @@ export function recordTranscriptBackfillPage(
     return
   }
 
-  setTranscriptTailEntry(entry[0], tailStateFromPage(page, entry[1].profile))
+  const next = tailStateFromPage(page, entry[1].profile)
+  if (next.native && entry[1].native) {
+    next.native.latestIds = entry[1].native.latestIds
+  }
+  setTranscriptTailEntry(entry[0], next)
+}
+
+/** A deliberate reload replaces an invalidated native cursor. */
+export function resetNativeTranscriptTail(
+  storedSessionId: string,
+  page: TailPage,
+  profile?: TranscriptProfileScope
+): void {
+  const entry = resolveTailEntry(storedSessionId, profile)
+  if (entry && page.native_history) {
+    setTranscriptTailEntry(entry[0], tailStateFromPage(page, entry[1].profile))
+  }
+}
+
+export function setNativeHistoryError(
+  storedSessionId: string,
+  profile: TranscriptProfileScope | undefined,
+  error: 'changed' | 'unavailable'
+): void {
+  const entry = resolveTailEntry(storedSessionId, profile)
+  if (!entry?.[1].native) return
+  setTranscriptTailEntry(entry[0], { ...entry[1], native: { ...entry[1].native, error } })
 }
 
 /**
@@ -265,7 +324,7 @@ export function rewindTranscriptTail(
 
   const entry = resolveTailEntry(storedSessionId, profile)
 
-  if (!entry) {
+  if (!entry || entry[1].native) {
     return false
   }
 

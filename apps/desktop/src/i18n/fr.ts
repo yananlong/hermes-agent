@@ -4972,6 +4972,9 @@ export const frOverrides = {
     thread: {
       loadingSession: 'Chargement de la session',
       showEarlier: 'Afficher les messages précédents',
+      historyChanged: "L’historique a changé. Rechargez-le pour afficher les messages précédents.",
+      historyLoadFailed: "Impossible de charger les messages précédents. Réessayez.",
+      reloadHistory: "Recharger l’historique",
       loadingResponse: 'Hermes charge une réponse',
       loadingLocalModel: model => `Chargement de ${model} en mémoire`,
       processingPrompt: "Traitement de l'invite",

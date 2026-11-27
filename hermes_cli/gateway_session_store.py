@@ -75,6 +75,7 @@ class GatewaySessionStore:
         self.persistence = None  # the storage interface reader ``_reader`` reads through
         self._handles = None
         self._create_parameters = None
+        self._linked_histories: dict[str, object] = {}
 
     def __bool__(self):
         return not self.connection.final
@@ -134,6 +135,40 @@ class GatewaySessionStore:
         return refused
 
     # -- session lifecycle -----------------------------------------------------------------
+    def _linked_codex(self, session_id):
+        reader = self._db()
+        if reader is None or reader.get_session(session_id) is None:
+            return False
+        from gateway.session_linked_codex import linked_thread_id
+        return linked_thread_id(self.persistence, session_id) is not None
+
+    def linked_history(self, session_id, *, refresh=False):
+        """The current session's display-only native window, fetched through its owner."""
+        if not self._linked_codex(session_id):
+            return None
+        if refresh or session_id not in self._linked_histories:
+            from hermes_cli.linked_history.pages import LinkedHistory
+            history = LinkedHistory(self.call, session_id)
+            history.load_initial()
+            self._linked_histories[session_id] = history
+        return self._linked_histories[session_id]
+
+    def get_resume_conversations(self, session_id):
+        """Keep the model projection local; linked displays belong to the native thread."""
+        reader = self._db()
+        if reader is None:
+            return [], []
+        model, display = reader.get_resume_conversations(session_id)
+        if not self._linked_codex(session_id):
+            return model, display
+        try:
+            from hermes_cli.linked_history.pages import conversation_rows
+            return model, conversation_rows(self.linked_history(session_id, refresh=True).rows)
+        except GatewayClientError as exc:
+            self._linked_histories.pop(session_id, None)
+            return model, [{"role": "system", "display_kind": "codex_history_unavailable",
+                            "content": f"Linked Codex history is unavailable: {exc}. Try /history again."}]
+
     def call(self, method, **params):
         return self.connection.call(method, **params)
 
@@ -162,8 +197,14 @@ class GatewaySessionStore:
         refuses it instead, as the thin client does."""
         if session_id in self.snapshots:
             return self.snapshots[session_id]
-        snapshot = self.connection.resume(self.call, session_id, typed=typed)
+        omit = self._linked_codex(session_id)
+        if omit:
+            snapshot = self.connection.resume(self.call, session_id, typed=typed, omit_messages=True)
+        else:
+            snapshot = self.connection.resume(self.call, session_id, typed=typed)
         self._adopt(snapshot)
+        if omit:
+            self.connection.state(snapshot["stored_session_id"]).omit_messages = True
         return snapshot
 
     def open_session(self, cli, launch=None):

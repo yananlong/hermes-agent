@@ -70,6 +70,7 @@ class SessionState:
         self.subscription_id = None
         self.execution_generation = None
         self.messages: list = []
+        self.omit_messages = False
         self.usage: dict = {}
         # Called (loop thread) with each ``session.usage`` payload; GatewayAgent maps it onto main's
         # agent attributes, so a frame landing between turns is never dropped with the turn queue.
@@ -299,35 +300,37 @@ class GatewayConnection:
             if state.subscription_id is None:
                 continue
             try:
-                state.adopt_snapshot(await self._resume(client, session_id))
+                state.adopt_snapshot(await self._resume(client, session_id, omit_messages=state.omit_messages))
             except GatewayClientError as exc:
                 if str(exc) not in RESUME_GONE:
                     raise
                 logger.debug("session.resume %s after reconnect: %s", session_id, exc)
                 state.subscription_id = None
 
-    def resume(self, call, session_id, *, typed=False):
+    def resume(self, call, session_id, *, typed=False, omit_messages=False):
         """``session.resume`` through ``call`` (the store's attach), re-supplying :attr:`launch_api_key`;
         a refusal of the keyed resume is :func:`_resume_plain`'s to decide. ``typed``: the user resumes with
         a typed ``--api-key``."""
         key = self.launch_api_key
+        extra = {"omit_messages": True} if omit_messages else {}
         if key:
             try:
-                return call("session.resume", session_id=session_id, api_key=key)
+                return call("session.resume", session_id=session_id, api_key=key, **extra)
             except GatewayRPCError as exc:
                 _resume_plain(exc, session_id, typed)
-        return call("session.resume", session_id=session_id)
+        return call("session.resume", session_id=session_id, **extra)
 
-    async def _resume(self, client, session_id):
+    async def _resume(self, client, session_id, *, omit_messages=False):
         """:meth:`resume` for :meth:`_resubscribe`, awaited on this loop so a cancelled reconnect cancels
         its request. A reconnect types nothing: never ``typed``."""
         key = self.launch_api_key
+        extra = {"omit_messages": True} if omit_messages else {}
         if key:
             try:
-                return await client.rpc("session.resume", session_id=session_id, api_key=key)
+                return await client.rpc("session.resume", session_id=session_id, api_key=key, **extra)
             except GatewayRPCError as exc:
                 _resume_plain(exc, session_id, typed=False)
-        return await client.rpc("session.resume", session_id=session_id)
+        return await client.rpc("session.resume", session_id=session_id, **extra)
 
     async def _pump(self, client):
         while True:
@@ -401,7 +404,8 @@ class GatewayConnection:
         """``session.resume`` after a replay gap; its snapshot names the subscription to detach."""
         state = self.state(session_id)
         gaps = state.gaps
-        snapshot = self.call("session.resume", session_id=session_id, abandon=abandon)
+        extra = {"omit_messages": True} if state.omit_messages else {}
+        snapshot = self.call("session.resume", session_id=session_id, abandon=abandon, **extra)
         state.adopt_snapshot(snapshot)
         state.attached_gaps = gaps  # a gap during this resume (or a wait given up) still owes one
         return snapshot
