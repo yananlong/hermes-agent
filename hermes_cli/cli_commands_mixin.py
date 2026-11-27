@@ -686,6 +686,8 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin, CLIHandoffMixin):
         model_history, display_history = self._session_db.get_resume_conversations(read_id)
         self.conversation_history = _without_session_meta(model_history)
         self._resume_display_history = _without_session_meta(display_history)
+        self._resume_read_id = read_id
+        self._resume_history_loaded_for = target_id
         with suppress(Exception):  # re-open the target session so it's not marked as ended
             self._session_db.reopen_session(target_id)
         _sync_agent_to_session(self, target_id, parent_session_id=old_session_id, reason="resume")
@@ -694,7 +696,7 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin, CLIHandoffMixin):
         # Count only user-originated turns: legacy compaction handoffs are durable role=user rows
         # without display_kind.
         msg_count = len([m for m in self._resume_display_history if is_user_originated_turn(m)])
-        if self.conversation_history:
+        if self.conversation_history or self._resume_display_history:
             _cp("  " + _tn("resume.resumed", msg_count, session_id=target_id, title=title_part,
                            total=len(self.conversation_history)))
             self._display_resumed_history()

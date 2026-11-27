@@ -423,6 +423,19 @@ class CLISessionMixin:
     def show_history(self):
         """Display conversation history."""
         from cli import _cli_visible_print
+        from hermes_cli.gateway_client import GatewayClientError
+        session_id = (getattr(self, "_resume_read_id", None)
+                      if getattr(self, "_resume_history_loaded_for", None) == self.session_id else None) or self.session_id
+        try:
+            linked_history = getattr(self._session_db, "linked_history", None) if self._session_db else None
+            history = linked_history(session_id, refresh=True) if callable(linked_history) else None
+        except GatewayClientError as exc:
+            _cli_visible_print(f"  Linked Codex history is unavailable: {exc}")
+            return
+        if history is not None:
+            from hermes_cli.linked_history.viewer import show_linked_history
+            show_linked_history(history)
+            return
         if not self.conversation_history:
             if not self._show_recent_sessions(reason="history"):
                 _cli_visible_print(t("cli.session.history_empty"))
