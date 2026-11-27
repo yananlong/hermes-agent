@@ -451,6 +451,18 @@ Switch back at any time:
 
 Effective on the next session. The Codex managed block stays in `~/.codex/config.toml` so you can re-enable later without losing config — or remove it manually if you prefer.
 
+## Linked Codex threads
+
+A session linked to a thread that already lives in Codex (`/link-thread codex` in the TUI or classic CLI, or the Desktop's Codex thread list) is a pointer to that thread, and some of the general rules on this page work differently for it:
+
+- **It always runs on this runtime.** The profile's `model.provider`, `model.base_url` and `/codex-runtime` setting are not consulted for a linked session, whether it is driven from the Desktop app, `hermes serve`, the TUI or the classic CLI.
+- **Codex's own login authenticates it.** `codex login` is enough. No Hermes API key, `hermes auth add openai-codex` or credential for the profile's provider is needed, and the classic CLI's provider-credential check is skipped for that session only.
+- **Codex owns the thread's model and settings.** Hermes resumes the thread without sending its own model, model provider, personality or developer instructions, and shows the model Codex reports for the thread. A one-turn override (`/model --once`, `/moa`) is refused with `This linked thread runs the model chosen in Codex. Change the model there.`
+- **A failed resume reports an error and never starts a new thread.** Unlike an ordinary session, a linked thread that Codex cannot hand back is not replaced by a fresh one, and the turn does not fail over to `fallback_providers`.
+- **`/compress` compacts the native thread** through Codex's own compaction, not with a Hermes summary.
+
+A session whose stored settings cannot be read at all is refused rather than guessed to be ordinary, since Hermes cannot tell whether it points at a native thread; start a new session with `/new`.
+
 ## Limitations
 
 This runtime is **opt-in beta**. Working as of Hermes Agent 2026.5 + Codex CLI 0.130.0:

@@ -753,16 +753,22 @@ def _store_codex_thread_id(agent, thread_id: str | None) -> None:
                   args=(session_id, {_CODEX_THREAD_ID_KEY: thread_id}))
 
 
-def _sync_linked_codex_model(agent) -> None:
+def _sync_linked_codex_model(agent, thread_id: str) -> None:
     """Publish Codex's effective model before a linked turn, or fail rather than show stale metadata."""
     model = getattr(agent._codex_session, "effective_model", None)
     if not isinstance(model, str) or not model.strip():
         raise RuntimeError("Codex did not report the linked thread's effective model")
+    if not _is_linked_codex_thread(agent) or _stored_codex_thread_id(agent) != thread_id:
+        raise RuntimeError("The linked Codex thread changed while it was being resumed")
     from agent.agent_init_session import agent_interface
     db, session_id = agent._session_db, agent.session_id
     store = agent_interface(agent)
+    # Two writers can own a linked row: the session store's interface handle, or a managed worker's
+    # RuntimeSessionStore, whose owner re-checks the pointer and thread id under its fenced receipt.
+    worker_update = getattr(db, "update_linked_codex_model", None) if store is None else None
+    if store is None and not callable(worker_update):
+        raise RuntimeError("The linked Codex session has no store that can record its model")
     reader = store.sessions.get if store is not None else db.get_session
-    update = store.sessions.update_model if store is not None else db.update_session_model
 
     def row_model(row):
         return row.model if store is not None else row.get("model")
@@ -770,14 +776,19 @@ def _sync_linked_codex_model(agent) -> None:
     row = reader(session_id)
     if row is None:
         raise RuntimeError("The linked Codex session is no longer available")
-    if row_model(row) != model:
+    if row_model(row) != model or store is None:
         try:
-            update(session_id, model)
+            if store is not None:
+                store.sessions.update_model(session_id, model)
+            else:
+                worker_update(session_id, model, thread_id)
             updated = reader(session_id)
         except Exception as exc:
             raise RuntimeError("Could not save the linked Codex thread's effective model") from exc
         if updated is None or row_model(updated) != model:
             raise RuntimeError("Could not save the linked Codex thread's effective model")
+    if not _is_linked_codex_thread(agent) or _stored_codex_thread_id(agent) != thread_id:
+        raise RuntimeError("The linked Codex thread changed while it was being resumed")
     previous = getattr(agent, "model", None)
     agent.model = model
     if previous != model:
@@ -789,13 +800,17 @@ def _start_codex_thread(agent) -> str:
     (unknown id, rollout locked by a killed app-server, different thread) is dropped from the session row,
     the user is told once on the status rail, and a fresh thread starts on the same client."""
     from agent.transports.codex_app_server_session import CodexThreadResumeError
+    # The session's own linked flag keeps a resume fail-closed even if the row lost its marker meanwhile;
+    # ``is True`` so a stand-in without the property never counts as linked.
+    linked = (getattr(agent._codex_session, "preserves_thread_settings", False) is True
+              or _is_linked_codex_thread(agent))
     try:
         thread_id = agent._codex_session.ensure_started()
-        if _is_linked_codex_thread(agent):
-            _sync_linked_codex_model(agent)
+        if linked:
+            _sync_linked_codex_model(agent, thread_id)
         return thread_id
     except CodexThreadResumeError as exc:
-        if _is_linked_codex_thread(agent):
+        if linked:
             raise
         logger.warning("%s; starting a new codex thread (session=%s)", exc.message, getattr(agent, "session_id", None))
         _store_codex_thread_id(agent, None)

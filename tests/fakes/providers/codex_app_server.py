@@ -176,6 +176,11 @@ REQUEST_PARAMS: dict[str, Spec] = {
                                   "sessionStartSource": nullable(enum("startup", "clear")),
                                   "threadSource": nullable(STR)}),
     "thread/resume": obj({"threadId": STR}, _THREAD_SETTINGS),
+    "thread/read": obj({"threadId": STR}, {"includeTurns": BOOL}),
+    "thread/turns/list": obj({"threadId": STR}, {
+        "cursor": nullable(STR), "limit": INT, "sortDirection": enum("asc", "desc"),
+        "itemsView": enum("full"),
+    }),
     "turn/start": obj({"threadId": STR, "input": array(USER_INPUT)}, {
         "approvalPolicy": _ASK_FOR_APPROVAL, "approvalsReviewer": _THREAD_SETTINGS["approvalsReviewer"],
         "clientUserMessageId": nullable(STR), "cwd": nullable(STR), "effort": nullable(STR), "model": nullable(STR),
@@ -393,6 +398,28 @@ class FakeAppServer:
         self.thread_id = thread_id
         self.send({"id": rid, "result": self._thread_response(thread_id, data)})
 
+    def _thread_read(self, rid: Any, params: dict) -> None:
+        data = self.store.load()
+        thread_id = params["threadId"]
+        if thread_id not in data["threads"]:
+            self.error(rid, f"thread not found: {thread_id}")
+            return
+        self.send({"id": rid, "result": {"thread": self._thread_payload(thread_id, data)}})
+
+    def _thread_turns_list(self, rid: Any, params: dict) -> None:
+        data = self.store.load()
+        thread_id = params["threadId"]
+        if thread_id not in data["threads"]:
+            self.error(rid, f"thread not found: {thread_id}")
+            return
+        turns = list(data["threads"][thread_id]["turns"])
+        if params.get("sortDirection") == "desc":
+            turns.reverse()
+        start = int(params.get("cursor") or 0)
+        end = start + params.get("limit", 100)
+        self.send({"id": rid, "result": {"data": turns[start:end],
+                                           "nextCursor": str(end) if end < len(turns) else None}})
+
     def _turn_start(self, rid: Any, params: dict) -> None:
         data = self.store.load()
         thread_id = params["threadId"]
@@ -430,6 +457,7 @@ class FakeAppServer:
 
     _HANDLERS: dict[str, Callable[..., None]] = {
         "initialize": _initialize, "thread/start": _thread_start, "thread/resume": _thread_resume,
+        "thread/read": _thread_read, "thread/turns/list": _thread_turns_list,
         "turn/start": _turn_start, "turn/interrupt": _turn_interrupt, "turn/steer": _turn_steer,
         "thread/compact/start": _compact_start,
     }

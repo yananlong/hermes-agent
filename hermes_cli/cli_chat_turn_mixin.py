@@ -20,7 +20,7 @@ from typing import Optional
 
 from agent.i18n import t
 
-from hermes_cli.cli_agent_setup_mixin import _retire_agent
+from hermes_cli.cli_agent_setup_mixin import _bound_to_linked_codex_thread, _retire_agent
 
 
 def _program_outcome(result):
@@ -167,7 +167,7 @@ class CLIChatTurnMixin:
         self._last_turn_interrupted = False
         self._last_turn_failed = False
 
-        if not self._ensure_runtime_credentials():
+        if not (_bound_to_linked_codex_thread(self) or self._ensure_runtime_credentials()):
             return None
 
         turn_route = self._resolve_turn_agent_config(message)

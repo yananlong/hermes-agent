@@ -92,6 +92,24 @@ class DummyAgent:
         self.events.append((name, payload))
 
 
+@pytest.fixture
+def linked_store(tmp_path):
+    """A real profile store holding a linked Codex pointer row for the dummy agent's session."""
+    from persistence_assembly import open_persistence, profile_scope
+    from tests.fixtures.storage_seed import seed_session
+    db = open_persistence(profile_scope(home=tmp_path))
+    seed_session(db, "hermes-session-1", "cli")
+    db.sessions.patch_model_config("hermes-session-1", {"codex_linked_thread": True, "codex_thread_id": "linked-thread"})
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _bind_linked_row(agent, store):
+    agent._session_db = agent.persistence = store
+
+
 def test_codex_app_server_native_auto_mode_leaves_thread_compaction_to_codex():
     agent = DummyAgent(
         TurnResult(thread_id="thread-1", turn_id="compact-turn-1")
@@ -113,15 +131,13 @@ def test_codex_app_server_native_auto_mode_leaves_thread_compaction_to_codex():
     assert agent.events == []
 
 
-def test_manual_compaction_opens_linked_thread_before_first_turn(monkeypatch):
+def test_manual_compaction_opens_linked_thread_before_first_turn(monkeypatch, linked_store):
     import agent.codex_runtime as runtime
 
     agent = DummyAgent(TurnResult(thread_id="linked-thread", turn_id="compact-turn", compacted=True))
     linked_session = agent._codex_session
     agent._codex_session = None
-    agent._session_db = SimpleNamespace(get_session_model_config_value=lambda _sid, key: {
-        "codex_linked_thread": True, "codex_thread_id": "linked-thread"
-    }.get(key))
+    _bind_linked_row(agent, linked_store)
     opened = []
 
     def open_linked(candidate, messages):
@@ -137,15 +153,13 @@ def test_manual_compaction_opens_linked_thread_before_first_turn(monkeypatch):
     assert linked_session.closed is True and agent._codex_session is None
 
 
-def test_manual_compaction_releases_linked_writer_when_startup_fails(monkeypatch):
+def test_manual_compaction_releases_linked_writer_when_startup_fails(monkeypatch, linked_store):
     import agent.codex_runtime as runtime
 
     agent = DummyAgent(TurnResult(thread_id="linked-thread"))
     linked_session = agent._codex_session
     agent._codex_session = None
-    agent._session_db = SimpleNamespace(get_session_model_config_value=lambda _sid, key: {
-        "codex_linked_thread": True, "codex_thread_id": "linked-thread"
-    }.get(key))
+    _bind_linked_row(agent, linked_store)
     monkeypatch.setattr(runtime, "_ensure_codex_session", lambda candidate, _messages: setattr(candidate, "_codex_session", linked_session))
     def fail_start(_candidate):
         raise RuntimeError("could not resume")
@@ -161,11 +175,9 @@ def test_manual_compaction_releases_linked_writer_when_startup_fails(monkeypatch
     TurnResult(thread_id="linked-thread", compacted=False),
     TurnResult(thread_id="different-thread", compacted=True),
 ])
-def test_linked_compaction_rejects_failures_and_unconfirmed_or_wrong_thread(result):
+def test_linked_compaction_rejects_failures_and_unconfirmed_or_wrong_thread(result, linked_store):
     agent = DummyAgent(result)
-    agent._session_db = SimpleNamespace(get_session_model_config_value=lambda _sid, key: {
-        "codex_linked_thread": True, "codex_thread_id": "linked-thread"
-    }.get(key))
+    _bind_linked_row(agent, linked_store)
     with pytest.raises(RuntimeError):
         compress_context(agent, [], "system", force=True)
 

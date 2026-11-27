@@ -185,7 +185,9 @@ def row_model_config(store, session_id: str) -> dict:
                 f"session {session_id} could not be read from its store") from exc
         if record is None:
             return {}
-        raw = getattr(record, "model_config", None)
+        raw = getattr(record, "model_config_json", None)
+        if raw is None:
+            raw = getattr(record, "model_config", None)
     else:
         get_session = getattr(store, "get_session", None)
         if not callable(get_session):

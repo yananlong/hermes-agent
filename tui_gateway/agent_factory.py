@@ -613,6 +613,34 @@ def _resolve_agent_model_runtime(model_override, provider_override) -> tuple[str
     return model, resolution.runtime
 
 
+def _linked_codex_agent_runtime(session_db, persistence, session_id) -> tuple[str, dict] | None:
+    """(model, runtime) for a linked Codex pointer, else None: the gateway's native route, never the profile
+    provider's. Codex authenticates the thread and owns its model, so a profile provider that needs a login or
+    picks its wire per model (``_rederive_per_model_route``) must not decide how the thread runs."""
+    from agent.agent_init_session import writer_interface
+    store = writer_interface(persistence, session_db) or session_db
+    if not session_id or store is None:
+        return None
+    from gateway.session_linked_codex import linked_codex_session_route
+    from persistence.core.errors import AuthorityRefusal
+    try:
+        linked = linked_codex_session_route(store, session_id)
+    except AuthorityRefusal as exc:
+        # Unreadable settings are not provably linked: the agent's pointer guard refuses every turn
+        # (agent/linked_foreign_turn.py) while the session itself stays resumable and readable.
+        # A draft has no row until its first prompt, and a pointer cannot exist without one.
+        sessions = getattr(store, "sessions", None)
+        get_row = getattr(sessions, "get", None) or getattr(store, "get_session", None)
+        if exc.field == "model_config" or (callable(get_row) and get_row(session_id) is None):
+            return None
+        raise
+    if linked is None:
+        return None
+    model, runtime = linked
+    # Before the first resume reports Codex's model, the profile's names the agent; the turn never sends it.
+    return model or _resolve_model(), dict(runtime)
+
+
 def _rederive_per_model_route(model: str, runtime: dict) -> None:
     """A row's persisted api_mode/base_url were written for whichever model the session last ran. Providers
     that pick the wire per model (OpenCode Zen/Go, Nous, profiles with api_mode_for_model) must re-derive both from the target model,
@@ -671,7 +699,10 @@ def _make_agent(
     from agent.shell_hooks import register_from_config
     register_from_config(cfg)
     system_prompt = _startup_system_prompt(cfg, session_id or key)
-    model, runtime = _resolve_agent_model_runtime(model_override, provider_override)
+    store_db = session_db if session_db is not None else _get_db()
+    store_persistence = persistence if session_db is not None else _launch_persistence()
+    model, runtime = (_linked_codex_agent_runtime(store_db, store_persistence, session_id)
+                      or _resolve_agent_model_runtime(model_override, provider_override))
     fallback_notice = runtime.pop("_fallback_notice", None)
     _pr = _load_provider_routing()
     platform = _resolve_agent_platform(platform_override)
@@ -688,9 +719,8 @@ def _make_agent(
         reasoning_config=(
             reasoning_config_override if reasoning_config_override is not None else _load_reasoning_config(str(model or ""))),
         service_tier=service_tier_override if service_tier_override is not None else _load_service_tier(),
-        enabled_toolsets=onboarding_toolsets(_load_enabled_toolsets(platform),
-                                             session_db if session_db is not None else _get_db(), session_id or key,
-                                             persistence=persistence if session_db is not None else _launch_persistence()),
+        enabled_toolsets=onboarding_toolsets(_load_enabled_toolsets(platform), store_db, session_id or key,
+                                             persistence=store_persistence),
         disabled_toolsets=_load_disabled_toolsets(),
         # OpenRouter provider_routing prefs (gateway + CLI parity).
         providers_allowed=_pr.get("only"), providers_ignored=_pr.get("ignore"), providers_order=_pr.get("order"),
@@ -700,8 +730,7 @@ def _make_agent(
         # The dashboard login identity reaches memory providers as the runtime user, like a gateway user id.
         # Builds that run before the record exists (branch, eager resume, compute host) pass it explicitly.
         user_id=auth_user_id if auth_user_id is not None else _session_auth_user_id(session),
-        session_db=session_db if session_db is not None else _get_db(),
-        persistence=persistence if session_db is not None else _launch_persistence(),
+        session_db=store_db, persistence=store_persistence,
         ephemeral_system_prompt=system_prompt or None,
         checkpoints_enabled=_resolve_checkpoints_enabled(cfg),
         pass_session_id=is_truthy_value(os.environ.get("HERMES_TUI_PASS_SESSION_ID")),

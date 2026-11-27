@@ -38,7 +38,7 @@ from agent.primary_runtime_snapshot import _snapshot_primary_runtime
 from agent.process_bootstrap import _install_safe_stdio
 from agent.subdirectory_hints import SubdirectoryHintTracker
 from agent.agent_init_memory_provider import _memory_provider_init_kwargs, resolve_memory_provider
-from agent.agent_init_session import _publish_session_id, stand_in_interface
+from agent.agent_init_session import _publish_session_id, init_linked_codex_client, stand_in_interface
 from agent.think_scrubber import StreamingThinkScrubber
 from agent.tool_guardrails import (
     ToolCallGuardrailConfig, ToolCallGuardrailController
@@ -926,8 +926,7 @@ def _init_openai_client(agent, api_key, base_url, fallback_model, _provider_time
 
 
 def _build_client(agent, api_key, base_url, fallback_model):
-    # LLM client per wire mode (raw_codex=True: the main agent needs direct
-    # responses.stream()). One provider/model timeout up front so every path applies it.
+    # LLM client per wire mode (raw_codex=True: direct responses.stream()); one timeout up front for every path.
     agent._anthropic_client = None
     agent._is_anthropic_oauth = False
     _provider_timeout = get_provider_request_timeout(agent.provider, agent.model)
@@ -2152,7 +2151,8 @@ def init_agent(
     _init_prompt_cache_config(agent)
     _init_turn_state(agent, run_budget_seconds)
     _set_defaults(agent, _STREAM_STATE)
-    _build_client(agent, api_key, base_url, fallback_model)
+    if not init_linked_codex_client(agent, session_db, persistence, session_id):
+        _build_client(agent, api_key, base_url, fallback_model)
     _init_fallback_chain(agent, fallback_model)
     _load_tools(agent, enabled_toolsets, disabled_toolsets)
     persistence = persistence if persistence is not None else stand_in_interface(session_db)

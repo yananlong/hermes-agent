@@ -41,7 +41,7 @@ logger = logging.getLogger("gateway.run")
 _TIER_FROM_RUNNER = object()
 
 
-def _resolve_policy_agent_runtime(runner, policy, *, fallback=True, record_notice=True) -> tuple[str, dict]:
+def _resolve_policy_agent_runtime(runner, policy, *, source=None, fallback=True, record_notice=True) -> tuple[str, dict]:
     """``_resolve_session_agent_runtime`` for a session bound to a launch policy: the route's FROZEN
     config and launch credential, walking its own fallback chain on an AuthError unless
     ``fallback=False`` (a session control asking which route the session itself runs). Module-level
@@ -52,6 +52,11 @@ def _resolve_policy_agent_runtime(runner, policy, *, fallback=True, record_notic
     from gateway.session_worker_construct import route_runtime
     from gateway.session_authorities import active_authority
     authority = active_authority(runner)
+    if source is not None:
+        from gateway.session_linked_codex import linked_codex_source_route
+        if (linked := linked_codex_source_route(authority, source)) is not None:
+            linked_model, linked_runtime = linked
+            return linked_model or policy.current_model(authority), _runtime_agent_kwargs(linked_runtime)
     # A follow_profile_config session's route is the profile's current one, model and endpoint from one read.
     frozen, model = policy.effective(authority)
     provider = (frozen.get('model') or {}).get('provider')
@@ -214,7 +219,7 @@ class GatewayTurnPrepareMixin:
         set_pending_primary_auth_failure(None)
         policy = policy_for_source(self, source) if source is not None else None
         if policy is not None:
-            return _resolve_policy_agent_runtime(self, policy, fallback=fallback, record_notice=record_notice)
+            return _resolve_policy_agent_runtime(self, policy, source=source, fallback=fallback, record_notice=record_notice)
         skey = self._resolve_session_key_or_none(source, session_key)
         model = _resolve_gateway_model(user_config)
         if skey:
@@ -386,8 +391,12 @@ class GatewayTurnPrepareMixin:
             gateway_runtime = dict(config.get("gateway_runtime") or {})
             if row.model == model and all(gateway_runtime.get(k) == v for k, v in runtime.items()):
                 return
-            if any(config.get(flag) is True for flag in (
-                    "codex_linked_thread", "claude_linked_thread", "mistral_linked_thread")):
+            if config.get("codex_linked_thread") is True:
+                # Codex owns a linked thread's model; the resume publishes it (codex_runtime
+                # _sync_linked_codex_model). The agent's own label is the frozen policy's until a
+                # resume succeeds, so a failed one must not stamp the profile model onto the pointer.
+                return
+            if any(config.get(flag) is True for flag in ("claude_linked_thread", "mistral_linked_thread")):
                 # A linked foreign pointer row's binding (its top-level api_mode) names which runtime
                 # owns the transcript; a per-model HTTP route stamped beside it loses on every
                 # resume (persistence.gateway.routing routes a linked row from its own binding) and
