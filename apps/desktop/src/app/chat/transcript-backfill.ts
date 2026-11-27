@@ -645,6 +645,36 @@ async function fetchOlderPage(storedSessionId: string, tail: TranscriptTailState
 }
 
 /**
+ * Whether a just-fetched page still belongs to the tail it was read against.
+ *
+ * A native page carries the identity of the snapshot it was cut from; a
+ * `reset` or a different identity means rewind/compaction replaced the
+ * transcript while this page was in flight, so grafting it would splice two
+ * snapshots.
+ */
+function pageLeftItsSnapshot(page: SessionMessagesResponse, tail: TranscriptTailState): boolean {
+  const native = page.native_history
+
+  return Boolean(native) && (Boolean(native?.reset) || native?.identity !== tail.native?.identity)
+}
+
+/**
+ * Whether the walk is done: it either added rows, has nothing to page against,
+ * read a page the backend repeated, reached the top, or spent its page budget.
+ */
+function walkSettled(
+  state: { added: boolean; held: number; repeated: boolean; tail: TranscriptTailState; heldPages: number }
+): boolean {
+  return (
+    state.added ||
+    !state.held ||
+    state.repeated ||
+    !state.tail.possiblyTruncated ||
+    state.heldPages >= MAX_HELD_PAGES
+  )
+}
+
+/**
  * Fetch older pages until one adds rows to the store, or older pages run out.
  *
  * A refresh records its newest page as the tail, so the offset can point at
@@ -697,7 +727,7 @@ async function walkToOlderRows(
       continue
     }
 
-    if (page.native_history && (page.native_history.reset || page.native_history.identity !== tail.native?.identity)) {
+    if (pageLeftItsSnapshot(page, tail)) {
       setNativeHistoryError(storedSessionId, profile, 'changed')
       return undefined
     }
@@ -716,8 +746,9 @@ async function walkToOlderRows(
     const repeated = pageRows === previousPage
     previousPage = pageRows
     tail = transcriptTailState(storedSessionId, profile) ?? tail
+    heldPages += 1
 
-    if (added || !held.length || repeated || !tail.possiblyTruncated || (heldPages += 1) >= MAX_HELD_PAGES) {
+    if (walkSettled({ added, held: held.length, repeated, tail, heldPages })) {
       return { olderRows, tail }
     }
   }

@@ -503,6 +503,74 @@ const TurnRow = memo(function TurnRow({ components, group, resetKey, virtualized
   )
 })
 
+/**
+ * The transcript this scroll position belongs to. Persistence is bound to the
+ * owning transcript, not to whichever Bot most recently changed the global
+ * profile, and a visibility change never transfers ownership.
+ *
+ * A session/profile swap re-reads the storage key during RENDER so the first
+ * commit after the swap already files under the new key.
+ */
+function useScrollOwner(sessionKey: string, scrollProfile: unknown) {
+  const [scrollOwner, setScrollOwner] = useState(() => ({
+    sessionKey,
+    profile: scrollProfile,
+    storageKey: threadScrollStorageKey(scrollProfile)
+  }))
+
+  if (scrollOwner.sessionKey !== sessionKey || scrollOwner.profile !== scrollProfile) {
+    setScrollOwner({ sessionKey, profile: scrollProfile, storageKey: threadScrollStorageKey(scrollProfile) })
+  }
+
+  return scrollOwner.storageKey
+}
+
+/**
+ * The render budget for this pane, adjusted during RENDER rather than in a
+ * post-commit effect.
+ *
+ * An effect-time cut is too late: React would first build the whole tree with
+ * the full budget (up to 600 cost units of markdown + syntax highlighting),
+ * commit it, and only then re-render at the small budget. A render-phase state
+ * adjustment restarts the component immediately — before any child renders — so
+ * the heavy commit never happens.
+ *
+ * Two triggers, because the transcript swap arrives differently per path: a
+ * WARM switch publishes sessionKey + messages in one commit (the key branch),
+ * while a COLD switch changes sessionKey with an empty transcript and the
+ * prefetched messages land hundreds of ms later under the SAME key (the
+ * empty→non-empty branch).
+ */
+function useTranscriptRenderBudget(state: {
+  hasGroups: boolean
+  paneBudget: number
+  paneHidden: boolean
+  sessionKey: string
+}) {
+  const { hasGroups, paneBudget, paneHidden, sessionKey } = state
+  const [renderBudget, setRenderBudget] = useState(FIRST_PAINT_BUDGET)
+  const [budgetSessionKey, setBudgetSessionKey] = useState(sessionKey)
+  const [hadGroups, setHadGroups] = useState(hasGroups)
+
+  if (budgetSessionKey !== sessionKey) {
+    setBudgetSessionKey(sessionKey)
+    setHadGroups(hasGroups)
+    setRenderBudget(FIRST_PAINT_BUDGET)
+  } else if (shouldClampTranscriptBudget(paneHidden, renderBudget, paneBudget)) {
+    // Apply the hidden budget during render so React never first commits the
+    // stale full transcript after this pane moves to the background.
+    setRenderBudget(paneBudget)
+  } else if (hadGroups !== hasGroups) {
+    setHadGroups(hasGroups)
+
+    if (hasGroups) {
+      setRenderBudget(FIRST_PAINT_BUDGET)
+    }
+  }
+
+  return { renderBudget, setRenderBudget }
+}
+
 const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   clampToComposer,
   components,
@@ -576,40 +644,13 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // Hidden panes retain only a live-tail budget. Visible panes share the normal
   // screen budget; a reveal backfills older rows in bounded transition steps.
   const paneBudget = transcriptPaneBudget(mountedPanes, paneLifecycle === 'hot-hidden')
-
-  const [renderBudget, setRenderBudget] = useState(FIRST_PAINT_BUDGET)
-
-  // Cut the budget during RENDER, not in the post-commit layout effect. An
-  // effect-time cut is too late: React would first build the whole tree with
-  // the full budget (up to 600 cost units of markdown + syntax highlighting),
-  // commit it, and only then re-render at the small budget. The render-phase
-  // state adjustment restarts this component immediately — before any child
-  // renders — so the heavy commit never happens.
-  //
-  // Two triggers, because the transcript swap arrives differently per path:
-  // a WARM switch publishes sessionKey + messages in one commit (the key
-  // branch), while a COLD switch changes sessionKey with an empty transcript
-  // and the prefetched messages land hundreds of ms later under the SAME key
-  // (the empty→non-empty branch).
   const hasGroups = groups.length > 0
-  const [budgetSessionKey, setBudgetSessionKey] = useState(sessionKey)
-  const [hadGroups, setHadGroups] = useState(hasGroups)
-
-  if (budgetSessionKey !== sessionKey) {
-    setBudgetSessionKey(sessionKey)
-    setHadGroups(hasGroups)
-    setRenderBudget(FIRST_PAINT_BUDGET)
-  } else if (shouldClampTranscriptBudget(paneLifecycle === 'hot-hidden', renderBudget, paneBudget)) {
-    // Apply the hidden budget during render so React never first commits the
-    // stale full transcript after this pane moves to the background.
-    setRenderBudget(paneBudget)
-  } else if (hadGroups !== hasGroups) {
-    setHadGroups(hasGroups)
-
-    if (hasGroups) {
-      setRenderBudget(FIRST_PAINT_BUDGET)
-    }
-  }
+  const { renderBudget, setRenderBudget } = useTranscriptRenderBudget({
+    hasGroups,
+    paneBudget,
+    paneHidden: paneLifecycle === 'hot-hidden',
+    sessionKey
+  })
 
   // Where to land after a prepend, in distance-from-bottom (survives the
   // height change). Shared by "Show earlier" and the budget backfill below.
@@ -882,19 +923,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // highlight, the budget backfill) changes scrollHeight WITHOUT a scroll
   // event, so a scroll-only cache records a stale offset (the gap #70478's
   // review threads flagged). Both legs write stateFromMetrics(el).
-  // Bind persistence to this transcript, not whichever Bot most recently
-  // changed the global profile. Visibility changes do not transfer ownership.
-  const [scrollOwner, setScrollOwner] = useState(() => ({
-    sessionKey,
-    profile: scrollProfile,
-    storageKey: threadScrollStorageKey(scrollProfile)
-  }))
-
-  if (scrollOwner.sessionKey !== sessionKey || scrollOwner.profile !== scrollProfile) {
-    setScrollOwner({ sessionKey, profile: scrollProfile, storageKey: threadScrollStorageKey(scrollProfile) })
-  }
-
-  const scrollStorageKey = scrollOwner.storageKey
+  const scrollStorageKey = useScrollOwner(sessionKey, scrollProfile)
   const restoredStorageKeyRef = useRef(scrollStorageKey)
 
   const liveScrollStateRef = useRef<ThreadScrollState>(THREAD_SCROLL_BOTTOM)

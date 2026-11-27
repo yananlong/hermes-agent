@@ -30,7 +30,7 @@ import type { Msg, PanelSection } from '../types.js'
 import { noteBackgroundHandoff } from './backgroundSessionNotices.js'
 import { applyConnectionRequest, clearConnectionOperation } from './connectionOperationStore.js'
 import type { ComposerActions, GatewayRpc, StateSetter } from './interfaces.js'
-import { linkedHistoryPage, LinkedHistoryWindow } from './linkedHistory.js'
+import { linkedHistoryPage, LinkedHistoryWindow, type HistoryRequest } from './linkedHistory.js'
 import { patchOverlayState } from './overlayStore.js'
 import { scheduleResumeScrollToBottom } from './sessionResumeView.js'
 import { renameCanonicalSession } from './slash/canonicalSessionCommands.js'
@@ -43,6 +43,52 @@ import { describeCredentialWarning } from './userMessages.js'
 export { refreshSessionView, scheduleResumeScrollToBottom } from './sessionResumeView.js'
 
 const usageFrom = (info: null | SessionInfo): Usage => (info?.usage ? { ...ZERO, ...info.usage } : ZERO)
+
+/**
+ * The newest-first native window for a just-attached linked session, plus the
+ * one honest line a failed read prints instead of blocking the attach.
+ *
+ * Both attach paths (`session.resume` and `session.activate`) answer the same
+ * `linked_codex` marker, and Codex being unavailable is a normal state (it may
+ * be running elsewhere, or not at all) — so neither path may turn a failed
+ * native read into a refused resume.
+ */
+const openLinkedWindow = async (
+  request: HistoryRequest,
+  sessionId: string
+): Promise<{ error: string; window: LinkedHistoryWindow }> => {
+  const window = new LinkedHistoryWindow(request, sessionId)
+
+  try {
+    await window.loadInitial(await linkedHistoryPage(request, sessionId))
+  } catch (error) {
+    return {
+      error: t('session.linked.historyUnavailable', error instanceof Error ? error.message : String(error)),
+      window
+    }
+  }
+
+  return { error: '', window }
+}
+
+/**
+ * The rows an attach publishes for one snapshot: the native window for a
+ * linked pointer (plus its one-line read failure), the snapshot's own messages
+ * otherwise, then the live in-flight tail.
+ *
+ * Typed against the two fields it reads, not a whole response shape:
+ * `session.resume` and `session.activate` both answer these but disagree on
+ * `message_count` (optional on activate), and this helper never reads it.
+ */
+const attachedTranscript = (
+  r: Pick<SessionResumeResult, 'inflight' | 'messages'>,
+  opened: null | { error: string; window: LinkedHistoryWindow },
+  isLinked: boolean
+) => [
+  ...(isLinked ? toLinkedHistoryMessages(opened?.window.rows ?? []) : toTranscriptMessages(r.messages)),
+  ...(opened?.error ? [{ role: 'system' as const, text: opened.error }] : []),
+  ...liveSessionInflightMessages(r.inflight)
+]
 
 const statusFromLiveSession = (status?: string, running = false) => {
   if (status === 'waiting') {
@@ -703,25 +749,14 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
           // `session.activate` answers the same linked marker `session.resume` does, so neither
           // path needs a probe before or after the attach.
           const isLinked = (r as { linked_codex?: boolean }).linked_codex === true
-          let linkedWindow: null | LinkedHistoryWindow = null
-          let linkedRows: Record<string, unknown>[] = []
-          let historyError = ''
-          if (isLinked) {
-            try {
-              const newest = await linkedHistoryPage(requestHistory, id)
-              linkedWindow = new LinkedHistoryWindow(requestHistory, id)
-              linkedRows = await linkedWindow.loadInitial(newest)
-            } catch (error) {
-              historyError = t(
-                'session.linked.historyUnavailable',
-                error instanceof Error ? error.message : String(error)
-              )
-            }
-            if (flight !== attachmentFlight.current) {
-              discardStaleAttachment(r)
-              return
-            }
+          const opened = isLinked ? await openLinkedWindow(requestHistory, id) : null
+
+          if (isLinked && flight !== attachmentFlight.current) {
+            discardStaleAttachment(r)
+            return
           }
+
+          const linkedWindow = opened?.window ?? null
 
           resetSession()
           setLinkedHistoryMode?.(isLinked)
@@ -729,11 +764,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
             linkedHistory.current = { sessionId: r.session_id, window: linkedWindow, loading: false }
           }
           setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
-          const transcript = [
-            ...(isLinked ? toLinkedHistoryMessages(linkedRows) : toTranscriptMessages(r.messages)),
-            ...(historyError ? [{ role: 'system' as const, text: historyError }] : []),
-            ...liveSessionInflightMessages(r.inflight)
-          ]
+          const transcript = attachedTranscript(r, opened, isLinked)
           setHistoryItems(info ? [introMsg(info), ...transcript] : transcript)
           writeActiveSessionFile(storedSid)
           patchUiState({
@@ -859,25 +890,11 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               // correct there. One read for both: a linked row's own `messages` were suppressed by
               // the gateway, so the native window below is its transcript.
               const isLinked = (r as { linked_codex?: boolean }).linked_codex === true
-              let linkedWindow: null | LinkedHistoryWindow = null
-              let linkedRows: Record<string, unknown>[] = []
-              let historyError = ''
+              const opened = isLinked ? await openLinkedWindow(requestHistory, id) : null
 
-              if (isLinked) {
-                try {
-                  const newest = await linkedHistoryPage(requestHistory, id)
-                  linkedWindow = new LinkedHistoryWindow(requestHistory, id)
-                  linkedRows = await linkedWindow.loadInitial(newest)
-                } catch (error) {
-                  historyError = t(
-                    'session.linked.historyUnavailable',
-                    error instanceof Error ? error.message : String(error)
-                  )
-                }
-                if (flight !== attachmentFlight.current) {
-                  discardStaleAttachment(r)
-                  return
-                }
+              if (isLinked && flight !== attachmentFlight.current) {
+                discardStaleAttachment(r)
+                return
               }
 
               // A successful resume authorizes the requested source → canonical
@@ -885,16 +902,12 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               migratePendingInputs(destination, r.session_id, info?.stored_session_id)
               resetSession()
               setLinkedHistoryMode?.(isLinked)
-              if (linkedWindow) {
-                linkedHistory.current = { sessionId: r.session_id, window: linkedWindow, loading: false }
+              if (opened) {
+                linkedHistory.current = { sessionId: r.session_id, window: opened.window, loading: false }
               }
               setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
 
-              const resumed = [
-                ...(isLinked ? toLinkedHistoryMessages(linkedRows) : toTranscriptMessages(r.messages)),
-                ...(historyError ? [{ role: 'system' as const, text: historyError }] : []),
-                ...liveSessionInflightMessages(r.inflight)
-              ]
+              const resumed = attachedTranscript(r, opened, isLinked)
 
               setHistoryItems(info ? [introMsg(info), ...resumed] : resumed)
               writeActiveSessionFile(storedSid)

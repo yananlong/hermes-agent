@@ -244,6 +244,64 @@ function useMessagesWhileVisible($messages: ReadableAtom<ChatMessage[]>, enabled
 }
 
 /**
+ * Whether "Show earlier" has to reach the network instead of widening the
+ * in-memory window: the current slice is exhausted (or the tail was replaced
+ * under the view), and there is a persisted page left to fetch.
+ */
+function needsOlderPageFetch(state: {
+  runtimeId: string
+  storedId: null | string
+  tailError: string | undefined
+  windowed: boolean | undefined
+  hasOlderPage: boolean
+}): boolean {
+  const exhausted = state.tailError === 'changed' || !state.windowed
+
+  return exhausted && Boolean(state.runtimeId) && Boolean(state.storedId) && state.hasOlderPage
+}
+
+/**
+ * The tail profile for a session, from the owner hint when one resolves.
+ *
+ * A Bot chat opened IN PLACE in the main pane (openStoredBotChat) keeps the
+ * active profile, so the ambient scope carries no owner. Publishing the owner
+ * hint's (connection, profile) as the scope is what lets voice playback speak
+ * with the Bot's own voice; a tile's scope already names its owner and is kept
+ * as is.
+ */
+function useTailProfile(storedId: null | string, connectionId: string, activeProfile: string) {
+  const ownerRoute = storedId
+    ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
+    : undefined
+
+  const ownerConnection = ownerRoute?.connectionId
+  const ownerProfile = ownerRoute?.targetProfile || ownerRoute?.profile
+
+  const tailProfile = useMemo(
+    () => (ownerProfile ? { connectionId: ownerConnection, profile: ownerProfile } : undefined),
+    [ownerConnection, ownerProfile]
+  )
+
+  return { ownerConnection, ownerProfile, tailProfile }
+}
+
+/**
+ * The composer scope for this chat: the session owner's, when the ambient
+ * scope has none of its own.
+ */
+function useOwnedComposerScope(ownerConnection: string | undefined, ownerProfile: string | undefined) {
+  const parentScope = useComposerScope()
+
+  return useMemo(
+    () =>
+      parentScope.profile || !ownerProfile
+        ? parentScope
+        : { ...parentScope, connectionId: ownerConnection || undefined, profile: ownerProfile },
+    [ownerConnection, ownerProfile, parentScope]
+  )
+}
+
+/**
  * Owns the $messages subscription and the assistant-ui external-store runtime.
  *
  * Isolated from ChatView so the per-token delta flush (which replaces the
@@ -269,31 +327,8 @@ export function ChatRuntimeBoundary({
   const activeProfile = useStore($activeGatewayProfile)
   const connectionId = connection?.connectionId || (connection?.mode === 'local' ? 'local' : '')
 
-  const ownerRoute = storedId
-    ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
-    : undefined
-
-  const ownerConnection = ownerRoute?.connectionId
-  const ownerProfile = ownerRoute?.targetProfile || ownerRoute?.profile
-
-  const tailProfile = useMemo(
-    () => (ownerProfile ? { connectionId: ownerConnection, profile: ownerProfile } : undefined),
-    [ownerConnection, ownerProfile]
-  )
-
-  // A Bot chat opened IN PLACE in the main pane (openStoredBotChat) keeps the
-  // active profile, so the ambient scope carries no owner. Publish the session
-  // owner hint's (connection, profile) here so voice playback speaks with the
-  // Bot's own voice; a tile's scope already names its owner and is kept as is.
-  const parentScope = useComposerScope()
-
-  const composerScope = useMemo(
-    () =>
-      parentScope.profile || !ownerProfile
-        ? parentScope
-        : { ...parentScope, connectionId: ownerConnection || undefined, profile: ownerProfile },
-    [ownerConnection, ownerProfile, parentScope]
-  )
+  const { ownerConnection, ownerProfile, tailProfile } = useTailProfile(storedId, connectionId, activeProfile)
+  const composerScope = useOwnedComposerScope(ownerConnection, ownerProfile)
 
   const history = useHistoryWindow({
     scopeKey: JSON.stringify([runtimeId, storedId, tailProfile, connectionId, activeProfile, suppressMessages]),
@@ -374,10 +409,13 @@ export function ChatRuntimeBoundary({
       // Network latency is not scroll intent. Capture at arrival, immediately
       // before the store prepend, and only grow a window that has a page to show.
       if (
-        (tailState?.native?.error === 'changed' || !windowStateRef.current.get(runtimeIdRef.current ?? '')?.state.window.windowed) &&
-        runtimeId &&
-        storedId &&
-        transcriptBackfillAvailable(storedId, tailProfile)
+        needsOlderPageFetch({
+          runtimeId,
+          storedId,
+          tailError: tailState?.native?.error,
+          windowed: windowStateRef.current.get(runtimeIdRef.current ?? '')?.state.window.windowed,
+          hasOlderPage: transcriptBackfillAvailable(storedId, tailProfile)
+        })
       ) {
         let grew = false
         await backfillOlderTranscriptPage({

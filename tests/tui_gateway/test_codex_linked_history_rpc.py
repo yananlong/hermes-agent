@@ -57,8 +57,13 @@ def test_codex_history_requires_the_session_pointer_and_strips_native_item_paylo
 
     allowed = server._codex_history("allowed", {"session_id": "linked-session", "thread_id": THREAD,
                                                  "limit": 10})
-    assert allowed["result"] == {"turns": [{"id": "native-turn", "status": "completed",
-                                             "rows": [{"role": "assistant", "content": "safe reply"}]}],
-                                  "next_cursor": None}
+    turns = allowed["result"]["turns"]
+    assert [turn["id"] for turn in turns] == ["native-turn"]
+    assert [turn["status"] for turn in turns] == ["completed"]
+    assert [(row["role"], row["content"]) for row in turns[0]["rows"]] == [("assistant", "safe reply")]
+    # A row identity is part of the contract, not a leaked payload: the desktop rejects a page
+    # whose rows carry no `codex_native_row_id` (native-session-history.ts), so it must survive.
+    assert all(isinstance(row.get("codex_native_row_id"), str) and row["codex_native_row_id"]
+               for row in turns[0]["rows"])
     assert "privateTurnField" not in repr(allowed)
     assert "privateItemField" not in repr(allowed)
