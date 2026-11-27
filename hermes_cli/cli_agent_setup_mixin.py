@@ -905,6 +905,9 @@ class CLIAgentSetupMixin:
             return False
         restored, display_history = self._session_db.get_resume_conversations(self._resume_read_id)
         accent_color = _accent_hex()
+        # A linked pointer row has NO local model projection by design (the native thread is the
+        # authority), so "no model rows" alone is not an empty session. Only a genuinely empty
+        # conversation — no model AND no display rows — earns the no-messages notice.
         if not restored and not display_history:
             no_messages = t("cli.resume.session_no_messages", session_id=self.session_id,
                             title=f' "{session_meta["title"]}"' if session_meta.get("title") else "")

@@ -21,9 +21,13 @@ import os
 import re
 import sys
 import uuid
+from typing import TYPE_CHECKING
 
 from hermes_cli.gateway_client import GatewayClientError
 from hermes_cli.gateway_connection import RESUME_REFUSALS, GatewayConnection
+
+if TYPE_CHECKING:
+    from hermes_cli.linked_history.pages import LinkedHistory
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +79,7 @@ class GatewaySessionStore:
         self.persistence = None  # the storage interface reader ``_reader`` reads through
         self._handles = None
         self._create_parameters = None
-        self._linked_histories: dict[str, object] = {}
+        self._linked_histories: dict[str, LinkedHistory] = {}
 
     def __bool__(self):
         return not self.connection.final
@@ -154,20 +158,35 @@ class GatewaySessionStore:
         return self._linked_histories[session_id]
 
     def get_resume_conversations(self, session_id):
-        """Keep the model projection local; linked displays belong to the native thread."""
+        """A linked row has no local model projection; its display rows come from the native thread.
+
+        The model projection is what a resume feeds the agent as conversation history. For a linked
+        pointer row the local mirror is NOT the conversation: it holds only the turns Hermes itself
+        submitted, can be empty, and can be stale against the native thread. Returning it would hand
+        the agent a divergent transcript that a later refactor could persist back into the thread.
+        The native thread is the authority and the gateway re-attaches by ``resume_thread_id``, so
+        the only correct model projection here is none.
+
+        The display projection is different: it is what the CLI renders, and it must be the native
+        rows, so it is paged from the gateway. A gateway failure degrades to one honest notice
+        rather than blocking the resume.
+        """
         reader = self._db()
         if reader is None:
             return [], []
-        model, display = reader.get_resume_conversations(session_id)
+        _model, display = reader.get_resume_conversations(session_id)
         if not self._linked_codex(session_id):
-            return model, display
+            return _model, display
         try:
             from hermes_cli.linked_history.pages import conversation_rows
-            return model, conversation_rows(self.linked_history(session_id, refresh=True).rows)
+            history = self.linked_history(session_id, refresh=True)
+            # ``_linked_codex`` above guarantees a window; an absent one is the not-linked case,
+            # which returned already.
+            return ([], conversation_rows(history.rows)) if history is not None else ([], display)
         except GatewayClientError as exc:
             self._linked_histories.pop(session_id, None)
-            return model, [{"role": "system", "display_kind": "codex_history_unavailable",
-                            "content": f"Linked Codex history is unavailable: {exc}. Try /history again."}]
+            return [], [{"role": "system", "display_kind": "codex_history_unavailable",
+                         "content": f"Linked Codex history is unavailable: {exc}. Try /history again."}]
 
     def call(self, method, **params):
         return self.connection.call(method, **params)

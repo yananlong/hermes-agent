@@ -155,6 +155,43 @@ def test_a_failed_read_does_not_poison_the_next_attempt():
     assert [row["content"] for row in second] == ["native question", "native answer"]
 
 
+def test_a_linked_row_never_exposes_the_stale_local_mirror_as_model_history():
+    """B8: the model projection of a pointer row is EMPTY, whatever the local mirror holds.
+
+    The model projection is what a resume hands the agent as conversation history. For a linked
+    row the authority is the native thread, and the gateway re-attaches by ``resume_thread_id``;
+    the local mirror holds only the turns Hermes itself submitted. Feeding it to the agent is how
+    a resumed linked session ends up with a second, divergent transcript.
+    """
+    owner = Owner(rows("native question", "native answer", role="user"))
+    store = Store(owner, store_rows=(
+        [{"role": "user", "content": "STALE mirror question"},
+         {"role": "assistant", "content": "STALE mirror answer"}],
+        [{"role": "user", "content": "STALE mirror question"}],
+    ))
+
+    model, display = store.get_resume_conversations(SID)
+
+    assert model == [], "a linked row must not hand the agent its local mirror as history"
+    # The display projection is the native window, not the mirror.
+    assert [row["text"] for row in display] == ["native question", "native answer"]
+    assert not any("STALE" in str(row) for row in display)
+
+
+def test_a_linked_row_keeps_an_empty_model_projection_when_codex_is_down():
+    """The honest-notice path must not resurrect the mirror either."""
+    owner = Owner([], unavailable=GatewayClientError("owner is down"))
+    store = Store(owner, store_rows=(
+        [{"role": "user", "content": "STALE mirror question"}],
+        [{"role": "user", "content": "STALE mirror question"}],
+    ))
+
+    model, display = store.get_resume_conversations(SID)
+
+    assert model == []
+    assert [row["display_kind"] for row in display] == ["codex_history_unavailable"]
+
+
 def test_an_ordinary_session_row_never_constructs_a_linked_window():
     """(d) An ordinary row keeps its store history and makes no linked read at all."""
     owner = Owner([])
