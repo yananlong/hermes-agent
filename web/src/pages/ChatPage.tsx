@@ -105,13 +105,7 @@ import {
   storeBlockedReason,
 } from "@/lib/foreign-capability";
 import { useForeignCapability } from "@/lib/use-foreign-capability";
-import {
-  linkedForeignAgent,
-  linkedResumeBlocked as linkedResumeBlockedFor,
-  linkedResumeOverlay,
-  linkedResumeReadonly,
-  type LinkedResumeCheck,
-} from "@/lib/linked-session";
+import { useLinkedResume } from "@/lib/use-linked-resume";
 import { sendCopyLastCommand } from "@/lib/chat-copy-last";
 import { isUserInitiatedTerminalInput } from "@/lib/learn-handoff";
 import { useLearnHandoff } from "@/lib/use-learn-handoff";
@@ -390,58 +384,13 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // row, so it cannot be a pointer → the ordinary resume path stays
   // available); any other failure means we cannot prove the row is not a
   // pointer, so no terminal is spawned for it.
-  const [linkedResumeCheck, setLinkedResumeCheck] = useState<LinkedResumeCheck | null>(null);
-  useEffect(() => {
-    // No resume target: nothing to check. The stale check stays keyed to its
-    // old id, so a later resume target reads as "pending" until its own
-    // lookup lands (see linkedResumeCheckPending below).
-    if (!resumeParam) return;
-    let cancelled = false;
-    api
-      .getSessionDetail(resumeParam, scopedProfile)
-      .then((row) => {
-        if (cancelled) return;
-        setLinkedResumeCheck({ id: resumeParam, agent: linkedForeignAgent(row), verified: true });
-      })
-      .catch((err: unknown) => {
-        const status = (err as { status?: number } | null)?.status ?? 0;
-        if (!cancelled) {
-          setLinkedResumeCheck({ id: resumeParam, agent: null, verified: status === 404 });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [resumeParam, scopedProfile]);
-  const linkedResumeUnverified = Boolean(
-    resumeParam && linkedResumeCheck?.id === resumeParam && !linkedResumeCheck.verified,
-  );
-  // One definition of the gate (web/src/lib/linked-session.ts): it fails CLOSED on a pending or
-  // failed lookup, so no PTY is ever spawned on a row we could not prove is an ordinary session.
-  const linkedResumeBlocked = linkedResumeBlockedFor(linkedResumeCheck, resumeParam);
-  // True while the linked-flag lookup for the current resume target is still
-  // in flight — the PTY effect waits for it so a linked row is never spawned
-  // before its flag arrives.
-  const linkedResumeCheckPending = Boolean(
-    resumeParam && linkedResumeCheck?.id !== resumeParam,
-  );
-  // The gate blocks on a pending lookup, but "blocked" is two different screens:
-  // until the answer lands there is no notice to show, so covering the canvas
-  // with the verdict panel would flash an empty overlay with a lone "New chat"
-  // on every resume. `linkedResumeOverlay` decides between them in one place.
-  const resumeOverlay = linkedResumeOverlay(linkedResumeCheck, resumeParam);
-  // A linked pointer is OPENED, not refused: the embedded TUI is a canonical client, and the
-  // gateway serves its transcript from the native store and appends new turns to that same native
-  // thread. It stays read-only here (no model/workspace controls, no second transcript), which is
-  // an adapter on the pane rather than a wall in front of it.
-  const linkedResumeReadOnly = linkedResumeReadonly(linkedResumeCheck, resumeParam);
-  // The linked row itself lives on the gateway host, so the dashboard asks THAT
-  // host what it can serve (`session.foreign.status`) instead of assuming. An
-  // older gateway answers -32601 → undefined, and every line below keeps the
-  // read-only copy it had before this capability existed.
-  const linkedAgent = linkedResumeReadOnly ? linkedResumeCheck?.agent ?? null : null;
+  const linked = useLinkedResume(resumeParam, scopedProfile);
+  const { blocked: linkedResumeBlocked } = linked;
+  const resumeOverlay = linked.overlay;
+  const linkedResumeReadOnly = linked.readOnly;
+  const linkedAgent = linked.agent;
   const linkedResumeUnverifiedNote =
-    linkedResumeUnverified && !linkedAgent ? t.sessions.linkedResumeUnverified : null;
+    linked.unverified && !linkedAgent ? t.sessions.linkedResumeUnverified : null;
   const linkedCapability = useForeignCapability(Boolean(linkedAgent), scopedProfile);
   let linkedCapabilityNote: string | null = null;
   if (linkedAgent) {
@@ -599,7 +548,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     // canonical client that pages its native transcript and appends new turns to the same thread.
     // What must still wait is an UNANSWERED lookup — spawning a PTY for a row we cannot vouch for is
     // the bug this gate exists for, and a failed lookup stays refused (see linkedResumeBlocked).
-    if (linkedResumeBlocked || linkedResumeCheckPending) return;
+    if (linkedResumeBlocked || linked.pending) return;
 
     const host = hostRef.current;
     if (!host) return;
@@ -1705,7 +1654,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     scopedProfile,
     reconnectNonce,
     linkedResumeBlocked,
-    linkedResumeCheckPending,
+    linked.pending,
   ]);
 
   // NS-434 follow-up: attach the visualViewport keyboard-inset listeners

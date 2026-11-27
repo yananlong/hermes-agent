@@ -287,6 +287,26 @@ function copyMeasuredHeights(
   }
 }
 
+/** Merge a linked thread's native rows with the ordinary transcript without letting either budget
+ *  eat the other: native pages carry their own byte budget from the backend, so only the ordinary
+ *  rows are subject to the local row cap. The intro row stays first when present. */
+function mergeLinkedHistoryRows(next: Msg[], capOrdinary: (rows: Msg[]) => Msg[]): Msg[] {
+  const linked = next.filter(message => message.linkedHistory)
+  const ordinary = capOrdinary(next.filter(message => !message.linkedHistory))
+  return ordinary[0]?.kind === 'intro'
+    ? [ordinary[0], ...linked, ...ordinary.slice(1)]
+    : [...linked, ...ordinary]
+}
+
+/** Which direction a scroll step is about to run out of rows in, if any. */
+function scrollEdgeReached(delta: number, scroll: ScrollBoxHandle | null): 'older' | 'newer' | null {
+  if (!scroll) return null
+  const next = scroll.getScrollTop() + scroll.getPendingDelta() + delta
+  if (delta < 0 && next <= 0) return 'older'
+  if (delta > 0 && next + scroll.getViewportHeight() >= scroll.getScrollHeight()) return 'newer'
+  return null
+}
+
 export function useMainApp(gw: GatewayClient) {
   const { exit } = useApp()
   const { stdout } = useStdout()
@@ -325,10 +345,14 @@ export function useMainApp(gw: GatewayClient) {
 
   const [historyItems, setHistoryItemsState] = useState<Msg[]>(() => [{ kind: 'intro', role: 'system', text: '' }])
   const [historyGeneration, setHistoryGeneration] = useState(0)
-  const linkedHistoryMode = useRef(false)
-  const linkedHistoryLoader = useRef<(direction: 'older' | 'newer') => void>(() => {})
+  // A linked thread's native pages and the live transcript share one row list but not one budget:
+  // `ref` holds the mode flag and the pager so neither needs its own state/ref pair.
+  const linkedRef = useRef<{ linked: boolean; load: (direction: 'older' | 'newer') => void }>({
+    linked: false,
+    load: () => {}
+  })
   const setLinkedHistoryMode = useCallback((linked: boolean) => {
-    linkedHistoryMode.current = linked
+    linkedRef.current.linked = linked
   }, [])
 
   const setHistoryItems = useCallback<StateSetter<Msg[]>>(value => {
@@ -338,13 +362,7 @@ export function useMainApp(gw: GatewayClient) {
 
     setHistoryItemsState(previous => {
       const next = typeof value === 'function' ? value(previous) : value
-      if (!linkedHistoryMode.current) return capTranscriptHistory(next)
-      // Native pages have their own byte budget; the live tail keeps the ordinary row cap.
-      const linked = next.filter(message => message.linkedHistory)
-      const ordinary = capTranscriptHistory(next.filter(message => !message.linkedHistory))
-      return ordinary[0]?.kind === 'intro'
-        ? [ordinary[0], ...linked, ...ordinary.slice(1)]
-        : [...linked, ...ordinary]
+      return linkedRef.current.linked ? mergeLinkedHistoryRows(next, capTranscriptHistory) : capTranscriptHistory(next)
     })
   }, [])
 
@@ -599,16 +617,9 @@ export function useMainApp(gw: GatewayClient) {
 
   const scrollWithSelection = useCallback(
     (delta: number) => {
-      const scroll = scrollRef.current
-      const reachesTop = delta < 0 && scroll && scroll.getScrollTop() + scroll.getPendingDelta() + delta <= 0
-      const reachesBottom = delta > 0 && scroll && scroll.getScrollTop() + scroll.getPendingDelta() + delta +
-        scroll.getViewportHeight() >= scroll.getScrollHeight()
+      const edge = scrollEdgeReached(delta, scrollRef.current)
       scrollWithSelectionBy(delta, { scrollRef, selection })
-      if (reachesTop) {
-        linkedHistoryLoader.current('older')
-      } else if (reachesBottom) {
-        linkedHistoryLoader.current('newer')
-      }
+      if (edge) linkedRef.current.load(edge)
     },
     [selection]
   )
@@ -707,7 +718,7 @@ export function useMainApp(gw: GatewayClient) {
     sys
   })
 
-  linkedHistoryLoader.current = session.loadLinkedHistory
+  linkedRef.current.load = session.loadLinkedHistory
 
   exitClose.close = session.closeForExit
 

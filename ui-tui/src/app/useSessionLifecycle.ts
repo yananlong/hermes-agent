@@ -411,6 +411,34 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     evictInkCaches('half')
   }, [composerActions, setHistoryItems, setLastUserMsg, setLinkedHistoryMode, setStickyPrompt, setVoiceProcessing, setVoiceRecording])
 
+  /** Splice one linked page into the transcript, preserving the visible rows' position.
+   *
+   *  Runs after Ink re-measures. Every async boundary re-checks the generation, the window and the
+   *  scroll handle: a page that resolved after a reset or session switch must not splice into the
+   *  new transcript, and a viewport the user took off the anchor must not be moved under them. */
+  const spliceLinkedPage = useCallback(
+    (active: NonNullable<typeof linkedHistory.current>, generation: number, scroll: ScrollBoxHandle | null, oldHeight: number) => {
+      const current = () => linkedHistoryGeneration.current === generation &&
+        linkedHistory.current === active && getUiState().sid === active.sessionId
+      if (!current()) return
+
+      const messages = toLinkedHistoryMessages(active.window.rows)
+      setHistoryItems(previous =>
+        previous[0]?.kind === 'intro'
+          ? [previous[0], ...messages, ...previous.slice(1).filter(message => !message.linkedHistory)]
+          : [...messages, ...previous.filter(message => !message.linkedHistory)]
+      )
+      // After Ink measures the spliced rows, move the viewport by exactly the height the prepend
+      // added: the currently visible content stays put instead of jumping.
+      const anchor = setTimeout(() => {
+        if (!current() || scrollRef.current !== scroll || !scroll || scroll.isSticky()) return
+        scroll.adjustScrollTop(Math.max(0, scroll.getScrollHeight() - oldHeight))
+      }, 50)
+      anchorTimers.current.add(anchor)
+    },
+    [scrollRef, setHistoryItems]
+  )
+
   const loadLinkedHistory = useCallback(async (direction: 'older' | 'newer') => {
     const active = linkedHistory.current
 
@@ -434,37 +462,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     try {
       if (direction === 'older') await active.window.loadOlder()
       else await active.window.loadNewer()
-
-      if (
-        linkedHistoryGeneration.current !== generation ||
-        linkedHistory.current !== active ||
-        getUiState().sid !== active.sessionId
-      ) {
-        return
-      }
-
-      const messages = toLinkedHistoryMessages(active.window.rows)
-
-      setHistoryItems(previous =>
-        previous[0]?.kind === 'intro'
-          ? [previous[0], ...messages, ...previous.slice(1).filter(message => !message.linkedHistory)]
-          : [...messages, ...previous.filter(message => !message.linkedHistory)]
-      )
-      // After Ink measures the spliced rows, move the viewport by exactly the height the prepend
-      // added: the currently visible content stays put instead of jumping.
-      const anchor = setTimeout(() => {
-        if (
-          linkedHistoryGeneration.current !== generation ||
-          linkedHistory.current !== active ||
-          scrollRef.current !== scroll ||
-          !scroll ||
-          scroll.isSticky()
-        ) {
-          return
-        }
-        scroll.adjustScrollTop(Math.max(0, scroll.getScrollHeight() - oldHeight))
-      }, 50)
-      anchorTimers.current.add(anchor)
+      spliceLinkedPage(active, generation, scroll, oldHeight)
     } catch (error) {
       if (linkedHistory.current === active && linkedHistoryGeneration.current === generation) {
         const reason = error instanceof Error ? error.message : String(error)
@@ -473,7 +471,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     } finally {
       active.loading = false
     }
-  }, [scrollRef, setHistoryItems, sys])
+  }, [scrollRef, spliceLinkedPage, sys])
 
   useEffect(
     () => () => {

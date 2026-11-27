@@ -627,6 +627,23 @@ export function _resetTranscriptBackfillForTests(): void {
   inflightByStoredSessionId.clear()
 }
 
+/** Read one older page for the tail's mode: the native thread when bound, else the REST pager.
+ *
+ *  A native tail must carry its owner (connection + profile) to page at all — the gateway serves a
+ *  linked transcript per profile, so a tail without one is a bug, not a fallback to REST. */
+async function fetchOlderPage(storedSessionId: string, tail: TranscriptTailState) {
+  const owner = tail.profile
+  if (!tail.native) return getOlderSessionMessages(storedSessionId, tail.profile, tail.nextOffset)
+  if (!tail.native.cursor || !owner || typeof owner !== 'object' || !owner.profile) {
+    throw new Error('Missing native history owner or cursor')
+  }
+  return readNativeTranscriptPage(
+    storedSessionId,
+    { connectionId: owner.connectionId ?? null, profile: owner.profile },
+    tail.native.cursor
+  )
+}
+
 /**
  * Fetch older pages until one adds rows to the store, or older pages run out.
  *
@@ -650,15 +667,7 @@ async function walkToOlderRows(
     let page
 
     try {
-      const owner = tail.profile
-      if (tail.native) {
-        if (!tail.native.cursor || !owner || typeof owner !== 'object' || !owner.profile) {
-          throw new Error('Missing native history owner or cursor')
-        }
-        page = await readNativeTranscriptPage(storedSessionId, { connectionId: owner.connectionId ?? null, profile: owner.profile }, tail.native.cursor)
-      } else {
-        page = await getOlderSessionMessages(storedSessionId, tail.profile, tail.nextOffset)
-      }
+      page = await fetchOlderPage(storedSessionId, tail)
     } catch {
       if (tail.native && request.isCurrent() && transcriptTailState(storedSessionId, profile) === tail) {
         setNativeHistoryError(storedSessionId, profile, 'unavailable')
