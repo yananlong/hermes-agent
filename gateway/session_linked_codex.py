@@ -52,6 +52,83 @@ def linked_thread_id(store, session_id: str) -> str | None:
                                 detail="linked Codex thread identity is invalid") from exc
 
 
+#: Turn-path copy for a row whose stored settings cannot be decoded (``linked_codex_runtime``).
+UNREADABLE_SESSION_CONFIG = ("This session's stored settings cannot be read, so it cannot run safely. "
+                             "Try again, or start a new session with /new.")
+
+
+def linked_codex_runtime(store, session_id: str) -> dict | None:
+    """Resolve a native runtime from the physical row that owns a linked Codex thread.
+
+    A creation receipt may predate the link or have recorded an HTTP route. The pointer is the
+    transcript authority; Codex supplies its own provider and credentials when it resumes.
+
+    A row whose ``model_config`` cannot be read is refused rather than run as ordinary: whether it
+    is a pointer cannot be proven, the same verdict the agent's own pointer guard reaches
+    (``agent/linked_foreign_turn.py``). That refusal names the row's settings, not a linked thread,
+    because most such rows are ordinary sessions.
+    """
+    from hermes_cli.codex_linked_threads import _thread_id
+    from hermes_cli.foreign_linked_store import LINKED_FOREIGN_FLAGS, LinkedConfigUnreadable, row_model_config
+
+    try:
+        config = row_model_config(store, session_id)
+    except LinkedConfigUnreadable as exc:
+        raise AuthorityRefusal("storage_unavailable", field="model_config", detail=UNREADABLE_SESSION_CONFIG) from exc
+    try:
+        if not config:
+            sessions = getattr(store, "sessions", None)
+            get_row = getattr(sessions, "get", None) or getattr(store, "get_session", None)
+            if not callable(get_row) or get_row(session_id) is None:
+                raise ValueError("session row is unavailable")
+        flags = [flag for flag in LINKED_FOREIGN_FLAGS if config.get(flag) is True]
+        if any(flag in config and type(config[flag]) is not bool for flag in LINKED_FOREIGN_FLAGS):
+            raise ValueError("invalid linked thread marker")
+        if len(flags) > 1:
+            raise ValueError("conflicting linked thread markers")
+        if not flags:
+            if config.get("api_mode") == "codex_linked_readonly":
+                raise ValueError("linked Codex thread marker is missing")
+            return None
+        if "codex_linked_thread" not in flags:
+            return None
+        _thread_id(config.get("codex_thread_id"))
+    except ValueError as exc:
+        raise AuthorityRefusal("storage_unavailable", field="session_id",
+                               detail="linked Codex thread identity is invalid") from exc
+    return {"provider": "openai-codex", "requested_provider": "openai-codex",
+            "api_key": None, "base_url": None, "api_mode": "codex_app_server"}
+
+
+def linked_codex_session_route(store, session_id: str) -> tuple[str | None, dict] | None:
+    """``(model, runtime)`` when *session_id* is a linked Codex pointer in *store*, else None.
+
+    The model is the pointer's column, the native thread's model as its last resume reported it
+    (None before the first one): a label only, since a linked turn never sends a model and the
+    resume re-syncs it. Every surface that builds the agent for a session takes this route instead
+    of resolving the profile provider, which may need credentials or pick another wire per model.
+    The gateway's main turn still labels its agent with the frozen policy's model
+    (``run_turn_runner``), which keeps the agent cache signature stable as Codex's model changes;
+    ``_sync_linked_codex_model`` moves ``agent.model`` to the native one on every resume.
+    """
+    runtime = linked_codex_runtime(store, session_id)
+    if runtime is None:
+        return None
+    sessions = getattr(store, "sessions", None)
+    get_row = getattr(sessions, "get", None) or getattr(store, "get_session", None)
+    row = get_row(session_id)
+    model = row.get("model") if isinstance(row, dict) else getattr(row, "model", None)
+    return (model if isinstance(model, str) and model.strip() else None), runtime
+
+
+def linked_codex_source_route(authority, source) -> tuple[str | None, dict] | None:
+    """:func:`linked_codex_session_route` for *source*'s current transcript, read from this
+    authority's own profile, not the launch profile."""
+    from gateway.session_persistence import authority_persistence
+    store = authority_persistence(authority)
+    return linked_codex_session_route(store, store.bindings.receipt(source.chat_id).current_target)
+
+
 def session_thread_id(store, session_id: str) -> str | None:
     """Return a native app-server thread owned by this session, linked or started by Hermes."""
     row = store.sessions.get(session_id)
@@ -87,8 +164,10 @@ def linked_session_cwd(store, session_id: str | None) -> str | None:
     thread_id = linked_thread_id(store, session_id)
     if thread_id is None:
         return None
-    row = store.sessions.get(session_id)
-    cwd = row.cwd if row is not None else None
+    sessions = getattr(store, "sessions", None)
+    get_row = getattr(sessions, "get", None) or getattr(store, "get_session", None)
+    row = get_row(session_id) if callable(get_row) else None
+    cwd = row.get("cwd") if isinstance(row, dict) else getattr(row, "cwd", None)
     if not isinstance(cwd, str) or not Path(cwd).is_absolute() or not Path(cwd).is_dir():
         raise RuntimeError("Linked Codex session has no available original working directory")
     return cwd

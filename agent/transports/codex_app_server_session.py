@@ -278,6 +278,11 @@ class CodexAppServerSession:
         self._pending_linked_file_changes: dict[str, str] = {}
         self._closed = False
 
+    @property
+    def preserves_thread_settings(self) -> bool:
+        """True for a linked native thread: Codex owns its settings, and a failed resume never branches."""
+        return self._preserve_thread_settings is True
+
     def ensure_started(self) -> str:
         """Spawn, handshake, and ``thread/start`` (or ``thread/resume`` for a stored id); idempotent, returns
         the codex thread id. A failed resume raises :class:`CodexThreadResumeError` once; the next call

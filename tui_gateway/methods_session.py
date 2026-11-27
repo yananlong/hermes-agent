@@ -581,7 +581,6 @@ class _Resume:
             display, profile_home=self.profile_home, image_urls=self.inline_images)
 
     def read_history(self) -> tuple:
-        from .methods_session_history import read_resume_history
         return read_resume_history(self, _session_profile_runtime_scope)
 
     def display_prefix(self) -> list:

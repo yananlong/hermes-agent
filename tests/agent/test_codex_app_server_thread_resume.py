@@ -166,6 +166,27 @@ def test_linked_thread_never_branches_when_resume_fails_or_settings_change(monke
         db.close()
 
 
+def test_linked_session_fails_closed_when_its_row_loses_the_linked_marker(monkeypatch, tmp_path):
+    """A session opened for a linked thread stays linked: if the row's marker vanishes before the
+    resume settles, the turn is refused instead of running unguarded on the native thread."""
+    from agent.codex_runtime import _ensure_codex_session, _start_codex_thread
+
+    monkeypatch.setattr(session_mod, "CodexAppServerClient", _WireClient)
+    _WireClient.instances, _WireClient.dead = [], set()
+    db = open_persistence(profile_scope(home=tmp_path))
+    try:
+        seed_session(db, SID, "desktop")
+        db.sessions.patch_model_config(SID, {"codex_thread_id": "original", "codex_linked_thread": True})
+        agent = _agent(db, cwd="/tmp")
+        _ensure_codex_session(agent)
+        db.sessions.patch_model_config(SID, {"codex_linked_thread": None})
+        with pytest.raises(RuntimeError, match="changed while it was being resumed"):
+            _start_codex_thread(agent)
+        assert [m for m, _ in _WireClient.instances[0].requests] == ["thread/resume"]
+    finally:
+        db.close()
+
+
 def test_linked_thread_cannot_be_used_without_original_id(monkeypatch, tmp_path):
     from agent.codex_runtime import _ensure_codex_session
 

@@ -40,6 +40,20 @@ def _current_runtime(cli) -> dict:
         "credential_pool": getattr(cli, "_credential_pool", None)}
 
 
+def _bound_to_linked_codex_thread(cli) -> bool:
+    """Whether the CLI's session is a linked Codex pointer: Codex authenticates that thread itself and
+    the gateway runs it on the app-server, so the profile provider's credential must not refuse the
+    session's own turns. Side agents (local /bg, /btw) keep the full credential check."""
+    db, session_id = getattr(cli, "_session_db", None), getattr(cli, "session_id", None)
+    if db is None or not session_id:
+        return False
+    from hermes_cli.cli_model_switch_mixin import _stored_row_model_config
+    from persistence.conversation.sessions import parse_model_config
+    # The Codex flag itself: another tool's pointer stamped with the app-server wire is not Codex's.
+    config = parse_model_config(_stored_row_model_config(db, session_id))
+    return config.get("codex_linked_thread") is True and config.get("api_mode") == "codex_app_server"
+
+
 def _route_signature(model, runtime: dict) -> tuple:
     """Hashable identity of (model, routing) used to detect when the agent must be rebuilt."""
     return (
@@ -648,7 +662,7 @@ class CLIAgentSetupMixin:
         self.finalize_preloaded_skills()
         # No deferred plugin discovery either: the gateway that runs the turn loads the plugins (PLG-7).
         self._install_tool_callbacks()
-        if not self._ensure_runtime_credentials():
+        if not (_bound_to_linked_codex_thread(self) or self._ensure_runtime_credentials()):
             return False
         # No MCP discovery here: the gateway session that runs the turn owns its MCP servers.
         from hermes_cli.cli_chat_error_copy import agent_init_failure_message

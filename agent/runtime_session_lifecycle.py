@@ -62,6 +62,13 @@ class RuntimeSessionLifecycleMixin:
         self._apply('session.billing_route', {'provider': provider, 'base_url': base_url,
                                               'billing_mode': billing_mode})
 
+    def update_linked_codex_model(self, session_id, model, thread_id):
+        """Publish the resumed native model through the session owner's fenced receipt."""
+        self._session(session_id)
+        result = self._apply('session.linked_codex_model', {'model': model, 'thread_id': thread_id})
+        if result['value'] is not True:
+            raise RuntimeError('The linked Codex thread changed while it was being resumed')
+
     def set_latest_user_api_content(self, session_id, content, api_content):
         self._session(session_id)
         return self._apply('session.api_content', {'content': content, 'api_content': api_content})['value']

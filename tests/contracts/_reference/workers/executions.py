@@ -145,6 +145,7 @@ OPERATION_HANDLERS: dict[str, receipt.Handler] = {
     "session.lifecycle": sessions._lifecycle,
     "session.prompt": sessions._prompt,
     "session.sidecars": sessions._sidecars,
+    "session.linked_codex_model": sessions._linked_codex_model,
     "session.tools": sessions._tools,
     "session.tail_role": sessions._tail_role,
     "session.row_role": sessions._row_role,

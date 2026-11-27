@@ -215,6 +215,11 @@ def one_turn_route(turn, policy, model, runtime_kwargs):
     if not override:
         return model, runtime_kwargs
     from gateway.session_authorities import active_authority
+    if policy:
+        from gateway.session_linked_codex import linked_codex_source_route
+        if linked_codex_source_route(active_authority(turn._runner), turn._ctx.source) is not None:
+            raise AuthorityRefusal('unsupported_operation', field='operation',
+                                   detail='This linked thread runs the model chosen in Codex. Change the model there.')
     config = policy.config(active_authority(turn._runner)) if policy else turn._ctx.user_config
     return one_turn_runtime(override, model, runtime_kwargs, config)
 
