@@ -389,28 +389,13 @@ export function ChatRuntimeBoundary({
           isCurrent: () => view.$storedId.get() === storedId && view.$runtimeId.get() === runtimeId,
           heldMessages: () => view.$messages.get(),
           applyResetPage: page => {
-            beforePrepend?.()
-            sessionTileDelegate()?.updateSession(runtimeId, state => ({
-              ...state,
-              messages: preserveLocalPendingTurnMessages(page, state.messages.filter(message => !message.id.startsWith('codex:')))
-            }))
-            grew = true
+            grew = applyNativeResetPage(page, runtimeId, beforePrepend) || grew
           },
           applyOlderPage: olderPage => {
-            const current = view.$messages.get()
-
-            if (mergeOlderTranscriptPage(current, olderPage) === current) {
-              return false
-            }
-
-            beforePrepend?.()
-            setWindowPages(pages => pages + 1)
-            sessionTileDelegate()?.updateSession(runtimeId, state => {
-              const merged = mergeOlderTranscriptPage(state.messages, olderPage)
-              grew = merged !== state.messages
-
-              return grew ? { ...state, messages: merged } : state
-            })
+            grew = applyOlderTranscriptPage(
+              olderPage, runtimeId, view.$messages.get(), beforePrepend,
+              () => setWindowPages(pages => pages + 1),
+            ) || grew
           }
         })
 
@@ -518,6 +503,52 @@ function ComposerHeartField() {
       }}
     />
   )
+}
+
+/** Replace the store's native tail with a refetched reset page, keeping unsent local turns.
+ *
+ *  A reset means the native thread moved under us, so the previously-paged `codex:` rows are stale
+ *  by definition and are dropped rather than merged. */
+function applyNativeResetPage(
+  page: ChatMessage[],
+  runtimeId: string,
+  beforePrepend?: () => void
+): boolean {
+  beforePrepend?.()
+  sessionTileDelegate()?.updateSession(runtimeId, state => ({
+    ...state,
+    messages: preserveLocalPendingTurnMessages(
+      page,
+      state.messages.filter(message => !message.id.startsWith('codex:'))
+    )
+  }))
+  return true
+}
+
+/** Prepend one older page to the store. Returns false when it added nothing (exhausted or
+ *  overlapping only), so the caller does not leave the list waiting for a commit. */
+function applyOlderTranscriptPage(
+  olderPage: ChatMessage[],
+  runtimeId: string,
+  current: ChatMessage[],
+  beforePrepend: (() => void) | undefined,
+  onGrew: () => void
+): boolean {
+
+  if (mergeOlderTranscriptPage(current, olderPage) === current) {
+    return false
+  }
+
+  beforePrepend?.()
+  onGrew()
+  let grew = false
+  sessionTileDelegate()?.updateSession(runtimeId, state => {
+    const merged = mergeOlderTranscriptPage(state.messages, olderPage)
+    grew = merged !== state.messages
+
+    return grew ? { ...state, messages: merged } : state
+  })
+  return grew
 }
 
 const ChatViewContent = memo(function ChatViewContent({
