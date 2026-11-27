@@ -99,7 +99,8 @@ def test_display_history_flushes_reasoning_at_each_native_turn_boundary(monkeypa
     assert rows[0]["role"] == "assistant"
     assert rows[0]["reasoning"] == "The native turn ended while I checked the output."
     assert rows[1]["content"] == "Continue."
-    assert rows[2] == {"role": "assistant", "content": "Continuing now."}
+    assert rows[2]["role"] == "assistant"
+    assert rows[2]["content"] == "Continuing now."
 
 
 def test_unrecorded_linked_turns_hide_unknown_policy_with_explicit_notice(monkeypatch):
@@ -293,8 +294,14 @@ def test_display_page_is_bounded_and_never_returns_raw_native_items(monkeypatch)
         thread_id, session_id="stored-session", model="codex-model", limit=1, client=Client(),
         display_overlays=_overlay("native-turn", "safe answer"))
     assert result["next_cursor"] == "next-page"
-    assert result["turns"] == [{"id": "native-turn", "status": "completed",
-                                "rows": [{"role": "assistant", "content": "safe answer"}]}]
+    # The row carries its stable identity stamp (desktop row keying / cross-page dedupe) and nothing
+    # from the raw native item — ``secretField`` must never survive the projection.
+    assert [(t["id"], t["status"], t["rows"]) for t in result["turns"]] == [
+        ("native-turn", "completed", [{"role": "assistant", "content": "safe answer",
+                                       "codex_native_row_id":
+                                           result["turns"][0]["rows"][0]["codex_native_row_id"]}])]
+    assert result["turns"][0]["rows"][0]["codex_native_row_id"].startswith("codex:")
+    assert "secretField" not in json.dumps(result)
 
     with pytest.raises(ValueError, match="display byte limit"):
         codex_linked_history.display_native_turn_page(

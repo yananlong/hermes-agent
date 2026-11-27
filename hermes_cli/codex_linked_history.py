@@ -374,7 +374,7 @@ def read_display_turns(thread_id: str, *, client=None, max_turns: int = 2_000,
                 turn_id = turn.get("id")
                 if not isinstance(turn_id, str) or not turn_id or len(turn_id) > 256:
                     raise ValueError("Codex returned a native turn without a stable ID")
-                record = native_turn_record(turn)
+                record = native_turn_record(turn, thread_id=thread_id)
                 try:
                     total_bytes += len(json.dumps(record, ensure_ascii=False, default=str).encode("utf-8"))
                 except (TypeError, ValueError):
@@ -494,7 +494,7 @@ def read_latest_display_turns(thread_id: str, *, client=None, max_turns: int = 2
                 turn_id = turn.get("id")
                 if not isinstance(turn_id, str) or not turn_id or len(turn_id) > 256:
                     raise ValueError("Codex returned a native turn without a stable ID")
-                record = native_turn_record(turn)
+                record = native_turn_record(turn, thread_id=thread_id)
                 try:
                     size = len(json.dumps(record, ensure_ascii=False, default=str).encode("utf-8"))
                 except (TypeError, ValueError):
@@ -565,7 +565,7 @@ def display_native_turn_page(thread_id: str, *, session_id: str, model: str | No
     turns = page.get("turns")
     if not isinstance(turns, list):
         raise ValueError("Codex returned an invalid history page")
-    records = [native_turn_record(turn) for turn in turns]
+    records = [native_turn_record(turn, thread_id=thread_id) for turn in turns]
     overlays = display_overlays
     if overlays is None and session_db is not None:
         overlays = linked_turn_display_overlays(

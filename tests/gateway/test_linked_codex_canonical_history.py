@@ -76,14 +76,16 @@ async def test_canonical_resume_history_and_transcript_read_codex_native_turns(t
     monkeypatch.setattr("gateway.session_linked_codex.read_display_history",
                         lambda _thread, **_kwargs: list(native))
     try:
+        # A linked resume NEVER reads the native thread: the client pages the transcript instead.
+        # Returning native rows here made resume pay the whole-thread read, so the projection the
+        # row carries is the local mirror and must not be rendered beside the linked marker.
         resumed = await owner.dispatch({"id": 1, "method": "session.resume", "params": {
             "session_id": ref.session_id, "display_projection": True}})
         assert "result" in resumed, resumed
-        assert resumed["result"]["message_count"] == 3, resumed
-        assert [row["content"] for row in resumed["result"]["messages"]] == [
-            "from Codex CLI", "native answer", "second prompt"]
-        assert [row["text"] for row in resumed["result"]["display_messages"]] == [
-            "from Codex CLI", "native answer", "second prompt"]
+        assert resumed["result"]["linked_codex"] is True, resumed
+        assert resumed["result"]["messages_omitted"] is True, resumed
+        assert resumed["result"]["messages"] == [], resumed
+        assert resumed["result"]["message_count"] is None, resumed
 
         history = await owner.dispatch({"id": 2, "method": "session.history", "params": {
             "session_id": ref.session_id}})
@@ -237,11 +239,20 @@ async def test_linked_resume_fails_closed_when_codex_history_is_unavailable(tmp_
     def unavailable(*_args, **_kwargs):
         raise OSError("Codex app-server unavailable")
 
-    monkeypatch.setattr("gateway.session_linked_codex._read_trace_turns", unavailable)
+    # The latest-first window walks native pages through ``read_codex_history`` (imported at call
+    # time inside ``_latest_projected_page``), not the full-read ``_read_trace_turns`` path.
+    monkeypatch.setattr("hermes_cli.codex_linked_threads.read_codex_history", unavailable)
     try:
+        # Resume itself must succeed with Codex down: it answers the linked marker and reads nothing,
+        # so the client pages. The failure surfaces on the TRANSCRIPT read the client makes next.
         reply = await owner.dispatch({"id": 1, "method": "session.resume", "params": {
-            "session_id": ref.session_id}})
-        assert reply["error"]["data"]["reason"] == "storage_unavailable", reply
+            "session_id": ref.session_id, "omit_messages": True}})
+        assert "result" in reply, reply
+        assert reply["result"]["linked_codex"] is True, reply
+
+        page = await owner.dispatch({"id": 2, "method": "session.transcript", "params": {
+            "session_id": ref.session_id, "order": "latest", "limit": 10}})
+        assert page["error"]["data"]["reason"] == "storage_unavailable", page
     finally:
         await owner.close()
         store.close_all_db_handles()
@@ -931,8 +942,10 @@ def test_display_history_window_budget_hit_mid_page_returns_newest_fitting_rows(
     turns = [_two_row_turn(n) for n in range(1, 8)]
     thread_id, kwargs = _window_fixture(monkeypatch, turns)
     # Budget fits exactly the two newest turns, so the third-newest turn trips the budget
-    # mid-page and the outer loop must stop instead of paging older turns.
-    one = len(json.dumps(native_turn_record(turns[0]), ensure_ascii=False, default=str).encode())
+    # mid-page and the outer loop must stop instead of paging older turns. Measure each turn the
+    # way the window does: the record carries its thread_id stamp, which adds bytes.
+    one = len(json.dumps(native_turn_record(turns[0], thread_id=thread_id),
+                         ensure_ascii=False, default=str).encode())
     rows = read_display_history_window(thread_id, limit=100, offset=0, latest=True,
                                        max_bytes=2 * one + one // 2, **kwargs)
     contents = [r["content"] for r in rows]
