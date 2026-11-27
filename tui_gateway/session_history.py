@@ -302,6 +302,21 @@ def _codex_native_history_row(message: dict) -> bool:
     return isinstance(metadata, dict) and metadata.get("codex_native") is True
 
 
+def _display_row_identity(m: dict, msg: dict) -> None:
+    """Copy the display-only identity fields a paging/reaction client keys its rows by.
+
+    Neither field is a Hermes row: ``row_id`` addresses a persisted message (reactions, rewind) and
+    ``codex_native_row_id`` addresses a row inside a native Codex thread. Both are display-only and
+    never fed back into model context. A paging client needs the native one because a native page
+    has no ``row_id`` at all.
+    """
+    if m.get("_row_id") is not None:
+        msg["row_id"] = m["_row_id"]
+    native_row_id = m.get("codex_native_row_id")
+    if isinstance(native_row_id, str) and native_row_id:
+        msg["codex_native_row_id"] = native_row_id
+
+
 def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: bool = True) -> list[dict]:
     """``image_urls=False`` is the ``inline_images=false`` projection (#116511): image parts render ``[image]``
     so a remote client's history read stays kilobytes instead of re-transmitting every stored attachment."""
@@ -373,14 +388,8 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
         if isinstance(ts, (int, float)) and ts > 0:
             msg["timestamp"] = float(ts)
         # Durable row identity (_rows_to_conversation); reactions etc. address persisted messages by it.
-        if m.get("_row_id") is not None:
-            msg["row_id"] = m["_row_id"]
-        # A native (linked Codex) row's identity inside its own thread. Display-only, like
-        # ``row_id``: it is not a Hermes row, so nothing may address it as a rewind/regenerate
-        # target, but a paging client keys its rows by it (a native page has no ``row_id``).
-        native_row_id = m.get("codex_native_row_id")
-        if isinstance(native_row_id, str) and native_row_id:
-            msg["codex_native_row_id"] = native_row_id
+        # A native (linked Codex) row's identity inside its own thread rides the same helper.
+        _display_row_identity(m, msg)
         # A user turn shows its skill invocation, never the expanded body (rewind re-sends by ordinal).
         invocation = _skill_scaffold_projection(content_text) if role == "user" else ""
         if invocation:

@@ -225,6 +225,37 @@ def read_display_history(thread_id: str, *, session_id: str, model: str | None =
     return rows[offset:] if limit is None else rows[offset:offset + limit]
 
 
+def _bounded_turn_record(turn, *, thread_id, max_bytes, total_bytes, collected, have_records, latest):
+    """Project one native turn under the byte budget.
+
+    Returns ``(record, size, budget_hit)``. A first turn bigger than the whole budget keeps its
+    tail (latest) or head (oldest) instead of blanking the window; a mid-list one stops the walk
+    with fewer rows rather than truncating.
+    """
+    from hermes_cli.codex_linked_history import native_turn_record, truncate_record_tail
+
+    if not isinstance(turn, dict) or not isinstance(turn.get("items", []), list):
+        raise ValueError("Codex returned an invalid history turn")
+    turn_id = turn.get("id")
+    if not isinstance(turn_id, str) or not turn_id or len(turn_id) > 256:
+        raise ValueError("Codex returned a native turn without a stable ID")
+    record = native_turn_record(turn, thread_id=thread_id)
+    try:
+        size = len(json.dumps(record, ensure_ascii=False, default=str).encode("utf-8"))
+    except (TypeError, ValueError):
+        raise ValueError("Codex returned an invalid history turn") from None
+    if total_bytes + size <= max_bytes:
+        return record, size, False
+    if collected == 0 and not have_records:
+        record = truncate_record_tail(record, max_bytes - total_bytes,
+                                      keep="tail" if latest else "head")
+        if record.get("rows"):
+            return record, len(json.dumps(record, ensure_ascii=False, default=str).encode("utf-8")), True
+    # A stub (budget below record overhead) projects to no rows; stop so the window fails soft
+    # to empty instead of raising.
+    return None, 0, True
+
+
 def read_display_history_window(thread_id: str, *, session_id: str, model: str | None = None,
                                 profile_home=None, client=None, limit: int = 500, offset: int = 0,
                                 latest: bool = True, session_db=None, platform: str = "",
@@ -278,34 +309,14 @@ def read_display_history_window(thread_id: str, *, session_id: str, model: str |
                 turns_seen += len(turns)
                 records = []
                 for turn in turns:
-                    if not isinstance(turn, dict) or not isinstance(turn.get("items", []), list):
-                        raise ValueError("Codex returned an invalid history turn")
-                    turn_id = turn.get("id")
-                    if not isinstance(turn_id, str) or not turn_id or len(turn_id) > 256:
-                        raise ValueError("Codex returned a native turn without a stable ID")
-                    record = native_turn_record(turn, thread_id=thread_id)
-                    try:
-                        size = len(json.dumps(record, ensure_ascii=False, default=str).encode("utf-8"))
-                    except (TypeError, ValueError):
-                        raise ValueError("Codex returned an invalid history turn") from None
-                    if total_bytes + size > max_bytes:
-                        if collected == 0 and not records:
-                            # One turn larger than the whole budget must not blank the
-                            # window: keep its tail (latest) or head (oldest) within the
-                            # full budget instead of dropping it. Mid-list oversized turns
-                            # keep the fail-soft stop above (fewer rows, no truncation).
-                            record = truncate_record_tail(record, max_bytes - total_bytes,
-                                                          keep="tail" if latest else "head")
-                            if record.get("rows"):
-                                total_bytes += len(json.dumps(record, ensure_ascii=False,
-                                                              default=str).encode("utf-8"))
-                                records.append(record)
-                            # A stub (budget below record overhead) projects to no rows;
-                            # stop here so the window fails soft to empty instead of raising.
-                        budget_hit = True
+                    record, size, budget_hit = _bounded_turn_record(
+                        turn, thread_id=thread_id, max_bytes=max_bytes, total_bytes=total_bytes,
+                        collected=collected, have_records=bool(records), latest=latest)
+                    if record is not None:
+                        total_bytes += size
+                        records.append(record)
+                    if budget_hit:
                         break
-                    total_bytes += size
-                    records.append(record)
                 if records:
                     if direction == "desc":
                         records.reverse()  # keep rows ascending within each page
@@ -509,6 +520,56 @@ def _latest_projected_page(client, thread_id, cursor, page_size, *, session_id, 
     return result, _next_cursor(page)
 
 
+class _WindowStop(Exception):
+    """The page walk is complete: ``payload`` is the final answer for the caller."""
+
+    def __init__(self, payload):
+        self.payload = payload
+
+
+def _seek_past_consumed_rows(full_rows, seek):
+    """Trim the rows a cursor's anchor already returned and validate the anchor turn is unchanged.
+
+    A ``consumed`` larger than the turn now has means the native history was rewritten under the
+    cursor, so the caller restarts from the tip instead of splicing two snapshots.
+    """
+    if len(full_rows) < seek.consumed:
+        raise _WindowStop(None)
+    return full_rows[:len(full_rows) - seek.consumed]
+
+
+def _walk_page_rows(records, *, current, selected, last, seek, limit, next_cursor, session_id, thread_id,
+                    page_size, size_of, bounded_row, page_bytes):
+    """Append rows newest-first from one page until the row/byte limit is reached.
+
+    Returns ``(last, seek)`` when the page is exhausted, or raises ``_WindowStop`` with the payload
+    when the window is full. ``selected`` is mutated in place (ascending order at the end).
+    """
+    for index, (turn_id, full_rows, digest) in enumerate(records):
+        if seek is not None:
+            if turn_id != seek.turn_id:
+                continue
+            if digest != seek.digest:
+                raise _WindowStop(None)  # the anchor turn was rewritten: restart from the tip
+            full_rows, seek = _seek_past_consumed_rows(full_rows, seek), None
+        for row_index in range(len(full_rows) - 1, -1, -1):
+            row = {**full_rows[row_index], "row_kind": "message"}
+            if size_of([*selected, row]) > page_bytes:
+                if selected:
+                    raise _WindowStop({"rows": list(reversed(selected)),
+                                       "next_cursor": _encode_latest_cursor(session_id, thread_id, last),
+                                       "reset": None})
+                row = bounded_row(row, page_bytes - 128)
+            selected.append(row)
+            last = _LatestNativeCursor(current, turn_id, len(full_rows) - row_index, digest, page_size)
+            if len(selected) == limit:
+                more = row_index > 0 or index + 1 < len(records) or next_cursor is not None
+                raise _WindowStop({
+                    "rows": list(reversed(selected)), "reset": None,
+                    "next_cursor": _encode_latest_cursor(session_id, thread_id, last) if more else None})
+    return last, seek
+
+
 def _latest_native_window(connection, session_id, thread_id, *, cursor, limit, inline_images, owner_session_id,
                           output_model):
     """Walk backward from a page anchor, detecting shifts caused by newly appended turns."""
@@ -527,6 +588,8 @@ def _latest_native_window(connection, session_id, thread_id, *, cursor, limit, i
     page_cursor = held.native_cursor if held else None
     seek = held
     selected, last, seen = [], None, set()
+    restart = {"cursor": None, "limit": limit, "inline_images": inline_images,
+               "owner_session_id": owner_session_id, "output_model": output_model}
     try:
         with _codex_client(profile_home=store.scope.profile_dir) as client:
             for _ in range(128):
@@ -535,36 +598,19 @@ def _latest_native_window(connection, session_id, thread_id, *, cursor, limit, i
                     client, thread_id, current, page_size, session_id=owner_session_id, store=store,
                     model=model, platform=platform, profile_home=connection.authority.profile_id,
                     inline_images=inline_images)
-                for index, (turn_id, full_rows, digest) in enumerate(records):
-                    rows = full_rows
-                    if seek is not None:
-                        if turn_id != seek.turn_id:
-                            continue
-                        if digest != seek.digest or seek.consumed > len(rows):
-                            return _latest_native_window(connection, session_id, thread_id, cursor=None,
-                                                         limit=limit, inline_images=inline_images,
-                                                         owner_session_id=owner_session_id, output_model=output_model)
-                        rows = rows[:len(rows) - seek.consumed]
-                        seek = None
-                    for row_index in range(len(rows) - 1, -1, -1):
-                        row = {**rows[row_index], "row_kind": "message"}
-                        if _size([*selected, row]) > PAGE_BYTES:
-                            if selected:
-                                return {"rows": list(reversed(selected)),
-                                        "next_cursor": _encode_latest_cursor(session_id, thread_id, last),
-                                        "reset": reset}
-                            row = _bounded(row, PAGE_BYTES - 128)
-                        selected.append(row)
-                        last = _LatestNativeCursor(current, turn_id, len(full_rows) - row_index, digest, page_size)
-                        if len(selected) == limit:
-                            more = row_index > 0 or index + 1 < len(records) or next_cursor is not None
-                            return {"rows": list(reversed(selected)), "reset": reset,
-                                    "next_cursor": _encode_latest_cursor(session_id, thread_id, last) if more else None}
+                try:
+                    last, seek = _walk_page_rows(
+                        records, current=current, selected=selected, last=last, seek=seek, limit=limit,
+                        next_cursor=next_cursor, session_id=session_id, thread_id=thread_id,
+                        page_size=page_size, size_of=_size, bounded_row=_bounded, page_bytes=PAGE_BYTES)
+                except _WindowStop as stop:
+                    if stop.payload is None:
+                        return _latest_native_window(connection, session_id, thread_id, **restart)
+                    stop.payload["reset"] = reset
+                    return stop.payload
                 if next_cursor is None:
                     if seek is not None:
-                        return _latest_native_window(connection, session_id, thread_id, cursor=None, limit=limit,
-                                                     inline_images=inline_images, owner_session_id=owner_session_id,
-                                                     output_model=output_model)
+                        return _latest_native_window(connection, session_id, thread_id, **restart)
                     return {"rows": list(reversed(selected)), "next_cursor": None, "reset": reset}
                 if next_cursor in seen or not records:
                     raise ValueError("Codex returned a repeating history cursor")
