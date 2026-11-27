@@ -261,6 +261,57 @@ describe('texToUnicode — punctuation commands without lookahead', () => {
   })
 })
 
+describe('texToUnicode — √ radicals', () => {
+  it('unwraps the radicand instead of leaving braces attached', () => {
+    // Regression: `\sqrt` was a bare table entry, and a table has no notion
+    // of arity, so `\sqrt{\nu\pi}` came out as `√{νπ}` — reading as
+    // unrendered LaTeX rather than a radical.
+    expect(texToUnicode('\\sqrt{\\pi}')).toBe('√π')
+    expect(texToUnicode('\\sqrt{\\nu\\pi}')).toBe('√νπ')
+    expect(texToUnicode('\\sqrt{x}')).toBe('√x')
+  })
+
+  it('keeps parens when the radicand needs grouping', () => {
+    // A vinculum over a sum is the one thing a flat string cannot express:
+    // `√b²-4ac` would read as √b² minus 4ac.
+    expect(texToUnicode('\\sqrt{b^{2}-4ac}')).toBe('√(b²-4ac)')
+    expect(texToUnicode('\\sqrt{x^2+y^2}')).toBe('√(x²+y²)')
+  })
+
+  it('renders the degree of \\sqrt[n] as a superscript prefix', () => {
+    expect(texToUnicode('\\sqrt[3]{x}')).toBe('³√x')
+    expect(texToUnicode('\\sqrt[3]{x^{2}+1}')).toBe('³√(x²+1)')
+  })
+
+  it('converts a radicand that itself carries a fraction', () => {
+    expect(texToUnicode('\\sqrt{\\frac{a}{b}}')).toBe('√(a/b)')
+    expect(texToUnicode('\\frac{\\sqrt{x}}{2}')).toBe('√x/2')
+  })
+
+  it('renders the quadratic formula as one arc', () => {
+    expect(texToUnicode('x = \\frac{-b \\pm \\sqrt{b^{2}-4ac}}{2a}')).toBe('x = (-b ± √(b²-4ac))/2a')
+  })
+
+  it('preserves malformed \\sqrt rather than throwing', () => {
+    // Streaming input routinely shows a half-emitted command; a parse-error
+    // placeholder reads as a broken product, raw LaTeX reads as pending text.
+    expect(texToUnicode('\\sqrt')).toBe('√')
+    expect(texToUnicode('\\sqrt{')).toBe('√{')
+    expect(texToUnicode('\\sqrt{a')).toBe('√{a')
+    expect(texToUnicode('\\sqrtb{x}')).toBe('\\sqrtb{x}')
+  })
+})
+
+describe('texToUnicode — reduced Planck constant', () => {
+  it('renders \\hbar and \\hslash', () => {
+    // Both were absent from the table entirely, so they leaked as raw
+    // LaTeX. The desktop's KaTeX path resolved them, which made the gap a
+    // cross-surface parity bug rather than a missing glyph.
+    expect(texToUnicode('E = \\hbar \\omega')).toBe('E = ℏ ω')
+    expect(texToUnicode('\\hslash')).toBe('ℏ')
+  })
+})
+
 describe('texToUnicode — round-trip realism', () => {
   it('renders a typical model-emitted formula', () => {
     expect(texToUnicode('\\alpha \\in \\mathbb{R}, \\alpha \\notin \\mathbb{Q}')).toBe('α ∈ ℝ, α ∉ ℚ')
