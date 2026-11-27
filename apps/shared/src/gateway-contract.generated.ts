@@ -5460,9 +5460,10 @@ export interface CanonicalSnapshot {
   stored_session_id: string
   messages: TranscriptMessage[]
   linked_codex?: boolean
+  linked_history_identity?: string | null
   messages_omitted?: boolean | null
   display_messages?: TranscriptMessage[] | null
-  message_count: number
+  message_count: number | null
   running: boolean
   authority_epoch: number
   replay_epoch: string

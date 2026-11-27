@@ -145,9 +145,9 @@ async def _resume_transcript(authority, ref, snapshot, history, omit, *, linked_
     # Its home module, not tui_gateway.server: importing the stdio sidecar points sys.stdout at stderr.
     from tui_gateway.tool_progress import _todo_state_from_history
     if linked_codex:
-        # The native source has no cheap count or todo lookup. Keep the legacy integer field as the
-        # physical pointer row's local count, but clients must use the linked marker and transcript
-        # RPC for native content. A pointer's mirror can be empty or stale and is never displayed.
+        # The native source has no cheap count or todo lookup, and a pointer row's local mirror can
+        # be empty or stale, so it is never a count any client may render. ``None`` says "unknown";
+        # the integer 0 would read as "an empty conversation" beside the linked marker.
         store = authority_persistence(authority)
         row = store.sessions.get(linked_target or snapshot.transcript_target or ref.session_id)
         if row is None:
@@ -156,7 +156,7 @@ async def _resume_transcript(authority, ref, snapshot, history, omit, *, linked_
         identity = linked_history_identity(authority.profile_id, ref.session_id,
                                            linked_target or snapshot.transcript_target or ref.session_id,
                                            linked_thread)
-        return {'messages': [], 'messages_omitted': True, 'message_count': int(row.message_count or 0),
+        return {'messages': [], 'messages_omitted': True, 'message_count': None,
                 'todo_state': None, 'linked_codex': True, 'linked_history_identity': identity}
     if not omit:
         # The newest todo result in the transcript, the snapshot the session's agent hydrates

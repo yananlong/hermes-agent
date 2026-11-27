@@ -155,8 +155,9 @@ class CanonicalSnapshot(Result):
     messages_omitted: bool | None = None
     # Present only when ``display_projection`` was asked: the rows as main's TUI rendered them.
     display_messages: list[TranscriptMessage] | None = None
-    # A linked native transcript may have no cheap count when history is omitted.
-    message_count: int
+    # A linked native transcript has no cheap count when its history is omitted: ``None``, never a
+    # pointer row's stale local mirror count.
+    message_count: int | None
     running: bool
     authority_epoch: int
     replay_epoch: str

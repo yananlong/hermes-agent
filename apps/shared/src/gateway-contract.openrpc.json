@@ -11439,6 +11439,18 @@
             "title": "Linked Codex",
             "type": "boolean"
           },
+          "linked_history_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Linked History Identity"
+          },
           "messages_omitted": {
             "anyOf": [
               {
@@ -11467,8 +11479,15 @@
             "title": "Display Messages"
           },
           "message_count": {
-            "title": "Message Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Count"
           },
           "running": {
             "title": "Running",
