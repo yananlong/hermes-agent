@@ -36,7 +36,7 @@ def _wrapped_slice(text, width, start, count):
         if start >= chunks:
             start -= chunks
             continue
-        for index in range(start, min(chunks, start + (count - len(result)))):
+        for index in range(start, min(chunks, start + count - len(result))):
             result.append(line[index * width:(index + 1) * width])
         start = 0
         if len(result) >= count:

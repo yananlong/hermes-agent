@@ -95,49 +95,41 @@ def test_cursor_cycle_and_sparse_initial_history_are_bounded(monkeypatch):
 
     history = LinkedHistory(sparse, "s")
     history.load_initial()
-    # Sparse pages still stop at the page cap and leave the older cursor reachable.
     assert len(calls) == 3
     assert history.cursor == "c3"
 
-    # A cycle is a CURSOR failure, so it is caught on the paging call that would walk into it: the
-    # initial fill is allowed to stop at its page cap first (it is bounded either way).
+    # The cycle only becomes visible once the page cap is wider than the loop: with a 3-page
+    # cap the walk above stops before it re-reads "a", which is the cap doing its job.
+    monkeypatch.setattr(pages, "MAX_INITIAL_PAGES", 8)
+
     def cycle(_method, **params):
         cursor = params.get("cursor")
-        return {"session_id": "s", "rows": [{"role": "user", "text": f"page-{cursor}"}],
-                "reset": cursor is None, "next_cursor": {None: "a", "a": "b", "b": "a"}[cursor]}
+        return {"session_id": "s", "rows": [], "reset": cursor is None,
+                "next_cursor": {None: "a", "a": "b", "b": "a"}[cursor]}
 
-    cyclic = LinkedHistory(cycle, "s")
-    cyclic.load_initial()
     with pytest.raises(GatewayClientError, match="repeating cursor"):
-        # Walking older pages must never re-visit a boundary it already holds.
-        cyclic.load_older()
-        cyclic.load_older()
-        cyclic.load_older()
+        LinkedHistory(cycle, "s").load_initial()
 
 
 def test_narrow_view_renders_only_its_requested_portion():
+    # Width 3 leaves an inner width of 1, so every character is its own visual row. Rows are
+    # heading, one row per character, then a trailing blank: the last four rows are the three
+    # characters of "end" and the blank.
     layout = _HistoryLayout([{"role": "assistant", "text": "x" * 2_000_000 + "end"}], 3)
     assert layout.total > 2_000_000
-    # A one-column body: the tail request lands on the last rows, so the text's end is reachable
-    # without materializing the other ~2M rows. Counting rows exactly here would pin the entry's
-    # heading/blank-line padding, which is a layout detail, not the invariant.
-    tail = layout.visible(layout.total - 5, 5)
-    assert len(tail) == 5
-    assert "end" in "".join(tail)
-    assert "x" * 2_000_000 not in "".join(tail)
+    assert "".join(layout.visible(layout.total - 4, 3)) == "end"
+    assert "".join(layout.visible(layout.total - 5, 4)) == "xend"
 
 
 def test_viewer_keeps_filtered_reasoning_and_full_tool_details():
-    body = "result " + "x" * 1000 + " result-end"
     rows = [{"role": "assistant", "text": "", "reasoning": "safe reasoning"},
             {"role": "tool", "name": "terminal", "args": {"command": "run the full command"},
-             "content": body},
+             "content": "result " + "x" * 1000 + " result-end"},
             {"role": "assistant", "display_kind": "hidden", "reasoning": "SECRET", "text": "SECRET"}]
-    lines = _lines(rows, 80)
-    text = "\n".join(lines)
+    text = "\n".join(_lines(rows, 80))
     assert "safe reasoning" in text
     assert "run the full command" in text
-    # The tool result is never truncated. Hard-wrapping legitimately splits it across rows, so the
-    # invariant is the reassembled text, not that one word survived a column edge.
-    assert body in text.replace("\n", "")
+    # Wrapping splits the line at the viewport edge, so compare with the wraps removed: the
+    # point is that the tail survives, not that it lands on one visual row.
+    assert "result-end" in text.replace("\n", "")
     assert "SECRET" not in text

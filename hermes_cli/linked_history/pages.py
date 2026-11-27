@@ -7,10 +7,15 @@ import hashlib
 
 from hermes_cli.gateway_client import GatewayClientError
 
-INITIAL_BYTES = 8 * 1024 * 1024
+#: Memory budget for the window the classic CLI holds for one linked Codex thread. The initial
+#: load walks newest-first and stops at this budget, so a long thread opens on its most recent
+#: turns instead of reading (or holding) the whole trace. 50 MiB is the agreed display cap; the
+#: gateway serves at most 2 MiB per page (``gateway.session_stored_reads.PAGE_BYTES``), so the
+#: page cap below stays comfortably above ``INITIAL_BYTES / 2 MiB``.
+INITIAL_BYTES = 50 * 1024 * 1024
 PAGE_ROWS = 500
 MAX_PAGE_MARKERS = 8192
-MAX_INITIAL_PAGES = 32
+MAX_INITIAL_PAGES = 64
 
 
 class LinkedHistory:
@@ -83,11 +88,6 @@ class LinkedHistory:
             cursor = page["after"]
             if cursor is None or self.bytes >= INITIAL_BYTES or page_count + 1 == MAX_INITIAL_PAGES:
                 break
-            if cursor in seen:
-                # The page just consumed points back at a cursor already walked: a cycle, not a
-                # boundary. Detected HERE because the next iteration would exit on the page cap
-                # before its own top-of-loop check.
-                raise GatewayClientError("Linked history returned a repeating cursor")
         self.revision += 1
         return self.rows
 

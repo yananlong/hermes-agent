@@ -633,7 +633,16 @@ class CLIAgentSetupMixin:
                 t("cli.resume.cannot_resume", error=resume_limit_error),
                 f"[bold red]{_escape(t('cli.resume.cannot_resume_prefix'))}[/] {_escape(resume_limit_error)}")
             return False
-        restored = self._session_db.get_messages_as_conversation(self._resume_read_id, repair_alternation=True)
+        linked_rows = self._linked_resume_display_rows()
+        if linked_rows is None:
+            restored = self._session_db.get_messages_as_conversation(self._resume_read_id, repair_alternation=True)
+        else:
+            # A linked Codex pointer owns no Hermes transcript: its native rows are recap-only, and
+            # ``conversation_history`` stays empty so the turn path keeps writing to the native
+            # thread instead of treating the window as replayable history.
+            restored = []
+            self._resume_display_history = linked_rows
+            self._resume_history_loaded_for = self.session_id
         if restored:
             restored = [m for m in restored if m.get("role") != "session_meta"]
             self.conversation_history = restored
@@ -645,12 +654,42 @@ class CLIAgentSetupMixin:
                 f"[bold {_accent_hex()}]{_escape(t('cli.resume.resumed_session'))}[/] [bold]{_escape(self.session_id)}[/]"
                 f"[bold {_accent_hex()}]{_escape(title_part)}[/] {counts}")
             self._restore_session_state(session_meta, quiet=_quiet_mode)
+        elif linked_rows is not None:
+            self._say_linked_resume(linked_rows, session_meta, _say, _quiet_mode)
+            self._restore_session_state(session_meta, quiet=_quiet_mode)
         else:
             no_messages = t("cli.resume.session_no_messages", session_id=self.session_id,
                             title=f' "{session_meta["title"]}"' if session_meta.get("title") else "")
             _say(no_messages, f"[bold {_accent_hex()}]{_escape(no_messages)}[/]")
         self._reopen_session()
         return True
+
+    def _linked_resume_display_rows(self):
+        """Native recap rows for a linked Codex pointer, or None for an ordinary session.
+
+        Thin delegator: the read and the failure policy live in ``cli_linked_history`` so this
+        module keeps its file budget.
+        """
+        from hermes_cli.cli_linked_history import linked_display_rows
+        return linked_display_rows(self._session_db, getattr(self, "_resume_read_id", None) or self.session_id)
+
+    def _say_linked_resume(self, linked_rows, session_meta, _say, quiet: bool) -> None:
+        """The resumed-session line for a pointer, then one honest line if Codex could not be read."""
+        from cli import _accent_hex
+        from hermes_cli.cli_linked_history import unavailable_notice
+        from agent.context_compressor import is_user_originated_turn
+        title_part = f" \"{session_meta['title']}\"" if session_meta.get("title") else ""
+        msg_count = len([m for m in linked_rows if is_user_originated_turn(m)])
+        problem = unavailable_notice(linked_rows)
+        if problem:
+            # One line, in place of the recap: no count claim about history we could not read.
+            _say(problem, f"[bold {_accent_hex()}]{_escape(problem)}[/]")
+            return
+        counts = _resume_counts(msg_count, len(linked_rows))
+        _say(
+            f"{t('cli.resume.resumed_session')} {self.session_id}{title_part} {counts}",
+            f"[bold {_accent_hex()}]{_escape(t('cli.resume.resumed_session'))}[/] [bold]{_escape(self.session_id)}[/]"
+            f"[bold {_accent_hex()}]{_escape(title_part)}[/] {counts}")
 
     def _init_agent(self, *, model_override: str | None = None, runtime_override: dict | None = None, request_overrides: dict | None = None) -> bool:
         """Build the agent on first use; when resuming, restore history from SQLite.
