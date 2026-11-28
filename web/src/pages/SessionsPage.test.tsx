@@ -235,6 +235,41 @@ describe("structured reasoning rendering (#59957)", () => {
     expect(document.querySelectorAll("pre code").length).toBeGreaterThanOrEqual(2);
   });
 
+  it("renders a row's own reasoning field, not just markup embedded in content", async () => {
+    // A linked Codex transcript carries chain-of-thought on the row (`reasoning`), the way the
+    // TUI's thinking block does. The preview used to read only `content`, so a linked thread
+    // showed answers with no visible reasoning at all.
+    apiMocks.getSessionMessages.mockResolvedValue({
+      session_id: "sid-linked",
+      messages: [
+        { role: "user", content: "progress?" },
+        {
+          role: "assistant",
+          content: "The team reproduced it.",
+          reasoning: "I should read the failing test first.",
+        },
+      ],
+    });
+    await renderSessionsPage([
+      { id: "sid-linked", profile: "default", source: "cli", model: null, title: "Linked", started_at: 1,
+        ended_at: null, last_active: 1, is_active: false, message_count: 2, tool_call_count: 0,
+        input_tokens: 1, output_tokens: 1, preview: "progress" },
+    ]);
+    await expandFirstSession();
+    await waitFor(() => (document.body.textContent ?? "").includes("The team reproduced it."));
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("Reasoning");
+    expect(text).toContain("I should read the failing test first.");
+    // The reasoning renders in its own collapsed block, above the answer — not merged into the
+    // Markdown body the way `content` is.
+    const details = document.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details!.querySelector("summary")?.textContent).toContain("Reasoning");
+    expect(details!.textContent).toContain("I should read the failing test first.");
+    expect(details!.textContent).not.toContain("The team reproduced it.");
+  });
+
   it("keeps literal known tags in user messages on the Markdown path", async () => {
     apiMocks.getSessionMessages.mockResolvedValue({
       session_id: "sid-reasoning",

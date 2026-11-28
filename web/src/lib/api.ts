@@ -2029,6 +2029,10 @@ export interface TelegramOnboardingApplyResponse {
 export interface SessionMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string | null;
+  /** Codex/Responses chain-of-thought for this assistant row. Present on a linked native
+   *  transcript and on any session whose model emitted reasoning; absent otherwise. */
+  reasoning?: string | null;
+  reasoning_content?: string | null;
   tool_calls?: Array<{
     id: string;
     function: { name: string; arguments: string };

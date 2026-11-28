@@ -238,7 +238,7 @@ export const en: Translations = {
     linkedReadonlyWarning:
       "This linked session reads its history live from the native tool's own store. Hermes stores only a pointer and does not write a second transcript, so its model and workspace controls stay read-only here.",
     linkedResumeDisabled:
-      "Opens read-only here: the transcript lives in the native tool, and its model is chosen there.",
+      "Opens here. Its transcript is read live from the native tool, and you can continue the thread from this pane; its model is chosen in the native tool.",
     linkedHostStore: (label: string, host: string) => `No readable ${label} session store on ${host}.`,
     linkedHostWritable: (label: string) =>
       `This host can append to ${label} threads, so new turns from here continue the same one.`,

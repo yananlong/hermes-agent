@@ -330,6 +330,7 @@ function MessageBubble({
           </span>
         )}
       </div>
+      <MessageReasoning msg={msg} highlightTerms={highlightTerms} />
       {msg.content &&
         (msg.role === "system" ? (
           <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
@@ -351,6 +352,35 @@ function MessageBubble({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Chain-of-thought for one assistant row.
+ *
+ * A linked Codex/Responses transcript carries the model's reasoning on the row itself, and the
+ * TUI renders it as a thinking block. The preview is the one surface that did not, so a linked
+ * thread read here showed answers with no visible reasoning. Collapsed by default to keep the
+ * timeline scannable.
+ */
+function MessageReasoning({
+  msg,
+  highlightTerms,
+}: {
+  msg: SessionMessage;
+  highlightTerms?: string[];
+}) {
+  const reasoning = msg.reasoning ?? msg.reasoning_content;
+  if (msg.role !== "assistant" || !reasoning) return null;
+  return (
+    <details className="mt-1 rounded border border-border-subtle bg-surface-subtle px-2 py-1">
+      <summary className="cursor-pointer text-xs font-medium text-text-tertiary">
+        Reasoning
+      </summary>
+      <div className="mt-1 text-sm text-text-secondary">
+        <StructuredReasoning content={reasoning} highlightTerms={highlightTerms} />
+      </div>
+    </details>
   );
 }
 
