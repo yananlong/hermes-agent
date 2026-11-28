@@ -425,10 +425,16 @@ class CLISessionMixin:
         """Display conversation history."""
         from cli import _cli_visible_print
         from hermes_cli.gateway_client import GatewayClientError
+        # ``getattr`` for the id: a caller can reach show_history before a session exists (a
+        # mocked CLI in tests, a panel rendered pre-resume), and an AttributeError here would
+        # replace the transcript with a traceback. Reading the loaded-for marker the same way
+        # keeps the pair consistent — both are absent or both are set.
         session_id = (getattr(self, "_resume_read_id", None)
-                      if getattr(self, "_resume_history_loaded_for", None) == self.session_id else None) or self.session_id
+                      if getattr(self, "_resume_history_loaded_for", None) == getattr(self, "session_id", None)
+                      else None) or getattr(self, "session_id", None)
         try:
-            linked_history = getattr(self._session_db, "linked_history", None) if self._session_db else None
+            session_db = getattr(self, "_session_db", None)
+            linked_history = getattr(session_db, "linked_history", None) if session_db else None
             history = linked_history(session_id, refresh=True) if callable(linked_history) else None
         except GatewayClientError as exc:
             _cli_visible_print(f"  Linked Codex history is unavailable: {exc}")
