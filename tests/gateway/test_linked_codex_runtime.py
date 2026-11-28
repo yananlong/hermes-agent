@@ -114,12 +114,6 @@ async def test_adopted_linked_codex_policy_runs_the_original_thread(
         assert not fake.requests("thread/start")
         sent = fake.requests("turn/start")
         assert len(sent) == 1 and sent[0]["msg"]["params"]["threadId"] == THREAD
-        # Ask for a reasoning summary, or Codex records reasoning items with empty
-        # summary/content and the transcript replays as if it never thought (#46527).
-        # Asserted even though a linked turn sends no `effort`: `summary` asks Codex to RECORD
-        # reasoning text, not to reason differently, so it must ride every turn/start.
-        params = sent[0]["msg"]["params"]
-        assert params.get("summary") == "auto", params
         assert len(fake.threads()[THREAD]["turns"]) == 1
     finally:
         await owner.close()

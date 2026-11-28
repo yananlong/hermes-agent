@@ -612,3 +612,36 @@ def test_native_command_secret_is_redacted_in_display_but_not_execution(monkeypa
     assert agent.tool_complete_callback.call_args.args[2]["command"].startswith("echo ")
     assert all(secret not in s for s in shown), shown
     assert item["command"] == "echo " + secret
+
+
+def test_the_session_asks_codex_to_record_reasoning_summaries():
+    """CoT only exists if Codex was told to summarise its reasoning.
+
+    `turn/start` accepts a per-turn `summary` param and even validates the enum, but the turn
+    still records `turn_context.summary == "none"` — verified against the real app-server, where
+    the per-turn param produced reasoning items with `summary: []`. The config override is the
+    route that actually works: with `-c model_reasoning_summary="auto"` a real turn stored
+    `{"summary": ["**Checking consecutive-even factors**"]}`. Losing this line silently returns
+    every linked thread to a CoT-less replay.
+    """
+    from agent.transports.codex_app_server_session import CodexAppServerSession
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def initialize(self, **_kwargs):
+            return None
+
+    session = CodexAppServerSession(cwd="/tmp", client_factory=FakeClient)
+    # ensure_started() constructs the client; the thread call itself may fail against a stub.
+    try:
+        session.ensure_started()
+    except Exception:
+        pass
+
+    args = captured.get("extra_args") or []
+    assert args[:1] == ["-c"], args
+    assert args[1].replace(" ", "") == 'model_reasoning_summary="auto"', args

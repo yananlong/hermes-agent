@@ -290,7 +290,14 @@ class CodexAppServerSession:
         if self._thread_id is not None:
             return self._thread_id
         if self._client is None:
-            self._client = self._client_factory(codex_bin=self._codex_bin, codex_home=self._codex_home)
+            self._client = self._client_factory(
+                codex_bin=self._codex_bin, codex_home=self._codex_home,
+                # Record a reasoning summary, or every reasoning item Codex stores carries
+                # summary: [] / content: [] and a linked thread replays with no CoT at all.
+                # This must ride the config override, NOT turn/start: the per-turn `summary`
+                # param passes validation yet the turn still records summary "none"
+                # (verified on the real app-server — only this route produces text).
+                extra_args=['-c', 'model_reasoning_summary="auto"'])
             self._client.initialize(client_name="hermes", client_title="Hermes Agent", client_version=_get_hermes_version())
         # Permissions are NOT sent on thread/start: codex gates ``thread/start.permissions``
         # behind experimentalApi + a matching ``[permissions]`` table in ~/.codex/config.toml.
@@ -524,18 +531,10 @@ class CodexAppServerSession:
                     params["effort"] = reasoning_effort
                 if service_tier != self._service_tier_sent:
                     params["serviceTier"] = service_tier
-                # Always ask for a reasoning SUMMARY, the same way the Responses transport does
-                # (agent/transports/codex.py sends ``{"summary": "auto"}``). Without it the
-                # app-server records reasoning items whose ``summary``/``content`` are empty, so
-                # Hermes persists thinking with no text and a linked thread replays as if Codex
-                # never thought at all (#46527 is the same loss on the Responses path).
-                #
-                # Sent even when ``effort`` is None — the LINKED case. A linked thread must not
-                # override Codex's own model/effort (agent/codex_runtime.py passes
-                # reasoning_effort=None there), but `summary` asks Codex to RECORD reasoning text
-                # rather than to reason differently, so it does not change the turn's behaviour;
-                # it only stops the history from replaying as if no thinking happened.
-                params["summary"] = "auto"
+                # NOTE: no per-turn ``summary``. It validates against the schema but the turn
+                # still records ``turn_context.summary == "none"``, so reasoning stays empty —
+                # verified on the real app-server. The config override at client construction
+                # (``model_reasoning_summary="auto"``) is the route that actually works.
                 ts = self._request_for(result, "turn/start", params, "turn/start")
                 if ts is not None:
                     self._service_tier_sent = service_tier
