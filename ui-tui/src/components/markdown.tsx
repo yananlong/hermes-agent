@@ -3,6 +3,7 @@ import { Fragment, memo, type ReactNode, useMemo } from 'react'
 
 import { ensureEmojiPresentation } from '../lib/emoji.js'
 import { normalizeExternalUrl } from '../lib/externalLink.js'
+import { renderMathLines } from '../lib/mathRender.js'
 import { BOX_CLOSE, BOX_OPEN, texToUnicode } from '../lib/mathUnicode.js'
 import { highlightLine, isHighlightable } from '../lib/syntax.js'
 import type { Theme } from '../theme.js'
@@ -14,6 +15,20 @@ import type { Theme } from '../theme.js'
 // theme accent for math). The leading / trailing space inside the
 // highlight gives a one-cell visual margin so the highlight reads as a
 // block, not a hug.
+// A display-math block: paint the expression to a grid and give each painted
+// row its own `<Text>`, because a fraction is genuinely several terminal rows.
+// Sharing one node for the single-line and block forms keeps the caller (a
+// near-cap function) from growing a second copy of the same JSX.
+const MathGrid = ({ color, tex }: { color: string; tex: string }): ReactNode => (
+  <Box flexDirection="column" paddingLeft={2}>
+    {renderMathLines(tex).map((row, r) => (
+      <Text color={color} key={r}>
+        {row}
+      </Text>
+    ))}
+  </Box>
+)
+
 const renderMath = (text: string): ReactNode => {
   if (!text.includes(BOX_OPEN)) {
     return text
@@ -862,11 +877,7 @@ function MdImpl({ cols, compact, t, text }: MdProps) {
           const inner = sameLineClose[1]!.trim()
 
           start('code')
-          nodes.push(
-            <Box flexDirection="column" key={key} paddingLeft={2}>
-              {inner ? <Text color={t.color.accent}>{renderMath(texToUnicode(inner))}</Text> : null}
-            </Box>
-          )
+          nodes.push(inner ? <MathGrid color={t.color.accent} key={key} tex={inner} /> : null)
           i++
 
           continue
@@ -908,15 +919,7 @@ function MdImpl({ cols, compact, t, text }: MdProps) {
         }
 
         start('code')
-        nodes.push(
-          <Box flexDirection="column" key={key} paddingLeft={2}>
-            {block.map((l, j) => (
-              <Text color={t.color.accent} key={j}>
-                {renderMath(texToUnicode(l))}
-              </Text>
-            ))}
-          </Box>
-        )
+        nodes.push(<MathGrid color={t.color.accent} key={key} tex={block.join(' ')} />)
         i = closeIdx + 1
 
         continue
