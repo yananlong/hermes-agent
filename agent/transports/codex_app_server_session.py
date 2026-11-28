@@ -294,9 +294,11 @@ class CodexAppServerSession:
                 codex_bin=self._codex_bin, codex_home=self._codex_home,
                 # Record a reasoning summary, or every reasoning item Codex stores carries
                 # summary: [] / content: [] and a linked thread replays with no CoT at all.
-                # This must ride the config override, NOT turn/start: the per-turn `summary`
-                # param passes validation yet the turn still records summary "none"
-                # (verified on the real app-server — only this route produces text).
+                # Verified end to end against the real binary: with this override a turn through
+                # CodexAppServerSession projects a reasoning row, the thread's stored history
+                # carries `["**Showing the divisibility step**"]`, and the linked read path
+                # renders it. Rides client construction rather than `turn/start` so it also
+                # covers turns whose params we do not build (compaction, resumed threads).
                 extra_args=['-c', 'model_reasoning_summary="auto"'])
             self._client.initialize(client_name="hermes", client_title="Hermes Agent", client_version=_get_hermes_version())
         # Permissions are NOT sent on thread/start: codex gates ``thread/start.permissions``
@@ -531,10 +533,11 @@ class CodexAppServerSession:
                     params["effort"] = reasoning_effort
                 if service_tier != self._service_tier_sent:
                     params["serviceTier"] = service_tier
-                # NOTE: no per-turn ``summary``. It validates against the schema but the turn
-                # still records ``turn_context.summary == "none"``, so reasoning stays empty —
-                # verified on the real app-server. The config override at client construction
-                # (``model_reasoning_summary="auto"``) is the route that actually works.
+                # NOTE: no per-turn ``summary``. The config override at client construction
+                # (``model_reasoning_summary="auto"``) already covers this turn, and one lever
+                # is easier to reason about than two. Either alone works — verified on the real
+                # binary — but do not judge by ``turn_context.summary``, which reads "none"
+                # even when reasoning text arrives.
                 ts = self._request_for(result, "turn/start", params, "turn/start")
                 if ts is not None:
                     self._service_tier_sent = service_tier
