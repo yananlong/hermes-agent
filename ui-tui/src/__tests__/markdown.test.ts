@@ -590,3 +590,43 @@ describe('body prose stays in the theme palette', () => {
     }
   })
 })
+
+// ── display math through the real Ink component ────────────────────────────
+// The lib-level tests prove the painter; these prove the markdown renderer
+// actually routes `$$…$$` through it, one <Text> row per painted row.
+describe('markdown display math — grid rendering', () => {
+  const render = (text: string) =>
+    stripAnsi(
+      renderAnsi(React.createElement(Box, { width: 80 }, React.createElement(Md, { cols: 78, t: DEFAULT_THEME, text })))
+    )
+
+  it('paints a fraction across three rows instead of folding it to 1/2', () => {
+    const out = render('$$\\frac{1}{2}$$')
+
+    expect(out).toContain('─')
+    expect(out).not.toContain('1/2')
+  })
+
+  it('paints a radical with its vinculum', () => {
+    const out = render('$$\\sqrt{b^2-4ac}$$')
+
+    expect(out).toContain('√')
+    expect(out).toContain('─')
+  })
+
+  it('renders hbar rather than leaking the command', () => {
+    const out = render('$$E = \\hbar \\omega$$')
+
+    expect(out).toContain('ℏ')
+    expect(out).not.toContain('\\hbar')
+  })
+
+  it('keeps inline math on one line', () => {
+    // An inline expression lives inside a paragraph; spanning rows would
+    // break the surrounding text flow.
+    const out = render('The value $E = mc^2$ is famous.')
+
+    expect(out).toContain('The value')
+    expect(out).toContain('is famous.')
+  })
+})
