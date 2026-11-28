@@ -42,6 +42,7 @@ auxiliary:
 """
 
 
+@pytest.mark.live_system_guard_bypass  # ch.reap() signals a gateway the tmux server owns, not a pytest descendant
 def test_linked_thread_send_is_not_refused_by_the_profile_provider_credential(tmp_path):
     require_tmux()
     ch = ClassicHome(tmp_path)

@@ -23,6 +23,7 @@ MIRROR_MARKER = "STALE local mirror message"
 SAFE_ANSWER = "safe visible answer " + "x" * 500 + " safe-answer-end"
 
 
+@pytest.mark.live_system_guard_bypass  # ch.reap() signals a gateway the tmux server owns, not a pytest descendant
 @pytest.mark.parametrize("mirror", [False, True], ids=["empty-mirror", "stale-mirror"])
 def test_existing_link_shows_native_history_instead_of_its_local_mirror(tmp_path, mirror):
     require_tmux()
@@ -64,15 +65,17 @@ def test_existing_link_shows_native_history_instead_of_its_local_mirror(tmp_path
         initial = pane.scrollback()
         assert NATIVE_QUESTION in initial, initial[-4000:]
         assert MIRROR_MARKER not in initial
-        # The canonical reader cannot disclose native assistant text without an authoritative
-        # saved display policy. The user must see that limitation, not a silently incomplete recap.
-        assert "Earlier Codex output is hidden" in initial
-        assert NATIVE_ANSWER not in initial
+        # A turn Hermes never ran cannot carry a stored display policy, so there is nothing to
+        # withhold: the prior native answer renders as-is rather than hiding behind a notice.
+        assert NATIVE_ANSWER in initial, initial[-4000:]
+        assert "Earlier Codex output is hidden" not in initial
         pane.submit("/history")
         assert pane.wait(["Linked history"], 60), pane.screen() + ch.diagnostics()
         assert NATIVE_QUESTION in pane.screen()
-        assert "Earlier Codex output is hidden" in pane.screen()
-        assert NATIVE_ANSWER not in pane.screen()
+        assert NATIVE_ANSWER in pane.screen()
+        assert "Earlier Codex output is hidden" not in pane.screen()
+        # The settled turn DID store a policy (final_text=SAFE_ANSWER), and that policy wins over
+        # the raw native text — it is the only turn whose output a transform could have rewritten.
         assert "safe-answer-end" in pane.screen()
         pane.keys("q")
         assert pane.wait(["❯"], 30), pane.scrollback()[-3000:]
