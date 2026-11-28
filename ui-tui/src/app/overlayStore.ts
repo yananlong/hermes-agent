@@ -29,6 +29,7 @@ const buildOverlayState = (): OverlayState => ({
   ambient: [],
   widget: null,
   journey: false,
+  link: false,
   modelPicker: false,
   pager: null,
   petPicker: false,
@@ -56,6 +57,7 @@ const BLOCKING_KEYS = [
   'connection',
   'connectors',
   'journey',
+  'link',
   'modelPicker',
   'pager',
   'petPicker',
@@ -90,7 +92,7 @@ export const $isBlocked = computed($overlayState, overlay => BLOCKING_KEYS.some(
  *   subtree) so it can anchor the full-screen absolute `Overlay`
  *   (`components/overlay.tsx`) against the whole terminal.
  * - The FloatingOverlays set — `modelPicker`, `pager`, `petPicker`,
- *   `sessions`, `skillsHub`, `pluginsHub`, `connectors` — but ONLY when the rule sits at
+ *   `sessions`, `skillsHub`, `pluginsHub`, `connectors`, `link` — but ONLY when the rule sits at
  *   the top.  That panel is `position="absolute" bottom="100%"` inside
  *   ComposerPane's relative Box (`appOverlays.tsx:387`), so it grows UPWARD
  *   over the `at="top"` rule and never reaches the `at="bottom"` one.
@@ -128,6 +130,7 @@ export const $isBlocked = computed($overlayState, overlay => BLOCKING_KEYS.some(
 export const hasFloatingPanel = (overlay: OverlayState): boolean =>
   Boolean(
     overlay.connectors ||
+    overlay.link ||
     overlay.modelPicker ||
     overlay.pager ||
     overlay.petPicker ||
@@ -166,10 +169,10 @@ export const resetOverlayState = () => $overlayState.set(buildOverlayState())
 /**
  * Soft reset: drop FLOW-scoped overlays (approval / clarify / confirm / sudo
  * / secret / pager) but PRESERVE user-toggled ones — agents dashboard, model
- * picker, skills hub, sessions overlay.  Those are opened deliberately and
- * shouldn't vanish when a turn ends.  Called from turnController.idle() on
- * every turn completion / interrupt; the old "reset everything" behaviour
- * silently closed /agents the moment delegation finished.
+ * picker, skills hub, sessions overlay, linked-thread picker.  Those are opened
+ * deliberately and shouldn't vanish when a turn ends.  Called from
+ * turnController.idle() on every turn completion / interrupt; the old "reset
+ * everything" behaviour silently closed /agents the moment delegation finished.
  *
  * `connection` is preserved too: the card belongs to a backend operation that outlives the turn's
  * idle edge, and only the operation's own settlement may close it.
@@ -184,6 +187,7 @@ export const resetFlowOverlays = () =>
     connectors: $overlayState.get().connectors,
     widget: $overlayState.get().widget,
     journey: $overlayState.get().journey,
+    link: $overlayState.get().link,
     modelPicker: $overlayState.get().modelPicker,
     petPicker: $overlayState.get().petPicker,
     pluginsHub: $overlayState.get().pluginsHub,

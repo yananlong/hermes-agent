@@ -35,6 +35,9 @@ export const arAssistant = {
     thread: {
       loadingSession: 'جار تحميل الجلسة...',
       showEarlier: 'عرض الرسائل الأقدم',
+      historyChanged: "تغير سجل المحادثة. أعد تحميله لعرض الرسائل الأقدم.",
+      historyLoadFailed: "تعذر تحميل الرسائل الأقدم. حاول مرة أخرى.",
+      reloadHistory: "إعادة تحميل السجل",
       loadingResponse: 'جار تحميل الرد...',
       resumeWhenBackgroundDone: count =>
         count === 1 ? 'سيُستأنف عند انتهاء المهمة الخلفية' : `سيُستأنف عند انتهاء ${count} مهام خلفية`,
@@ -362,6 +365,33 @@ export const arAssistant = {
       outputAlt: 'إخراج الأداة',
       rawResponse: 'الرد الخام',
       copyActivity: 'نسخ النشاط',
+      codexSubagentActivity: {
+        openTrace: 'فتح سجل الوكيل الفرعي',
+        traceTitle: 'سجل وكيل Codex الفرعي',
+        traceDescription: 'رسائل هذا الوكيل الفرعي وملخصات الاستدلال ونشاط الأدوات للقراءة فقط.',
+        traceUnavailable: 'سجل الوكيل الفرعي غير متاح',
+        loading: 'جارٍ تحميل السجل…',
+        loadFailed: 'تعذر تحميل هذا السجل.',
+        retry: 'إعادة المحاولة',
+        close: 'العودة إلى المحادثة',
+        backToParent: 'العودة إلى سجل الوكيل الأب',
+        empty: 'لم يتم إرجاع أي عناصر في السجل.',
+        waiting: 'بانتظار سجل الوكيل الفرعي…',
+        updating: 'جارٍ تحديث السجل المباشر…',
+        assistantRole: 'Codex',
+        userRole: 'الطلب',
+        systemRole: 'النظام',
+        reasoningSummary: 'ملخص الاستدلال',
+        arguments: 'الوسائط',
+        result: 'النتيجة',
+        unknownKind: 'نشاط',
+        kinds: {
+          started: 'بدأ',
+          interacted: 'قيد العمل',
+          interrupted: 'تمت المقاطعة',
+          completed: 'اكتمل'
+        }
+      },
       recoveredOne: 'تم الاسترداد',
       recoveredMany: count => `تم استرداد ${count}`,
       failedOne: 'فشل',

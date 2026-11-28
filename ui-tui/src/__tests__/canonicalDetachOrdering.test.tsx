@@ -25,6 +25,10 @@ function fixture() {
     const wire = canonicalRequest(method, original)
     const sid = String(wire.params.session_id)
 
+    if (wire.method === 'session.transcript') {
+      return Promise.resolve({ session_id: sid, rows: [], next_cursor: null, reset: true })
+    }
+
     if (wire.method === 'session.resume') {
       // The real owner reuses a token for repeated attaches by the same actor.
       const token = subscriptions.get(sid) ?? `sub-${++nextToken}`

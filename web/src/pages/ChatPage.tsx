@@ -98,6 +98,14 @@ import { ptyAttachToken } from "@/lib/pty-attach-token";
 import { refitWhenTerminalFontLoads } from "@/lib/terminal-font-refit";
 import { useEmbeddedTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { generateChannelId } from "@/lib/chat-channel-id";
+import {
+  agentDisplayName,
+  capabilityHost,
+  isHostWritable,
+  storeBlockedReason,
+} from "@/lib/foreign-capability";
+import { useForeignCapability } from "@/lib/use-foreign-capability";
+import { useLinkedResume } from "@/lib/use-linked-resume";
 import { sendCopyLastCommand } from "@/lib/chat-copy-last";
 import { isUserInitiatedTerminalInput } from "@/lib/learn-handoff";
 import { useLearnHandoff } from "@/lib/use-learn-handoff";
@@ -363,6 +371,37 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const externalChannel = useMemo(() => generateChannelId(byotParam ?? ""), [byotParam]);
   const channel = byotParam ? externalChannel : embeddedChannel;
   const learnHandoff = useLearnHandoff(isActive, channel);
+  // Linked foreign sessions (Codex / Claude / Mistral pointer rows) must never
+  // be spawned into a PTY here: the native tool owns their transcript, so a
+  // `?resume=<linked id>` target has nothing for a terminal to attach to. The
+  // check is a SINGLE-SESSION lookup (`GET /api/sessions/{id}`, which now
+  // stamps the same `*_linked` markers as the list), not the paged list — a
+  // linked row outside the first page, or any list error, used to read as an
+  // ordinary session and could still be resumed into a PTY.
+  //
+  // The answer is TRI-STATE and fails CLOSED: `verified` is only true when the
+  // gateway answered for this exact id. A 404 is definitive (no such stored
+  // row, so it cannot be a pointer → the ordinary resume path stays
+  // available); any other failure means we cannot prove the row is not a
+  // pointer, so no terminal is spawned for it.
+  const linked = useLinkedResume(resumeParam, scopedProfile);
+  const { blocked: linkedResumeBlocked } = linked;
+  const resumeOverlay = linked.overlay;
+  const linkedResumeReadOnly = linked.readOnly;
+  const linkedAgent = linked.agent;
+  const linkedResumeUnverifiedNote =
+    linked.unverified && !linkedAgent ? t.sessions.linkedResumeUnverified : null;
+  const linkedCapability = useForeignCapability(Boolean(linkedAgent), scopedProfile);
+  let linkedCapabilityNote: string | null = null;
+  if (linkedAgent) {
+    const linkedAgentLabel = agentDisplayName(linkedAgent);
+    const linkedHost = capabilityHost(linkedCapability) ?? t.sessions.linkedHostUnnamed;
+    if (storeBlockedReason(linkedCapability, linkedAgent)) {
+      linkedCapabilityNote = t.sessions.linkedHostStore(linkedAgentLabel, linkedHost);
+    } else if (isHostWritable(linkedCapability, linkedAgent)) {
+      linkedCapabilityNote = t.sessions.linkedHostWritable(linkedAgentLabel);
+    }
+  }
   const titleScope = `${channel}\0${reconnectNonce}`;
   const sessionTitle =
     sessionTitleState.scope === titleScope ? sessionTitleState.title : null;
@@ -504,6 +543,12 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     // mounted, hidden ChatPage from opening `/api/pty` on every dashboard
     // page. Sticky, so switching away from /chat keeps the PTY alive.
     if (!hasActivated) return;
+
+    // A linked foreign row (Codex / Claude / Mistral pointer) DOES open here: the embedded TUI is a
+    // canonical client that pages its native transcript and appends new turns to the same thread.
+    // What must still wait is an UNANSWERED lookup — spawning a PTY for a row we cannot vouch for is
+    // the bug this gate exists for, and a failed lookup stays refused (see linkedResumeBlocked).
+    if (linkedResumeBlocked || linked.pending) return;
 
     const host = hostRef.current;
     if (!host) return;
@@ -1608,6 +1653,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     byotParam,
     scopedProfile,
     reconnectNonce,
+    linkedResumeBlocked,
+    linked.pending,
   ]);
 
   // NS-434 follow-up: attach the visualViewport keyboard-inset listeners
@@ -1789,7 +1836,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         mobilePanelOpen={mobilePanelOpen} closeMobilePanel={closeMobilePanel} modelToolsLabel={modelToolsLabel}
         channel={channel} scopedProfile={scopedProfile} startFreshDashboardChat={startFreshDashboardChat}
         handleSessionTitleChange={handleSessionTitleChange} resumeParam={resumeParam}
-        workspaceCwd={workspaceCwd} setWorkspaceCwd={setWorkspaceCwd} />
+        workspaceCwd={workspaceCwd} setWorkspaceCwd={setWorkspaceCwd} readOnly={linkedResumeReadOnly} />
 
       {visibleBanner && (
         <div
@@ -1869,6 +1916,48 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
               <div className="max-w-[min(28rem,calc(100vw-3rem))] border border-current/30 bg-black/80 px-4 py-3 text-center text-xs tracking-wide text-white/85 shadow-lg">
                 {PTY_RESUME_LOADING_MESSAGE}
               </div>
+            </div>
+          )}
+
+          {/* The linked-flag lookup for this ?resume= target is still running:
+              nothing is known about the row yet, so show progress rather than
+              the verdict panel (which would be empty) or a terminal (which
+              might be a pointer row's). */}
+          {resumeOverlay === "loading" && (
+            <div
+              className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+              role="status"
+              aria-live="polite"
+              aria-label={PTY_RESUME_LOADING_MESSAGE}
+            >
+              <div className="max-w-[min(28rem,calc(100vw-3rem))] border border-current/30 bg-black/80 px-4 py-3 text-center text-xs tracking-wide text-white/85 shadow-lg">
+                {PTY_RESUME_LOADING_MESSAGE}
+              </div>
+            </div>
+          )}
+
+          {/* Linked foreign sessions (Codex / Claude / Mistral pointer rows)
+              get no PTY — a pointer row has no Hermes transcript for one to
+              attach to — and neither does a resume target the gateway could
+              not confirm (fail closed). Only rendered for an answer we have. */}
+          {resumeOverlay === "blocked" && (
+            <div
+              role="alert"
+              className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/70 p-4"
+            >
+              <div className="max-w-[min(32rem,calc(100vw-3rem))] text-center text-sm tracking-wide text-white/85">
+                {linkedAgent ? t.sessions.linkedReadonlyWarning : linkedResumeUnverifiedNote}
+                {linkedCapabilityNote && (
+                  <span className="mt-2 block text-xs text-white/70">{linkedCapabilityNote}</span>
+                )}
+              </div>
+              <Button
+                onClick={startFreshDashboardChat}
+                prefix={<RotateCcw className="h-4 w-4" />}
+                aria-label={t.sessions.newChat}
+              >
+                {t.sessions.newChat}
+              </Button>
             </div>
           )}
 
@@ -1960,6 +2049,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
               <ChatSidebar
                 channel={channel}
                 profile={scopedProfile}
+                readOnly={linkedResumeReadOnly}
                 onDashboardNewSessionRequest={startFreshDashboardChat}
                 onSessionTitleChange={handleSessionTitleChange}
               />

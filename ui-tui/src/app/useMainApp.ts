@@ -45,7 +45,7 @@ import { terminalParityHints } from '../lib/terminalParity.js'
 import { formatAbandonedClarify, sameToolTrailGroup, toolTrailLabel } from '../lib/text.js'
 import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
 import { onUserWidgets } from '../sdk/userWidgets.js'
-import type { Msg, PanelSection } from '../types.js'
+import type { Msg, PanelSection, SectionName } from '../types.js'
 
 import { applyAgentSnapshot } from './agentRoster.js'
 import { noteLiveSessions } from './backgroundSessionNotices.js'
@@ -287,8 +287,39 @@ function copyMeasuredHeights(
   }
 }
 
-export function useMainApp(gw: GatewayClient) {
-  const { exit } = useApp()
+/** Merge a linked thread's native rows with the ordinary transcript without letting either budget
+ *  eat the other: native pages carry their own byte budget from the backend, so only the ordinary
+ *  rows are subject to the local row cap. The intro row stays first when present. */
+function mergeLinkedHistoryRows(next: Msg[], capOrdinary: (rows: Msg[]) => Msg[]): Msg[] {
+  const linked = next.filter(message => message.linkedHistory)
+  const ordinary = capOrdinary(next.filter(message => !message.linkedHistory))
+  return ordinary[0]?.kind === 'intro'
+    ? [ordinary[0], ...linked, ...ordinary.slice(1)]
+    : [...linked, ...ordinary]
+}
+
+/** Which direction a scroll step is about to run out of rows in, if any. */
+function scrollEdgeReached(delta: number, scroll: ScrollBoxHandle | null): 'older' | 'newer' | null {
+  if (!scroll) return null
+  const next = scroll.getScrollTop() + scroll.getPendingDelta() + delta
+  if (delta < 0 && next <= 0) return 'older'
+  if (delta > 0 && next + scroll.getViewportHeight() >= scroll.getScrollHeight()) return 'newer'
+  return null
+}
+
+/**
+ * Track the terminal width, coalescing a drag-resize burst.
+ *
+ * A drag-resize emits a burst of 'resize' events; syncing `cols` on every one
+ * remounts the visible transcript rows each tick (they're keyed on cols so yoga
+ * re-measures), turning a smooth drag into a flickering remount storm. The
+ * coalescer is a leading+trailing throttle: the first event reflows immediately
+ * (the drag stays responsive), the rest collapse to at most one reflow per
+ * RESIZE_COALESCE_MS, and the trailing edge always applies the final width so
+ * the settled layout is exact. Bracket paste is turned on for the session here
+ * too — it is the same TTY lifetime as the resize subscription.
+ */
+function useTerminalColumns(): number {
   const { stdout } = useStdout()
   const [cols, setCols] = useState(stdout?.columns ?? 80)
 
@@ -297,13 +328,6 @@ export function useMainApp(gw: GatewayClient) {
       return
     }
 
-    // A drag-resize emits a burst of 'resize' events; syncing `cols` on every
-    // one remounts the visible transcript rows each tick (they're keyed on
-    // cols so yoga re-measures), turning a smooth drag into a flickering
-    // remount storm. Coalesce the burst with a leading+trailing throttle: the
-    // first event reflows immediately (the drag stays responsive), the rest
-    // collapse to at most one reflow per RESIZE_COALESCE_MS, and the trailing
-    // edge always applies the final width so the settled layout is exact.
     const coalescer = createResizeCoalescer(() => setCols(stdout.columns ?? 80), RESIZE_COALESCE_MS)
     const sync = () => coalescer.schedule()
 
@@ -323,15 +347,92 @@ export function useMainApp(gw: GatewayClient) {
     }
   }, [stdout])
 
+  return cols
+}
+
+/**
+ * Which details sections the user has left visible, and whether the live
+ * progress area has anything to show under them.
+ *
+ * Per-section overrides win over the global mode — when every section is
+ * resolved to hidden, the only thing ToolTrail surfaces is the
+ * floating-alert backstop (errors/warnings). Mirror that here so an empty
+ * wrapper Box never renders above the streaming area in quiet mode.
+ *
+ * A MoA reference segment (segment.isMoaReference) is the user-facing
+ * mixture-of-agents process the user opted into, not private model reasoning —
+ * it must keep the live progress area (and therefore StreamingAssistant) up
+ * even when the thinking panel is hidden, matching shouldShowThinkingTrail's
+ * settled-transcript override in messageLine.tsx (#64657/#64701).
+ */
+function useProgressAreaVisible(ui: UiState): boolean {
+  const visible = (section: SectionName) =>
+    sectionMode(section, ui.detailsMode, ui.sections, ui.detailsModeCommandOverride) !== 'hidden'
+
+  const anyPanelVisible = SECTION_NAMES.some(visible)
+  const thinkingPanelVisible = visible('thinking')
+  const toolsPanelVisible = visible('tools')
+  const activityPanelVisible = visible('activity')
+  const hasReasoning = useTurnSelector(state => Boolean(state.reasoning.trim()))
+
+  return useTurnSelector(state =>
+    anyPanelVisible
+      ? Boolean(
+          ui.busy ||
+          state.outcome ||
+          state.streamPendingTools.length ||
+          state.streamSegments.some(segment => {
+            const hasThinking = Boolean(segment.thinking?.trim())
+            const hasTrailTools = Boolean(segment.tools?.length)
+            const thinkingVisible = thinkingPanelVisible || Boolean(segment.isMoaReference)
+
+            if (segment.kind === 'trail' && !segment.text) {
+              return (thinkingVisible && hasThinking) || ((toolsPanelVisible || activityPanelVisible) && hasTrailTools)
+            }
+
+            return (
+              Boolean(segment.text?.trim()) ||
+              (thinkingVisible && hasThinking) ||
+              ((toolsPanelVisible || activityPanelVisible) && hasTrailTools)
+            )
+          }) ||
+          state.subagents.length ||
+          state.tools.length ||
+          state.todos.length ||
+          state.turnTrail.length ||
+          (thinkingPanelVisible && hasReasoning) ||
+          state.activity.length
+        )
+      : state.activity.some(item => item.tone !== 'info')
+  )
+}
+
+export function useMainApp(gw: GatewayClient) {
+  const { exit } = useApp()
+  const { stdout } = useStdout()
+  const cols = useTerminalColumns()
+
   const [historyItems, setHistoryItemsState] = useState<Msg[]>(() => [{ kind: 'intro', role: 'system', text: '' }])
   const [historyGeneration, setHistoryGeneration] = useState(0)
+  // A linked thread's native pages and the live transcript share one row list but not one budget:
+  // `ref` holds the mode flag and the pager so neither needs its own state/ref pair.
+  const linkedRef = useRef<{ linked: boolean; load: (direction: 'older' | 'newer') => void }>({
+    linked: false,
+    load: () => {}
+  })
+  const setLinkedHistoryMode = useCallback((linked: boolean) => {
+    linkedRef.current.linked = linked
+  }, [])
 
   const setHistoryItems = useCallback<StateSetter<Msg[]>>(value => {
     if (typeof value !== 'function') {
       setHistoryGeneration(generation => generation + 1)
     }
 
-    setHistoryItemsState(previous => capTranscriptHistory(typeof value === 'function' ? value(previous) : value))
+    setHistoryItemsState(previous => {
+      const next = typeof value === 'function' ? value(previous) : value
+      return linkedRef.current.linked ? mergeLinkedHistoryRows(next, capTranscriptHistory) : capTranscriptHistory(next)
+    })
   }, [])
 
   const [lastUserMsg, setLastUserMsg] = useState('')
@@ -584,7 +685,11 @@ export function useMainApp(gw: GatewayClient) {
   })
 
   const scrollWithSelection = useCallback(
-    (delta: number) => scrollWithSelectionBy(delta, { scrollRef, selection }),
+    (delta: number) => {
+      const edge = scrollEdgeReached(delta, scrollRef.current)
+      scrollWithSelectionBy(delta, { scrollRef, selection })
+      if (edge) linkedRef.current.load(edge)
+    },
     [selection]
   )
 
@@ -673,6 +778,7 @@ export function useMainApp(gw: GatewayClient) {
     rpc,
     scrollRef,
     setHistoryItems,
+    setLinkedHistoryMode,
     setLastUserMsg,
     setSessionStartedAt,
     setStickyPrompt,
@@ -680,6 +786,8 @@ export function useMainApp(gw: GatewayClient) {
     setVoiceRecording,
     sys
   })
+
+  linkedRef.current.load = session.loadLinkedHistory
 
   exitClose.close = session.closeForExit
 
@@ -1429,61 +1537,7 @@ export function useMainApp(gw: GatewayClient) {
     [send, maybeWarn, rpc, session.newLiveSession, sys]
   )
 
-  const hasReasoning = useTurnSelector(state => Boolean(state.reasoning.trim()))
-
-  // Per-section overrides win over the global mode — when every section is
-  // resolved to hidden, the only thing ToolTrail will surface is the
-  // floating-alert backstop (errors/warnings).  Mirror that so we don't
-  // render an empty wrapper Box above the streaming area in quiet mode.
-  const anyPanelVisible = SECTION_NAMES.some(
-    s => sectionMode(s, ui.detailsMode, ui.sections, ui.detailsModeCommandOverride) !== 'hidden'
-  )
-
-  const thinkingPanelVisible =
-    sectionMode('thinking', ui.detailsMode, ui.sections, ui.detailsModeCommandOverride) !== 'hidden'
-
-  const toolsPanelVisible =
-    sectionMode('tools', ui.detailsMode, ui.sections, ui.detailsModeCommandOverride) !== 'hidden'
-
-  const activityPanelVisible =
-    sectionMode('activity', ui.detailsMode, ui.sections, ui.detailsModeCommandOverride) !== 'hidden'
-
-  const showProgressArea = useTurnSelector(state =>
-    anyPanelVisible
-      ? Boolean(
-          ui.busy ||
-          state.outcome ||
-          state.streamPendingTools.length ||
-          state.streamSegments.some(segment => {
-            const hasThinking = Boolean(segment.thinking?.trim())
-            const hasTrailTools = Boolean(segment.tools?.length)
-            // A MoA reference segment (segment.isMoaReference) is the
-            // user-facing mixture-of-agents process the user opted into, not
-            // private model reasoning — it must keep the live progress area
-            // (and therefore StreamingAssistant) up even when the thinking
-            // panel is hidden, matching shouldShowThinkingTrail's settled-
-            // transcript override in messageLine.tsx (#64657/#64701).
-            const thinkingVisible = thinkingPanelVisible || Boolean(segment.isMoaReference)
-
-            if (segment.kind === 'trail' && !segment.text) {
-              return (thinkingVisible && hasThinking) || ((toolsPanelVisible || activityPanelVisible) && hasTrailTools)
-            }
-
-            return (
-              Boolean(segment.text?.trim()) ||
-              (thinkingVisible && hasThinking) ||
-              ((toolsPanelVisible || activityPanelVisible) && hasTrailTools)
-            )
-          }) ||
-          state.subagents.length ||
-          state.tools.length ||
-          state.todos.length ||
-          state.turnTrail.length ||
-          (thinkingPanelVisible && hasReasoning) ||
-          state.activity.length
-        )
-      : state.activity.some(item => item.tone !== 'info')
-  )
+  const showProgressArea = useProgressAreaVisible(ui)
 
   const appActions = useMemo(
     () => ({

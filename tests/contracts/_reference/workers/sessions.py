@@ -12,9 +12,11 @@ import time
 import math
 import re
 from typing import Any, Mapping, Optional, Sequence, Unpack
+from uuid import UUID
 
 from persistence.conversation.messages import CONTENT_JSON_PREFIX, NewMessage
 from persistence.conversation.sessions import NewSession, SessionLifecycleStatus, TitleSource
+from persistence.gateway.routing import LINKED_POINTER_FLAGS
 from persistence.core.fences import AuthorityEpoch, ExecutionGeneration
 from persistence.core.context import ProfileScope
 from persistence.core.identity import JsonValue, MessageId, SessionId
@@ -298,6 +300,33 @@ def _sidecars(step: Step, payload: dict[str, Any]) -> dict[str, Any]:
     return {"value": None}
 
 
+def _linked_codex_model(step: Step, payload: dict[str, Any]) -> dict[str, Any]:
+    if (not isinstance(payload, dict) or set(payload) != {"model", "thread_id"}
+            or not isinstance(payload["model"], str) or not payload["model"].strip()
+            or len(payload["model"]) > 4096 or not isinstance(payload["thread_id"], str)):
+        refuse("invalid_params")
+    try:
+        if str(UUID(payload["thread_id"])) != payload["thread_id"]:
+            refuse("invalid_params")
+    except ValueError:
+        refuse("invalid_params")
+    config = step.sessions[step.session_id]["model_config"]
+    if isinstance(config, str):
+        try:
+            config = json.loads(config)
+        except ValueError:
+            return {"value": False}
+    if (not isinstance(config, dict) or config.get("codex_linked_thread") is not True
+            or config.get("codex_thread_id") != payload["thread_id"]
+            or any(flag in config and type(config[flag]) is not bool for flag in LINKED_POINTER_FLAGS)
+            or any(config.get(flag) is True for flag in LINKED_POINTER_FLAGS if flag != "codex_linked_thread")):
+        return {"value": False}
+    if step.sessions[step.session_id]["model"] != payload["model"]:
+        step.store.sessions.update_model(SessionId(step.session_id), payload["model"])
+        step.wrote = True
+    return {"value": True}
+
+
 def _tools(step: Step, payload: dict[str, Any]) -> dict[str, Any]:
     """Validate and store the session's tool pin: a list of tool names or a versioned pin."""
     if set(payload) != {"tool_names"}:
@@ -399,6 +428,9 @@ class InMemoryWorkerSessionVerbs:
 
     def patch_session_sidecars(self, *, epoch: AuthorityEpoch, execution_id: WorkerExecutionId, session_id: SessionId, generation: ExecutionGeneration, sequence: int, patch: Mapping[str, JsonValue]) -> None:
         self._session_op("session.sidecars", {"patch": dict(patch) if isinstance(patch, Mapping) else patch}, _sidecars, epoch, execution_id, session_id, generation, sequence)
+
+    def set_linked_codex_model(self, *, epoch: AuthorityEpoch, execution_id: WorkerExecutionId, session_id: SessionId, generation: ExecutionGeneration, sequence: int, model: str, thread_id: str) -> bool:
+        return bool(self._session_op("session.linked_codex_model", {"model": model, "thread_id": thread_id}, _linked_codex_model, epoch, execution_id, session_id, generation, sequence))
 
     def set_session_tool_pin(self, *, epoch: AuthorityEpoch, execution_id: WorkerExecutionId, session_id: SessionId, generation: ExecutionGeneration, sequence: int, tool_pin: ToolPin | None) -> None:
         self._session_op("session.tools", {"tool_names": dict(tool_pin) if isinstance(tool_pin, Mapping) else tool_pin}, _tools, epoch, execution_id, session_id, generation, sequence)

@@ -3,6 +3,7 @@ import {
   graftRefreshedTailOntoBackfill,
   olderPageReader
 } from '@/app/chat/transcript-backfill'
+import { LinkedHistoryChangedError } from '@/api/native-session-history'
 import { getLatestSessionMessages, type ProfileScope } from '@/hermes'
 import { type ChatMessage, toChatMessages } from '@/lib/chat-messages'
 import {
@@ -92,6 +93,11 @@ export async function rereadPageAfterResumeBarrier(
   }
 
   const page = await getLatestSessionMessages(storedSessionId, scope).catch(() => null)
+
+  if (page && (page.native_history || early.page.native_history) &&
+      page.native_history?.identity !== early.page.native_history?.identity) {
+    throw new LinkedHistoryChangedError()
+  }
 
   if (!page || (early.page.session_id && page.session_id && page.session_id !== early.page.session_id)) {
     return { page: null, owner: owner && { ...owner, replyUnread: true } }

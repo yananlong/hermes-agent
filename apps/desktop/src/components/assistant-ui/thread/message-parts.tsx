@@ -20,6 +20,7 @@ import { setThemeCall } from '@/components/assistant-ui/theme-picker/args'
 import { ThemeTool } from '@/components/assistant-ui/theme-picker/theme-tool'
 import { AgentDeliveryNotice, deliveryTargetFromCommand } from '@/components/assistant-ui/thread/agent-delivery'
 import { TimelineTimestamp } from '@/components/assistant-ui/thread/timeline-timestamp'
+import { CodexSubagentActivity } from '@/components/assistant-ui/tool/codex-subagent-activity'
 import { DelegateTool } from '@/components/assistant-ui/tool/delegate'
 import { ToolFallback, ToolGroupSlot } from '@/components/assistant-ui/tool/fallback'
 import { parseMaybeObject, toolCallFailed } from '@/components/assistant-ui/tool/fallback-model'
@@ -28,6 +29,7 @@ import { ActivityTimerText } from '@/components/chat/activity-timer-text'
 import { GeneratedImage } from '@/components/chat/generated-image-result'
 import { SCAFFOLD_LABEL_CLASS, SCAFFOLD_META_CLASS, ScaffoldRow } from '@/components/chat/scaffold-row'
 import { useI18n } from '@/i18n'
+import { CODEX_SUBAGENT_ACTIVITY_TOOL } from '@/lib/codex-subagent-activity'
 import { mcpTargets, toolLabels } from '@/lib/connector-tools'
 import { generatedImageFromResult } from '@/lib/generated-images'
 import { separateGluedReasoningBlocks } from '@/lib/reasoning-blocks'
@@ -150,6 +152,10 @@ const failedCallNeedsUser = (part: TimelineToolCallProps): boolean => {
 
 const ChainToolFallback: FC<TimelineToolCallProps> = props => {
   const showToolActivity = useStore($showToolActivity)
+
+  if (props.toolName === CODEX_SUBAGENT_ACTIVITY_TOOL) {
+    return <CodexSubagentActivity args={props.args} timestamp={props.timestamp} />
+  }
 
   // todo parts are hoisted to a dedicated panel above the message content.
   if (isTodoToolName(props.toolName)) {

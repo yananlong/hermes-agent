@@ -21,9 +21,13 @@ import os
 import re
 import sys
 import uuid
+from typing import TYPE_CHECKING
 
 from hermes_cli.gateway_client import GatewayClientError
 from hermes_cli.gateway_connection import RESUME_REFUSALS, GatewayConnection
+
+if TYPE_CHECKING:
+    from hermes_cli.linked_history.pages import LinkedHistory
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,7 @@ class GatewaySessionStore:
         self.persistence = None  # the storage interface reader ``_reader`` reads through
         self._handles = None
         self._create_parameters = None
+        self._linked_histories: dict[str, LinkedHistory] = {}
 
     def __bool__(self):
         return not self.connection.final
@@ -134,6 +139,55 @@ class GatewaySessionStore:
         return refused
 
     # -- session lifecycle -----------------------------------------------------------------
+    def _linked_codex(self, session_id):
+        reader = self._db()
+        if reader is None or reader.get_session(session_id) is None:
+            return False
+        from gateway.session_linked_codex import linked_thread_id
+        return linked_thread_id(self.persistence, session_id) is not None
+
+    def linked_history(self, session_id, *, refresh=False):
+        """The current session's display-only native window, fetched through its owner."""
+        if not self._linked_codex(session_id):
+            return None
+        if refresh or session_id not in self._linked_histories:
+            from hermes_cli.linked_history.pages import LinkedHistory
+            history = LinkedHistory(self.call, session_id)
+            history.load_initial()
+            self._linked_histories[session_id] = history
+        return self._linked_histories[session_id]
+
+    def get_resume_conversations(self, session_id):
+        """A linked row has no local model projection; its display rows come from the native thread.
+
+        The model projection is what a resume feeds the agent as conversation history. For a linked
+        pointer row the local mirror is NOT the conversation: it holds only the turns Hermes itself
+        submitted, can be empty, and can be stale against the native thread. Returning it would hand
+        the agent a divergent transcript that a later refactor could persist back into the thread.
+        The native thread is the authority and the gateway re-attaches by ``resume_thread_id``, so
+        the only correct model projection here is none.
+
+        The display projection is different: it is what the CLI renders, and it must be the native
+        rows, so it is paged from the gateway. A gateway failure degrades to one honest notice
+        rather than blocking the resume.
+        """
+        reader = self._db()
+        if reader is None:
+            return [], []
+        _model, display = reader.get_resume_conversations(session_id)
+        if not self._linked_codex(session_id):
+            return _model, display
+        try:
+            from hermes_cli.linked_history.pages import conversation_rows
+            history = self.linked_history(session_id, refresh=True)
+            # ``_linked_codex`` above guarantees a window; an absent one is the not-linked case,
+            # which returned already.
+            return ([], conversation_rows(history.rows)) if history is not None else ([], display)
+        except GatewayClientError as exc:
+            self._linked_histories.pop(session_id, None)
+            return [], [{"role": "system", "display_kind": "codex_history_unavailable",
+                         "content": f"Linked Codex history is unavailable: {exc}. Try /history again."}]
+
     def call(self, method, **params):
         return self.connection.call(method, **params)
 
@@ -162,8 +216,14 @@ class GatewaySessionStore:
         refuses it instead, as the thin client does."""
         if session_id in self.snapshots:
             return self.snapshots[session_id]
-        snapshot = self.connection.resume(self.call, session_id, typed=typed)
+        omit = self._linked_codex(session_id)
+        if omit:
+            snapshot = self.connection.resume(self.call, session_id, typed=typed, omit_messages=True)
+        else:
+            snapshot = self.connection.resume(self.call, session_id, typed=typed)
         self._adopt(snapshot)
+        if omit:
+            self.connection.state(snapshot["stored_session_id"]).omit_messages = True
         return snapshot
 
     def open_session(self, cli, launch=None):
@@ -502,11 +562,13 @@ class SurfaceLabelReader:
             source, limit, offset,
             lambda src, lim, off, surfaces: self._search(src, lim, off, surfaces, **kw))
 
-    def _search(self, source, limit, offset, local_created_sources, *, workspace_key=None, skip_launch_stubs=False):
+    def _search(self, source, limit, offset, local_created_sources, *, workspace_key=None, skip_launch_stubs=False,
+                include_linked_pointers=False):
         entries = self.persistence.sessions.search_sessions(
             sources=([source] if isinstance(source, str) else list(source)) if source else None,
             workspace_key=workspace_key, local_created_sources=local_created_sources,
-            skip_launch_stubs=skip_launch_stubs, window=_window(limit, offset))
+            skip_launch_stubs=skip_launch_stubs, include_linked_pointers=include_linked_pointers,
+            window=_window(limit, offset))
         return [{**entry.session.as_session_row(), "last_active": entry.last_active} for entry in entries]
 
     def list_sessions_rich(self, source=None, sources=None, limit=20, offset=0, **kw):

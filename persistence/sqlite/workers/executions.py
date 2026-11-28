@@ -262,6 +262,10 @@ class SQLiteWorkerExecutionRepository:
         payload = {'patch': dict(patch) if isinstance(patch, Mapping) else patch}
         self._value('session.sidecars', payload, epoch, execution_id, session_id, generation, sequence)
 
+    def set_linked_codex_model(self, *, epoch: AuthorityEpoch, execution_id: WorkerExecutionId, session_id: SessionId, generation: ExecutionGeneration, sequence: int, model: str, thread_id: str) -> bool:
+        return bool(self._value('session.linked_codex_model', {'model': model, 'thread_id': thread_id},
+                                epoch, execution_id, session_id, generation, sequence))
+
     def set_session_tool_pin(self, *, epoch: AuthorityEpoch, execution_id: WorkerExecutionId, session_id: SessionId, generation: ExecutionGeneration, sequence: int, tool_pin: ToolPin | None) -> None:
         payload = {'tool_names': dict(tool_pin) if isinstance(tool_pin, Mapping) else tool_pin}
         self._value('session.tools', payload, epoch, execution_id, session_id, generation, sequence)

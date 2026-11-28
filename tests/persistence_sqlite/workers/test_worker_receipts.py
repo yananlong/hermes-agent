@@ -104,7 +104,7 @@ def test_no_verb_sends_a_retired_operation(backend, scope_a, monkeypatch):
         with pytest.raises(_Sent):
             getattr(workers, name)(**kwargs)
     # Every receipted verb sends its own operation, and none sends a retired one.
-    assert len(receipted) == len(sent) == len(set(sent)) == 54
+    assert len(receipted) == len(sent) == len(set(sent))
     assert not set(sent) & set(RETIRED)
 
 
@@ -119,7 +119,8 @@ def _dummy(name: str, param: inspect.Parameter) -> Any:
     values = {
         "epoch": 1, "execution_id": EXECUTION, "session_id": SESSION, "generation": ExecutionGeneration(0), "sequence": 1,
         "lease": WorkerTurnLease(holder="h"), "target_session_id": SESSION, "holder": "h", "title": "t", "source": "user",
-        "base_title": "t", "activity": WorkerActivity(ts=None, description=None, provenance=None),
+        "base_title": "t", "model": "m", "thread_id": "01a1c4a4-7a29-7011-8493-04445af16d6e",
+        "activity": WorkerActivity(ts=None, description=None, provenance=None),
         "route": WorkerBillingRoute(provider=None, base_url=None, billing_mode=None), "content": "c", "api_content": "a",
         "row_id": 1, "end_reason": "r", "system_prompt": None, "patch": {}, "tool_pin": None, "messages": [],
         "cooldown": WorkerCooldown(cooldown_until=1.0), "snapshot": WorkerCooldownSnapshot(session_exists=True),

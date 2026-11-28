@@ -283,6 +283,11 @@ def _create_session(rid, params: dict, *, copy_parent_history: bool = False) -> 
         with _profile_db(params) as db, _persistence_for(db) as persistence:
             if persistence is None:
                 return _db_unavailable_error(rid, code=5008)
+            # Any linked owner, not just Codex: copying a pointer row's (empty) local transcript
+            # would mint a second Hermes conversation beside the native thread.
+            from hermes_cli.foreign_linked_store import linked_foreign_kind, linked_foreign_label
+            if kind := linked_foreign_kind(persistence, parent_session_id):
+                return _err(rid, 4008, f"Branching a linked {linked_foreign_label(kind)} thread is not supported")
             try:
                 display_history = [m.as_openai_message() for m in
                                    persistence.messages.read_resume_conversations(parent_session_id).display]
@@ -576,21 +581,7 @@ class _Resume:
             display, profile_home=self.profile_home, image_urls=self.inline_images)
 
     def read_history(self) -> tuple:
-        """One lineage SELECT, two projections: model-fed copy alternation-repaired (healed once
-        here instead of every turn's pre-request repair), display copy verbatim.
-
-        Read-only mount: an ended row stays ended — resume must not clear ``ended_at``/``end_reason``
-        with no new activity, or the DB-derived liveness paints a finalized session live the moment
-        it is opened (#85303). The first real turn (``prompt.submit``) reopens it. Still read-only
-        for the session row, but NOT for stale queue residue: the restart that made this resume
-        necessary also discarded the busy-queue, so retire never-drained accept rows (#125577)
-        here — with #128508 the reopen no longer runs on this path and the marked row would stay
-        active and visible until the next send."""
-        self.persistence.sessions.retire_undrained_queue_rows(self.target)
-        if self.omit_messages:
-            return self.child_history(repair=True), []
-        resume = self.persistence.messages.read_resume_conversations(self.target)
-        return [m.as_openai_message() for m in resume.model], [m.as_openai_message() for m in resume.display]
+        return read_resume_history(self, _session_profile_runtime_scope)
 
     def display_prefix(self) -> list:
         """Ancestor display rows (model-fed history drops a dangling tool-call tail — display keeps it)."""
@@ -950,6 +941,7 @@ def _(rid, params: dict) -> dict:
     # Profile scope: a DEDICATED handle we own until the agent takes it; else the shared launch db.
     ctx.db, ctx.owns_db = _profile_session_db(ctx.profile_home)
     ctx.persistence = _persistence_beside(ctx.db)
+    from hermes_cli.foreign_linked_store import LinkedConfigUnreadable
     try:
         if ctx.db is None:
             return _db_unavailable_error(rid, code=5000)
@@ -971,13 +963,18 @@ def _(rid, params: dict) -> dict:
             return _resume_lazy(ctx)
         return _resume_eager(ctx) if ctx.eager_build else (
             _resume_deferred(ctx) if ctx.defer_history else _resume_cold(ctx))
+    except LinkedConfigUnreadable:
+        # A pointer row whose configuration cannot be read is a typed 4xxx refusal (the same one
+        # session.history answers), not a -32603 internal error: nothing is broken server-side, and
+        # what the user has to do is re-link the session.
+        logger.warning("session.resume: %s has an unreadable linked configuration", target)
+        return _linked_config_unreadable_error(rid)
     finally:
         # A dedicated profile store this resume still owns is released here; its handle beside it with it.
         if ctx.owns_db and ctx.db is not None:
             with contextlib.suppress(Exception):
                 ctx.db.close()
         _release_persistence(ctx.persistence)
-
 
 # ── cwd / workspace / live-session bookkeeping ───────────────────────
 @_session_method("session.cwd.set")
@@ -986,6 +983,34 @@ def _(rid, params: dict, session: dict) -> dict:
         return _err(rid, 4009, "session busy")
     if not (raw := _str_param(params, "cwd")):
         return _err(rid, 4016, "cwd required")
+    if _session_is_codex_linked(session):
+        from tui_gateway.session_workdir import (
+            LinkedCodexWorkspaceBusy, LinkedCodexWorkspaceError, LinkedCodexWorkspacePersistError,
+        )
+
+        lock = session.get("history_lock")
+        if lock is None:
+            return _err(rid, 5000, "session lock unavailable")
+        with lock:
+            if session.get("running"):
+                return _err(rid, 4009, "session busy")
+            with _session_db(session) as db:
+                if db is None:
+                    return _db_unavailable_error(rid, code=5000)
+                try:
+                    moved = _move_linked_codex_workspace(
+                        db, session.get("session_key") or "", raw, session.get("profile_home"),
+                        live_session=session,
+                    )
+                except LinkedCodexWorkspaceBusy as e:
+                    return _err(rid, 4009, str(e))
+                except LinkedCodexWorkspacePersistError as e:
+                    return _err(rid, 5007, str(e))
+                except (LinkedCodexWorkspaceError, ValueError) as e:
+                    return _err(rid, 4017, str(e))
+        info = _cwd_info(session, moved["cwd"], branch=moved["branch"])
+        _emit("session.info", params.get("session_id", ""), info)
+        return _ok(rid, info)
     try:
         cwd = _set_session_cwd(session, raw)
     except ValueError as e:
@@ -993,48 +1018,6 @@ def _(rid, params: dict, session: dict) -> dict:
     info = _cwd_info(session, cwd)
     _emit("session.info", params.get("session_id", ""), info)
     return _ok(rid, info)
-
-
-@method("session.workspace.move")
-def _(rid, params: dict) -> dict:
-    """Re-home a STORED session's workspace (by ``session_key``; no live agent required). git branch/root are
-    REPLACED (a stale ``git_repo_root`` kept the session under the project it left); a live agent follows even
-    mid-turn (refusing made the UI claim success while state.db kept the old cwd)."""
-    if not (target := _str_param(params, "session_key")):
-        return _err(rid, 4007, "session_key required")
-    if not (raw := _str_param(params, "cwd")):
-        return _err(rid, 4016, "cwd required")
-    from hermes_constants import translate_cwd_for_wsl_backend
-    # Snapshot under the lock — concurrent RPCs mutate _sessions.
-    with _sessions_lock:
-        live_sid, live = next(
-            ((sid, sess) for sid, sess in list(_sessions.items()) if sess.get("session_key") == target), ("", None))
-    # The live session's profile decides (as _set_session_cwd below does); an ssh workspace is never host-validated.
-    home = live.get("profile_home") if live is not None else _profile_home(params.get("profile"))
-    try:
-        target_cwd = _workspace_cwd(home, translate_cwd_for_wsl_backend(raw))
-    except ValueError:
-        return _err(rid, 4017, f"working directory does not exist: {raw}")
-    branch, root = git_probe.branch(target_cwd), git_probe.common_repo_root(target_cwd)
-    with _profile_db(params, writer=True) as db, _persistence_for(db) as persistence:
-        if persistence is None:
-            return _db_unavailable_error(rid, code=5007)
-        # A draft has no row yet; the live re-home still applies (row inherits cwd on write).
-        if persistence.sessions.get(target) is None:
-            if live is None:
-                return _err(rid, 4007, "session not found")
-        else:
-            try:
-                persistence.sessions.update_cwd(target, target_cwd, branch, root, replace_git_meta=True)
-            except Exception as e:
-                return _err(rid, 5007, f"move failed: {e}")
-    if live is not None:
-        try:
-            _set_session_cwd(live, target_cwd)
-        except ValueError as e:
-            return _err(rid, 4017, str(e))
-        _emit("session.info", live_sid, _cwd_info(live, target_cwd, branch=branch))
-    return _ok(rid, {"cwd": target_cwd, "branch": branch, "git_repo_root": root})
 
 
 @method("session.active_list")
@@ -1883,25 +1866,7 @@ def _(rid, params: dict, session: dict) -> dict:
 
 @_session_method("session.history")
 def _(rid, params: dict, session: dict) -> dict:
-    history = list(session.get("history", []))
-    # Address the session the live agent writes to, not session_key: a compression rotation moves the
-    # tip mid-session, and include_ancestors walks parent pointers, so a stale parent materializes
-    # root..parent and NEVER the continuation — a reconnect in that window renders a transcript missing
-    # every turn since the rotation (#123545).
-    row_session = _submit_row_target_key(session)
-    if row_session:
-        from persistence.conversation.messages import ConversationRequest
-        with _session_db(session) as db, _persistence_for(db) as persistence:
-            if persistence is not None:
-                # include_row_ids: the durable row id is how clients address a persisted turn (reactions,
-                # truncation targets); _history_to_messages forwards it.
-                with contextlib.suppress(Exception):
-                    # The projection in _history_to_messages only forwards row_id when the row carries a
-                    # stamp, so an unstamped read here silently strips the one durable address clients can
-                    # use. See #87059.
-                    history = [m.as_openai_message() for m in persistence.messages.read_conversation(
-                        row_session, ConversationRequest(include_lineage=True, include_row_ids=True))]
-    return _ok(rid, {"count": len(history), "messages": _history_to_messages(history, profile_home=session.get("profile_home"))})
+    return _session_history_result(rid, session)
 
 
 @_session_method("session.undo", live=True)
@@ -1974,6 +1939,8 @@ def _compress_live(rid, sid: str, session: dict, focus_topic: str) -> dict:
         after_tokens = _tokens(messages)
         agent = session["agent"]
         _sync_session_key_after_compress(sid, session)
+        if _session_is_codex_linked(session):
+            return _linked_compression_result(rid, session, agent, usage)
         summary = summarize_manual_compression(before_messages, messages, before_tokens, after_tokens,
                                                compression_state=getattr(agent, "context_compressor", None))
         info = _session_info(agent, session)
@@ -2023,13 +1990,15 @@ def _(rid, params: dict, session: dict) -> dict:
     if _session_uses_compute_host(session):
         return _save_via_compute_host(rid, params)
     from hermes_cli.session_export import load_save_snapshot, render_session_for_save
-    from persistence.core.errors import ExportTooLarge
+    from persistence.core.errors import ExportTooLarge, LinkedCodexExportUnavailable
     # As CLI/messaging /save json, under the SESSION's profile config + home (runs unscoped); a failed read falls back.
     try:
         with _session_profile_runtime_scope(session, hydrate_secrets=False), _session_db(session) as db, _persistence_for(db) as persistence:
             data = db and load_save_snapshot(db, _submit_row_target_key(session), "json", persistence=persistence)
     except ExportTooLarge as e:
         return _err(rid, 4131, str(e))
+    except LinkedCodexExportUnavailable as e:
+        return _err(rid, 4133, str(e))
     except Exception:
         logger.warning("session.save: stored-session read failed; saving the in-memory history", exc_info=True)
         data = None
@@ -2215,3 +2184,7 @@ def register(server) -> None:
     methods_session_seed.register(server)
     from . import methods_session_interrupt
     methods_session_interrupt.register(server)
+    from . import methods_session_history
+    methods_session_history.register(server)
+    from . import methods_session_workspace
+    methods_session_workspace.register(server)

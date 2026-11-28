@@ -66,10 +66,12 @@ import {
   buildToolView,
   clampForDisplay,
   cleanVisibleText,
+  codexNativeToolPayload,
   CONNECTION_CARD_KEY,
   countDiffLineStats,
   inlineDiffFromResult,
   isCardTool,
+  isCodexNativeToolCall,
   isFileEditTool,
   isPreviewableTarget,
   looksRedundant,
@@ -79,7 +81,8 @@ import {
   toolEntryDisclosureId,
   type ToolPart,
   type ToolStatus,
-  type ToolTitleAction
+  type ToolTitleAction,
+  type ToolView
 } from './fallback-model'
 import { isToolCallPart, summarizeToolRun } from './run-summary'
 import { ToolRunTicker } from './run-ticker'
@@ -118,15 +121,49 @@ const TOOL_SECTION_PRE_CLASS = cn(TOOL_SECTION_SURFACE_CLASS, 'font-mono text-[0
 // Raw args/result dump — reference material, so a notch smaller than a body.
 const TOOL_PAYLOAD_PRE_CLASS = cn(TOOL_SECTION_SURFACE_CLASS, 'font-mono text-[0.65rem] leading-relaxed')
 
+function useToolEntryPresentation(
+  part: ToolPart,
+  isPending: boolean,
+  view: { inlineDiff?: string; status: ToolStatus }
+) {
+  const toolViewMode = useStore($toolViewMode)
+  const hideCodeDiffs = useStore($hideCodeDiffs)
+  const codexNative = isCodexNativeToolCall(part)
+  const nativePatch = codexNative && part.toolName === 'apply_patch'
+  const isFileEdit = isFileEditTool(part.toolName) || nativePatch
+
+  return {
+    codexNative,
+    hideCodeDiffs,
+    isFileEdit,
+    omitCompletedFileEdit: isFileEdit && !nativePatch && !isPending && view.status !== 'error' && !view.inlineDiff,
+    showPayload: (toolViewMode === 'technical' || codexNative) && !(hideCodeDiffs && isFileEdit),
+    toolViewMode
+  }
+}
+
+function ToolEntryDiff({ isFileEdit, view }: { isFileEdit: boolean; view: ToolView }) {
+  return <FileDiffPanel className="-mt-1.5" diff={view.inlineDiff} path={isFileEdit ? view.subtitle : undefined} />
+}
+
 /**
- * Technical-mode raw payload, behind a chevron disclosure.
+ * Raw arguments/results, behind a chevron disclosure. Codex-native calls also
+ * expose a filtered payload in product mode so their full action is readable.
  *
  * Collapsed by default — in technical mode every tool row carries one, and
  * expanding them all buries the transcript. Uses `DisclosureCaret` rather than
  * a native `<details>`, whose marker is a browser-drawn triangle matching
  * nothing else here.
  */
-function ToolPayloadDisclosure({ args, result }: { args: unknown; result: unknown }) {
+function ToolPayloadDisclosure({
+  args,
+  result,
+  codexNative = false
+}: {
+  args: unknown
+  codexNative?: boolean
+  result: unknown
+}) {
   const [open, setOpen] = useState(false)
 
   return (
@@ -146,7 +183,7 @@ function ToolPayloadDisclosure({ args, result }: { args: unknown; result: unknow
       </button>
       {open && (
         <pre className={cn(TOOL_PAYLOAD_PRE_CLASS, 'mt-1 whitespace-pre-wrap wrap-anywhere')}>
-          {technicalTrace(args, result)}
+          {codexNative ? clampForDisplay(codexNativeToolPayload(args, result)) : technicalTrace(args, result)}
         </pre>
       )}
     </div>
@@ -376,8 +413,6 @@ function ToolEntry({ part }: ToolEntryProps) {
   const messageRunning = useAuiState(selectMessageRunning)
   const embedded = useContext(ToolEmbedContext)
   const runDisclosureId = useContext(ToolRunDisclosureContext)
-  const toolViewMode = useStore($toolViewMode)
-  const hideCodeDiffs = useStore($hideCodeDiffs)
 
   // `ToolFallback` rebuilds the `part` wrapper each render, defeating the memos
   // below and re-running buildToolView (full JSON.stringify of result) on every
@@ -428,9 +463,6 @@ function ToolEntry({ part }: ToolEntryProps) {
   const dismissed = useStore($toolRowDismissed(disclosureId))
   const isPending = messageRunning && result === undefined && completedAt === undefined
   const inlineDiff = inlineDiffFromResult(toolResultRecord(stablePart))
-  const isFileEdit = isFileEditTool(toolName)
-  const defaultOpen = Boolean(inlineDiff) && !hideCodeDiffs
-  const disclosureOpen = useDisclosureOpen(disclosureId, defaultOpen)
   const canDismiss = !isPending && !embedded
   // Only animate entries that mount while their message is actively
   // streaming — historical sessions mount with `messageRunning === false`,
@@ -448,12 +480,15 @@ function ToolEntry({ part }: ToolEntryProps) {
     return buildToolView(p, inlineDiff)
   }, [inlineDiff, isPending, result, stablePart])
 
+  const presentation = useToolEntryPresentation(stablePart, isPending, view)
+  const defaultOpen = Boolean(inlineDiff) && !presentation.hideCodeDiffs
+  const disclosureOpen = useDisclosureOpen(disclosureId, defaultOpen)
+
   // Keep counts and saved disclosure intent, but never mount code while hidden.
   // Failed edits still expose their explanation.
-  const summaryOnly = hideCodeDiffs && isFileEdit && view.status !== 'error'
+  const summaryOnly = presentation.hideCodeDiffs && presentation.isFileEdit && view.status !== 'error'
   const open = disclosureOpen && !summaryOnly
-  const showInlineDiff = Boolean(view.inlineDiff) && !hideCodeDiffs
-  const showPayload = toolViewMode === 'technical' && !(hideCodeDiffs && isFileEdit)
+  const showInlineDiff = Boolean(view.inlineDiff) && !presentation.hideCodeDiffs
 
   // Surface a previewable artifact (HTML file / localhost URL) as a compact link
   // in the composer status stack rather than a bulky inline card. Uses the same
@@ -515,7 +550,7 @@ function ToolEntry({ part }: ToolEntryProps) {
   const detailMatchesTitle = useMemo(() => looksRedundant(view.title, view.detail), [view.title, view.detail])
 
   const showDetail =
-    (!view.inlineDiff || (hideCodeDiffs && view.status === 'error')) &&
+    (!view.inlineDiff || (presentation.hideCodeDiffs && view.status === 'error')) &&
     (Boolean(view.stdout || view.stderr) ||
       (view.status === 'error' && Boolean(detailSections.summary || detailSections.body)) ||
       (view.status === 'notice' && Boolean(view.detail)) ||
@@ -539,16 +574,16 @@ function ToolEntry({ part }: ToolEntryProps) {
       view.stderr ||
       view.terminalCommand ||
       view.terminalExitCode !== undefined ||
-      showPayload
+      presentation.showPayload
     )
 
-  // copyAction reads the uncapped view.detail; clampForDisplay below only bounds
-  // what's painted, so the row's Copy button still yields the full output.
+  // Native calls copy their complete bounded args + result; other rows copy
+  // uncapped detail. In both cases clampForDisplay limits only painted text.
   const copyAction = useMemo(() => toolCopyPayload(stablePart, view), [stablePart, view])
 
   const diffStats = useMemo(
-    () => (isFileEdit && view.inlineDiff ? countDiffLineStats(view.inlineDiff) : null),
-    [isFileEdit, view.inlineDiff]
+    () => (presentation.isFileEdit && view.inlineDiff ? countDiffLineStats(view.inlineDiff) : null),
+    [presentation.isFileEdit, view.inlineDiff]
   )
 
   const showDiffStats = !isPending && Boolean(diffStats && (diffStats.added > 0 || diffStats.removed > 0))
@@ -603,7 +638,7 @@ function ToolEntry({ part }: ToolEntryProps) {
   // persists its diff in the tool result, so creates rehydrate diff-less and
   // read like dead duplicates of the real diff row. Hide them — but keep
   // in-flight writes (activity) and failures (errors) visible.
-  if (isFileEdit && !isPending && view.status !== 'error' && !view.inlineDiff) {
+  if (presentation.omitCompletedFileEdit) {
     return null
   }
 
@@ -614,7 +649,7 @@ function ToolEntry({ part }: ToolEntryProps) {
         open && TOOL_EXPANDED_SHELL_CLASS
       )}
       data-conversation-scaffold=""
-      data-file-edit={isFileEdit && open ? '' : undefined}
+      data-file-edit={presentation.isFileEdit && open ? '' : undefined}
       data-slot="tool-block"
       data-tool-open={open ? '' : undefined}
       data-tool-row=""
@@ -640,11 +675,11 @@ function ToolEntry({ part }: ToolEntryProps) {
         >
           <span
             className="flex min-w-0 items-center gap-1.5"
-            title={isFileEdit && view.subtitle ? view.subtitle : undefined}
+            title={presentation.isFileEdit && view.subtitle ? view.subtitle : undefined}
           >
             <ToolGlyph
               copy={copy}
-              filePath={isFileEdit ? view.subtitle : undefined}
+              filePath={presentation.isFileEdit ? view.subtitle : undefined}
               icon={view.icon}
               legendary={memoryLegendary}
               status={leadingStatus(isPending, view.status)}
@@ -669,7 +704,7 @@ function ToolEntry({ part }: ToolEntryProps) {
                 )}
               </span>
             )}
-            {!isFileEdit && !isPending && view.durationLabel && (
+            {!presentation.isFileEdit && !isPending && view.durationLabel && (
               <span className={cn(SCAFFOLD_META_CLASS, memoryMetaClass)}>{view.durationLabel}</span>
             )}
           </span>
@@ -689,7 +724,7 @@ function ToolEntry({ part }: ToolEntryProps) {
               text={copyAction.text}
             />
           )}
-          {part.toolName === 'terminal' && toolViewMode !== 'technical' && (
+          {part.toolName === 'terminal' && presentation.toolViewMode !== 'technical' && (
             <TerminalTranscript command={view.terminalCommand} exitCode={view.terminalExitCode} />
           )}
           {view.imageUrl && (
@@ -709,11 +744,9 @@ function ToolEntry({ part }: ToolEntryProps) {
               <SearchResultsList hits={view.searchHits} />
             </div>
           )}
-          {showInlineDiff && (
-            <FileDiffPanel className="-mt-1.5" diff={view.inlineDiff} path={isFileEdit ? view.subtitle : undefined} />
-          )}
+          {showInlineDiff && <ToolEntryDiff isFileEdit={presentation.isFileEdit} view={view} />}
           {showDetail &&
-            !showPayload &&
+            !presentation.showPayload &&
             (view.status === 'error' ? (
               detailSections.summary || detailSections.body ? (
                 <div className="max-w-full text-xs leading-relaxed text-destructive">
@@ -783,7 +816,9 @@ function ToolEntry({ part }: ToolEntryProps) {
                 )}
               </div>
             ))}
-          {showPayload && <ToolPayloadDisclosure args={part.args} result={part.result} />}
+          {presentation.showPayload && (
+            <ToolPayloadDisclosure args={part.args} codexNative={presentation.codexNative} result={part.result} />
+          )}
         </div>
       )}
     </div>

@@ -406,3 +406,11 @@ def _shlex_args(cmd: str) -> list:
         return shlex.split(cmd)[1:] if cmd else []
     except ValueError:
         return (cmd or "").split()[1:]
+
+
+def persist_display_choice(key: str, value: str, label: str, note: str) -> None:
+    """Save a /busy-style choice to config and report saved vs session-only."""
+    if _save(key, value):
+        _cp(_accent_line(_t("shared.set_saved", label=label, value=value)), _dim_line(note))
+    else:
+        _cp(_accent_line(_t("shared.set_session_only", label=label, value=value)))

@@ -159,9 +159,10 @@ def _canonical_session_row(persistence, profile_path):
     involved.
     """
     try:
+        from persistence.conversation.sessions import is_linked_foreign_config
         row = persistence.sessions.get_by_title("Bot Chat")
         session_id = str(getattr(row, "session_id", "") or "").strip()
-        if not session_id or _denied_source({"source": row.source}):
+        if not session_id or is_linked_foreign_config(row.model_config) or _denied_source({"source": row.source}):
             return None
         # Archived = retired (absent), except accidental reaper archives: resurrect those.
         # An archived canonical row usually means the user deliberately retired it — report absent. But the

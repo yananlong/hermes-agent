@@ -71,7 +71,7 @@ export function canonicalRequest(
     // a metadata-only activation (`omit_messages`) never paints a transcript.
     const renders = !params.omit_messages
     delete params.cols
-    delete params.omit_messages
+    if (renders) { delete params.omit_messages }
 
     if (renders) { params.display_projection = true }
   }

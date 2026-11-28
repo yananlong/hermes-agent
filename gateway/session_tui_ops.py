@@ -31,7 +31,8 @@ def handlers(connection):
             'rollback.restore': partial(rollback, connection, kind='restore'),
             'rollback.session_diff': partial(rollback, connection, kind='session_diff'),
             'session.context_breakdown': partial(context_breakdown, connection),
-            'session.history': partial(session_history, connection)}
+            'session.history': partial(session_history, connection),
+            'session.compress': partial(compress_session, connection)}
 
 
 def _profile_home(authority):
@@ -67,12 +68,14 @@ async def save_session(connection, ref, params):
     def write():
         from hermes_cli.session_export import load_save_snapshot, render_session_for_save
         from gateway.session_persistence import authority_persistence
-        from persistence.core.errors import ExportTooLarge
+        from persistence.core.errors import ExportTooLarge, LinkedCodexExportUnavailable
         try:
             store = authority_persistence(authority)
             data = load_save_snapshot(store, target, 'json', persistence=store)
         except ExportTooLarge as exc:
             raise AuthorityRefusal('export_too_large') from exc
+        except LinkedCodexExportUnavailable as exc:
+            raise AuthorityRefusal('linked_codex_export_unavailable', field='session', detail=str(exc)) from exc
         if not data:
             raise AuthorityRefusal('not_found')
         path = (_profile_home(authority) / 'sessions' / 'saved'
@@ -106,12 +109,14 @@ async def export_session(connection, ref, params):
     def render():
         from hermes_cli.session_export import load_save_snapshot, render_session_for_save
         from gateway.session_persistence import authority_persistence
-        from persistence.core.errors import ExportTooLarge
+        from persistence.core.errors import ExportTooLarge, LinkedCodexExportUnavailable
         try:
             store = authority_persistence(authority)
             data = load_save_snapshot(store, target, fmt, persistence=store)
         except ExportTooLarge as exc:
             raise AuthorityRefusal('export_too_large') from exc
+        except LinkedCodexExportUnavailable as exc:
+            raise AuthorityRefusal('linked_codex_export_unavailable', field='session', detail=str(exc)) from exc
         if not data:
             raise AuthorityRefusal('not_found')
         if redact:
@@ -134,10 +139,54 @@ async def session_history(connection, ref, params):
         from gateway.session_controls import display_projection
         from gateway.session_persistence import authority_persistence
         from persistence.conversation.messages import ConversationRequest
-        rows = [row.as_openai_message() for row in authority_persistence(authority).messages.read_conversation(
+        from gateway.session_linked_codex import linked_thread_id, read_display_history
+        store = authority_persistence(authority)
+        if thread_id := linked_thread_id(store, target):
+            from gateway.session_authorities import owner_scope
+            owner_row = store.sessions.get(target)
+            with owner_scope(authority):
+                history = read_display_history(
+                    thread_id, session_id=target, model=owner_row.model if owner_row is not None else None,
+                    profile_home=store.scope.profile_dir, session_db=store,
+                                             platform=owner_row.source if owner_row else "")
+            return {'count': len(history), 'messages': display_projection(history, authority.profile_id)}
+        rows = [row.as_openai_message() for row in store.messages.read_conversation(
             target, ConversationRequest(include_lineage=True, include_row_ids=True))]
         return {'count': len(rows), 'messages': display_projection(rows, authority.profile_id)}
     return await asyncio.to_thread(read)
+
+
+async def compress_session(connection, ref, params):
+    """Canonical ``session.compress`` adapter over the fenced owner mutation.
+
+    Desktop still speaks this compact request shape. The owner turns it into the same
+    revision-fenced ``session.mutate(compress)`` used by Ink, including linked Codex' native path.
+    """
+    if set(params) - {'session_id', 'profile', 'focus_topic'}:
+        raise AuthorityRefusal('invalid_params')
+    focus = params.get('focus_topic')
+    if focus is not None and not isinstance(focus, str):
+        raise AuthorityRefusal('invalid_params', field='focus_topic')
+    _live_ref(connection, ref, params, {'session_id', 'profile', 'focus_topic'}, 'session:control')
+    from gateway.session_persistence import authority_persistence
+    row = authority_persistence(connection.authority).sessions.get(ref.session_id)
+    if row is None:
+        raise AuthorityRefusal('not_found')
+    from uuid import uuid4
+    result = await connection.mutate(ref, {
+        'session_id': ref.session_id,
+        'request_id': uuid4().hex,
+        'expected_revision': row.runtime_revision,
+        'expected_generation': row.runtime_generation,
+        'operation': 'compress',
+        'payload': {'focus': focus or ''},
+    })
+    if result.get('status') in {'preview', 'noop', 'lock_skipped', 'nothing_to_do'}:
+        return result
+    history = await session_history(connection, ref, {'session_id': ref.session_id})
+    return {key: result[key] for key in ('status', 'removed', 'before_messages', 'after_messages',
+                                         'summary', 'message') if key in result} | {
+        'messages': history['messages']}
 
 
 async def reload_env(connection, ref, params):

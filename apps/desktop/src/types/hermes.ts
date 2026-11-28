@@ -558,6 +558,14 @@ export interface SessionCreateResponse {
 
 export interface SessionInfo {
   archived?: boolean
+  /** True for a linked Claude Code session (read-only pointer row); mirrors
+   *  {@link codex_linked} — permits the cold-session workspace picker and the
+   *  read-only chat treatment. Undefined against backends predating the flag. */
+  claude_linked?: boolean
+  /** True for a linked Mistral Vibe session (read-only pointer row); same treatment. */
+  mistral_linked?: boolean
+  /** True for a linked Codex thread; permits the cold-session workspace picker. */
+  codex_linked?: boolean
   cwd?: null | string
   /** Git branch checked out in {@link cwd} when the session started/resumed.
    *  The sidebar groups main-checkout sessions by this so feature-branch work
@@ -686,6 +694,8 @@ export interface MessageReaction {
 }
 
 export interface SessionMessage {
+  /** Stable, profile-authorized identity supplied by linked Codex history. */
+  codex_native_row_id?: string
   /**
    * Full tool arguments for a gateway-projected tool row (`role: 'tool'`).
    * `context` is an 80-char display preview. The expanded tool row rebuilds
@@ -748,6 +758,8 @@ export interface SessionMessage {
 }
 
 export interface SessionMessagesResponse {
+  /** Opaque native history continuation; absent for ordinary REST transcripts. */
+  native_history?: { identity: string; next_cursor: string | null; reset: boolean }
   /** Profile the page was read from (the serving process's own when the
    *  request named none). Absent on backends that predate the field. */
   profile?: string
@@ -766,6 +778,7 @@ export interface SessionMessagesResponse {
 }
 
 export interface SessionResumeResult {
+  linked_history_identity?: string
   /** Present when the backend found a fresh crash-interrupted turn and
    *  scheduled its automatic continuation; the turn arrives as a normal
    *  message.start stream right after this resume. */

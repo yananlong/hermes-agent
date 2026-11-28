@@ -524,6 +524,18 @@ class DeleteFootprint:
     children: tuple[SessionId, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ColdLinkedWorkspaceRequest:
+    """The canonical request identity for a workspace change before a linked session first opens."""
+
+    principal_id: str
+    session_id: str
+    request_id: str
+    cwd: str
+    expected_revision: int
+    expected_generation: int | None
+
+
 @runtime_checkable
 class SessionRuntimeRepository(Protocol):
     """The runtime authority of the handle's profile; every verb is one transaction."""
@@ -534,8 +546,8 @@ class SessionRuntimeRepository(Protocol):
         """Advance the store's authority epoch (1 on first acquisition), record ``instance_id`` as holder, return it. The bump is a takeover and an owner captures the epoch once at boot, so the caller must own the profile: while another process holds the profile's gateway ownership the bump raises ``AuthorityRefusal('ownership_conflict', field='runtime_epoch')`` and the epoch is unchanged; a reservation this process holds is granted. A store with no profile directory (the reference backend) has no owner to fence out and never refuses."""
         ...
 
-    def prepare_mutation(self, epoch: int, *, principal_id: str, session_id: str, request_id: str, expected_revision: int, command: MutationCommand, expected_generation: int | None = None, live_guard: GateRefusal | None = None) -> LocalSnapshot | MutationOutcome:
-        """``mutate``'s checks up to ``live_guard``, then the local snapshot (``runtime_coordination_required`` without a policy receipt; ``require_target_advanceable`` on the session and its target); a ``Branch`` also requires both idle. An exact retry returns its stored ``MutationOutcome``."""
+    def prepare_mutation(self, epoch: int, *, principal_id: str, session_id: str, request_id: str, expected_revision: int, command: MutationCommand, expected_generation: int | None = None, live_guard: GateRefusal | None = None, require_idle_target: bool = False) -> LocalSnapshot | MutationOutcome:
+        """``mutate``'s checks up to ``live_guard``, then the local snapshot (``runtime_coordination_required`` without a policy receipt; ``require_target_advanceable`` on the session and its target); a ``Branch`` or caller requiring an idle target also checks for queued admissions. An exact retry returns its stored ``MutationOutcome``."""
         ...
 
     def mutate(self, epoch: int, *, principal_id: str, session_id: str, request_id: str, expected_revision: int, command: MutationCommand, expected_generation: int | None = None, live_guard: GateRefusal | None = None, history: HistoryWrite | None = None, prepared: PreparedMutation | None = None, media_root: str | None = None, owner: OwnerRule | None) -> MutationOutcome:
@@ -543,6 +555,45 @@ class SessionRuntimeRepository(Protocol):
 
         Before the write: identity texts, ``expected_revision``, the command (``parse_mutation`` of its payload), ``expected_generation`` (required for delete, rewind, reset, branch, model and compress), all ``invalid_params``. In the write: epoch; the receipt (another digest ``admission_conflict``; an exact retry returns it, ``replayed``); the session (``not_found``, except an import); revision (``revision_conflict``); generation (``stale_generation``); ``live_guard``; ``history``; the operation; every affected row's revision bumps; the receipt is stored. ``gone`` names the deleted ids, or the archived ones on a first archive. ``media_root`` is read only by ``Delete``: the folder whose hosted documents the retirement of the deleted sessions' admissions records, as ``SessionRepository.delete`` takes it; it is in no command's payload, so it never enters the receipt digest. ``owner`` is the owner rule ``history`` and the ``Delete`` walk read stored owners by (as ``SessionBindingRepository.authorize_history`` takes it); it is in no payload either.
         """
+        ...
+
+    def mutate_cold_linked_workspace(
+        self, epoch: int, request: ColdLinkedWorkspaceRequest, *, thread_id: str,
+        target_cwd: str | None = None, intent: Mapping[str, Any] | None = None,
+        branch: str | None = None, repo_root: str | None = None,
+        history: HistoryWrite | None = None, owner: OwnerRule | None = None,
+    ) -> dict[str, Any]:
+        """Replay a receipt, claim a native move, or finish its exact intent in one transaction."""
+        ...
+
+    def resume_completed_native_codex_compaction(
+        self, *, epoch: int, target_session_id: str, thread_id: str,
+        identity: Mapping[str, Any], snapshot: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Rebind a confirmed native outcome to an equivalent, authorized retry."""
+        ...
+
+    def begin_native_codex_compaction(self, *, epoch: int, target_session_id: str, thread_id: str,
+                                      identity: Mapping[str, Any], snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        """Fence a native call against concurrent writes using its durable request identity."""
+        ...
+
+    def complete_native_codex_compaction(self, *, epoch: int, token: Mapping[str, Any],
+                                         outcome: Mapping[str, Any]) -> None:
+        """Record the confirmed native outcome before publishing the canonical receipt."""
+        ...
+
+    def clear_unsubmitted_native_codex_compaction(self, *, epoch: int, token: Mapping[str, Any]) -> None:
+        """Release a native intent for a call known to have stayed local."""
+        ...
+
+    def pending_native_codex_compaction(self, target_session_id: str) -> dict[str, Any] | None:
+        """Return the record needed for an operator to verify and recover an ambiguous call."""
+        ...
+
+    def resolve_native_codex_compaction(self, *, epoch: int, target_session_id: str, thread_id: str,
+                                        request_key: str, request_digest: str, verified_status: str) -> str:
+        """Resolve a verified pending request without sending native compaction again."""
         ...
 
     def defer_model_pick(self, epoch: int, *, key: str, digest: str, session_id: str, pick: DeferredPick) -> dict[str, Any]:

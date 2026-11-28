@@ -30,6 +30,7 @@ import {
   Archive,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { isLinkedForeignSession } from "@/lib/linked-session";
 import { formatSessionPruneResult } from "@/lib/session-prune";
 import { shouldRefreshSessions } from "@/lib/session-refresh";
 import {
@@ -329,6 +330,7 @@ function MessageBubble({
           </span>
         )}
       </div>
+      <MessageReasoning msg={msg} highlightTerms={highlightTerms} />
       {msg.content &&
         (msg.role === "system" ? (
           <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
@@ -350,6 +352,35 @@ function MessageBubble({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Chain-of-thought for one assistant row.
+ *
+ * A linked Codex/Responses transcript carries the model's reasoning on the row itself, and the
+ * TUI renders it as a thinking block. The preview is the one surface that did not, so a linked
+ * thread read here showed answers with no visible reasoning. Collapsed by default to keep the
+ * timeline scannable.
+ */
+function MessageReasoning({
+  msg,
+  highlightTerms,
+}: {
+  msg: SessionMessage;
+  highlightTerms?: string[];
+}) {
+  const reasoning = msg.reasoning ?? msg.reasoning_content;
+  if (msg.role !== "assistant" || !reasoning) return null;
+  return (
+    <details className="mt-1 rounded border border-border-subtle bg-surface-subtle px-2 py-1">
+      <summary className="cursor-pointer text-xs font-medium text-text-tertiary">
+        Reasoning
+      </summary>
+      <div className="mt-1 text-sm text-text-secondary">
+        <StructuredReasoning content={reasoning} highlightTerms={highlightTerms} />
+      </div>
+    </details>
   );
 }
 
@@ -454,12 +485,16 @@ function SessionRow({
       </Badge>
 
       {resumeInChatEnabled && (
+        // A linked foreign row (Codex / Claude / Mistral) opens in chat like any other session: the
+        // pane is read-only for it (the native tool owns its transcript and its model), which only
+        // the tooltip says. Refusing to open it hid the transcript entirely, which read as "no
+        // history" for a thread that has plenty.
         <Button
           ghost
           size="icon"
           className="text-muted-foreground hover:text-success"
           aria-label={t.sessions.resumeInChat}
-          title={t.sessions.resumeInChat}
+          title={isLinkedForeignSession(session) ? t.sessions.linkedResumeDisabled : t.sessions.resumeInChat}
           onClick={(e) => {
             e.stopPropagation();
             navigate(`/chat?resume=${encodeURIComponent(session.id)}`);

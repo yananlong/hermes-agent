@@ -276,7 +276,8 @@ def _record_codex_app_server_compaction(agent, turn, *, approx_tokens: int | Non
 
 # Item types that project to a Hermes tool_call (keep in sync with agent/transports/codex_event_projector.py
 # so UI names match recorded names). webSearch is codex's built-in tool; the projector records it under the same id.
-_CODEX_TOOL_ITEM_TYPES = frozenset({"commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch"})
+_CODEX_TOOL_ITEM_TYPES = frozenset({"commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch",
+                                    "collabAgentToolCall", "subAgentActivity"})
 # Text-delta notifications → the agent stream hook each one feeds. Single source for both the display
 # handlers and the liveness set below, so a new delta method can't stream without refreshing activity (#118410).
 _CODEX_TEXT_DELTA_METHODS = (
@@ -285,6 +286,9 @@ _CODEX_TEXT_DELTA_METHODS = (
     ("item/reasoning/summaryDelta", "_fire_reasoning_delta"),
     ("item/reasoning/textDelta", "_fire_reasoning_delta"),
     ("item/reasoning/summaryTextDelta", "_fire_reasoning_delta"),
+)
+_CODEX_REASONING_DELTA_METHODS = frozenset(
+    method for method, callback in _CODEX_TEXT_DELTA_METHODS if callback == "_fire_reasoning_delta"
 )
 # Notifications that prove the turn is alive: every text delta plus tool output streams (no UI handler).
 _CODEX_PROGRESS_DELTA_METHODS = frozenset(m for m, _ in _CODEX_TEXT_DELTA_METHODS) | {
@@ -318,21 +322,29 @@ def _codex_item_to_tool_name(item: dict) -> str:
         return tool if server == HERMES_TOOLS_MCP_SERVER_NAME else f"mcp.{server}.{tool}"
     if item_type == "dynamicToolCall":
         return item.get("tool") or "dynamic"
+    if item_type == "collabAgentToolCall":
+        return f"collab.{item.get('tool') or 'unknown'}"
+    if item_type == "subAgentActivity":
+        return "codex_subagent_activity"
     return _STATIC_TOOL_NAMES.get(item_type) or item_type or "unknown"
 
 
 def _codex_item_to_args(item: dict) -> dict:
     """Args dict for tool_progress_callback("tool.started"); mirrors the projector shapes."""
+    from agent.transports.codex_event_projector import CodexEventProjector, _file_change_changes, _safe_tool_args
     item_type = item.get("type") or ""
     if item_type == "commandExecution":
-        return {"command": item.get("command") or "", "cwd": item.get("cwd") or ""}
+        return _safe_tool_args({"command": item.get("command") or "", "cwd": item.get("cwd") or ""})
     if item_type == "fileChange":
-        return {"changes": [{"kind": (c.get("kind") or {}).get("type") or "update", "path": c.get("path") or ""}
-                            for c in _item_changes(item)]}
+        return _safe_tool_args({"changes": _file_change_changes(item)})
     if item_type in _MCP_LIKE_ITEM_TYPES:
-        args = item.get("arguments") or {}
-        return args if isinstance(args, dict) else {"arguments": args}
-    return {"query": item.get("query") or ""} if item_type == "webSearch" else {}
+        return _safe_tool_args(item.get("arguments"))
+    if item_type == "collabAgentToolCall":
+        prompt = item.get("prompt")
+        return _safe_tool_args({"prompt": prompt} if isinstance(prompt, str) and prompt else {})
+    if item_type == "subAgentActivity":
+        return CodexEventProjector._subagent_activity_spec(item)[2]
+    return _safe_tool_args({"query": item.get("query") or ""}) if item_type == "webSearch" else {}
 
 
 def _codex_item_to_preview(item: dict, args: dict | None = None) -> Any:
@@ -340,17 +352,20 @@ def _codex_item_to_preview(item: dict, args: dict | None = None) -> Any:
 
     ``args`` overrides the item's raw arguments (the display-redacted copy)."""
     item_type = item.get("type") or ""
+    args = _codex_display_args(_codex_item_to_tool_name(item), _codex_item_to_args(item)) if args is None else args
     if item_type in _PREVIEW_FIELDS:
-        source = args if args is not None else item
-        return (source.get(_PREVIEW_FIELDS[item_type]) or "")[:120] or None
+        value = args.get(_PREVIEW_FIELDS[item_type])
+        return (value[:120] if isinstance(value, str) else "") or None
     if item_type == "fileChange":
-        paths = [c.get("path") for c in _item_changes(item) if c.get("path")]
+        paths = [c.get("path") for c in args.get("changes", [])
+                 if isinstance(c, dict) and c.get("path")]
         return (", ".join(paths[:3]) + (f", +{len(paths) - 3} more" if len(paths) > 3 else "")) if paths else None
-    if item_type in _MCP_LIKE_ITEM_TYPES:
-        args = args if args is not None else item.get("arguments") or {}
-        if isinstance(args, dict) and args:
-            with suppress(TypeError, ValueError):
-                return json.dumps(args, ensure_ascii=False)[:120]
+    if item_type in _MCP_LIKE_ITEM_TYPES and args:
+        with suppress(TypeError, ValueError):
+            return json.dumps(args, ensure_ascii=False)[:120]
+    if item_type == "collabAgentToolCall":
+        prompt = args.get("prompt")
+        return prompt[:120] if isinstance(prompt, str) and prompt else None
     return None
 
 
@@ -367,24 +382,33 @@ def _codex_display_args(name: str, args: dict) -> dict:
 def _codex_item_completion_payload(item: dict) -> tuple[str, bool]:
     """(result_text, is_error) for a completed tool item — display-facing text for live tool cards (the
     persisted history keeps the projector's ``{exit_code, output}`` envelope instead)."""
+    from agent.transports.codex_event_projector import (
+        CodexEventProjector, _bounded_tool_text, _file_change_result_text,
+    )
     item_type = item.get("type") or ""
     if item_type == "commandExecution":
         out, exit_code = item.get("aggregatedOutput") or "", item.get("exitCode")
         is_error = bool(exit_code is not None and exit_code != 0)
-        return (f"[exit {exit_code}]\n{out}" if is_error else out), is_error
+        return _bounded_tool_text(f"[exit {exit_code}]\n{out}" if is_error else out), is_error
     if item_type == "fileChange":
         status = item.get("status") or "unknown"
-        n = len(item.get("changes") or [])
-        return f"apply_patch status={status}, {n} change(s)", status not in {"completed", "applied", "success"}
+        return _file_change_result_text(item), status not in {"completed", "applied", "success"}
     if item_type == "mcpToolCall":
         if error := item.get("error"):
-            return f"[error] {json.dumps(error, ensure_ascii=False)[:1000]}", True
+            return _bounded_tool_text(f"[error] {json.dumps(error, ensure_ascii=False, default=str)[:1000]}"), True
         result = item.get("result")
-        return (json.dumps(result, ensure_ascii=False)[:4000] if result is not None else ""), False
+        return (_bounded_tool_text(json.dumps(result, ensure_ascii=False, default=str)) if result is not None else ""), False
     if item_type == "dynamicToolCall":
         content_items, success = item.get("contentItems") or [], item.get("success", True)
         has_items = isinstance(content_items, list) and content_items
-        return (json.dumps(content_items, ensure_ascii=False)[:4000] if has_items else f"success={success}"), not bool(success)
+        content = json.dumps(content_items, ensure_ascii=False, default=str) if has_items else f"success={success}"
+        return _bounded_tool_text(content), not bool(success)
+    if item_type == "collabAgentToolCall":
+        _id_type, _name, _args, result = CodexEventProjector._collab_agent_tool_call_spec(item)
+        return _bounded_tool_text(result), item.get("status") in {"failed", "interrupted"}
+    if item_type == "subAgentActivity":
+        # The item is a lifecycle notification, not the child agent's result.
+        return "", False
     return "", False
 
 
@@ -394,6 +418,8 @@ def _stable_call_id(item: dict, name: str) -> str:
     item_type = item.get("type") or ""
     tool = item.get("tool") or "unknown"
     prefix = {"mcpToolCall": f"mcp__{item.get('server') or 'mcp'}__{tool}", "dynamicToolCall": f"dyn_{tool}"}.get(item_type)
+    if item_type == "subAgentActivity":
+        prefix = "subagent_activity"
     return _deterministic_call_id(prefix or _STABLE_ID_PREFIXES.get(item_type, name), item.get("id") or "")
 
 
@@ -407,6 +433,145 @@ def make_codex_app_server_event_bridge(agent) -> Callable[[dict], None]:
     without display hooks. Every callback is guarded so a buggy display hook cannot tear down the turn loop."""
     # item_id -> (tool_name, args, started_monotonic); duration even when codex omits durationMs.
     started: dict[str, tuple[str, dict, float]] = {}
+    # Reasoning may contain credential-like text split across arbitrarily many delta notifications.
+    # Buffer a bounded item and redact the contiguous text only when Codex completes that item.
+    from agent.transports.codex_event_projector import (
+        _MAX_REASONING_DISPLAY_CHARS, _bounded_reasoning_text, reasoning_text_parts,
+    )
+    max_reasoning_chars = _MAX_REASONING_DISPLAY_CHARS
+    max_reasoning_item_source_chars = max_reasoning_chars * 4
+    max_reasoning_items = 8
+    max_reasoning_buffer_chars = 512 * 1024
+    reasoning_buffers: dict[str | None, str | None] = {}
+    reasoning_buffer_chars = 0
+    reasoning_summary_indexes: dict[str | None, int] = {}
+    untracked_reasoning_overflow = False
+    emitted_reasoning_items = 0
+
+    def _reasoning_key(raw: Any) -> str | None:
+        return raw if isinstance(raw, str) and raw else None
+
+    def _buffer_reasoning_delta(params: dict) -> None:
+        nonlocal reasoning_buffer_chars, untracked_reasoning_overflow
+        delta = _delta_text(params)
+        if not delta:
+            return
+        key = _reasoning_key(params.get("itemId"))
+        if key is None:
+            if len(reasoning_buffers) == 1:
+                key = next(iter(reasoning_buffers))
+            elif len(reasoning_buffers) > 1:
+                # Without itemId there is no safe way to attribute this chunk among active items.
+                untracked_reasoning_overflow = True
+                return
+        if key not in reasoning_buffers and len(reasoning_buffers) >= max_reasoning_items:
+            untracked_reasoning_overflow = True
+            return
+        current = reasoning_buffers.get(key, "")
+        if current is None:  # already overflowed; keep discarding this item
+            return
+        new_size = len(current) + len(delta)
+        if new_size > max_reasoning_chars or reasoning_buffer_chars + len(delta) > max_reasoning_buffer_chars:
+            reasoning_buffer_chars -= len(current)
+            reasoning_buffers[key] = None
+            return
+        reasoning_buffers[key] = current + delta
+        reasoning_buffer_chars += len(delta)
+
+    def _buffer_reasoning_summary_part(params: dict) -> None:
+        """Keep current-protocol summary section boundaries in the no-item-fields fallback."""
+        nonlocal reasoning_buffer_chars, untracked_reasoning_overflow
+        key = _reasoning_key(params.get("itemId"))
+        if key is None:
+            if len(reasoning_buffers) == 1:
+                key = next(iter(reasoning_buffers))
+            elif len(reasoning_buffers) > 1:
+                untracked_reasoning_overflow = True
+                return
+        index = params.get("summaryIndex")
+        if isinstance(index, bool) or not isinstance(index, int):
+            return
+        if key not in reasoning_buffers and len(reasoning_buffers) >= max_reasoning_items:
+            untracked_reasoning_overflow = True
+            return
+        previous = reasoning_summary_indexes.get(key)
+        reasoning_summary_indexes[key] = max(previous if previous is not None else index, index)
+        current = reasoning_buffers.setdefault(key, "")
+        if previous is None or index <= previous or not current:
+            return
+        if current is None:
+            return
+        if len(current) + 1 > max_reasoning_chars or reasoning_buffer_chars + 1 > max_reasoning_buffer_chars:
+            reasoning_buffer_chars -= len(current)
+            reasoning_buffers[key] = None
+            return
+        reasoning_buffers[key] = current + "\n"
+        reasoning_buffer_chars += 1
+
+    def _emit_reasoning_item(text: str) -> str:
+        nonlocal emitted_reasoning_items
+        safe_text = _bounded_reasoning_text(text)
+        # Keep independent reasoning items visibly separate; the newline also prevents adjacent
+        # redacted fragments from being reassembled into a credential by a downstream viewer.
+        if emitted_reasoning_items:
+            safe_text = "\n" + safe_text
+        emitted_reasoning_items += 1
+        agent_cb("_fire_reasoning_delta", "_fire_reasoning_delta raised", args=(safe_text,))
+        return safe_text
+
+    def _fire_reasoning_item_completed(item: dict) -> None:
+        nonlocal reasoning_buffer_chars, untracked_reasoning_overflow
+        key = _reasoning_key(item.get("id"))
+        if key not in reasoning_buffers and None in reasoning_buffers and len(reasoning_buffers) == 1:
+            key = None
+        buffered = reasoning_buffers.pop(key, "")
+        reasoning_summary_indexes.pop(key, None)
+        if isinstance(buffered, str):
+            reasoning_buffer_chars -= len(buffered)
+
+        # Completed app-server item fields are authoritative and ordered as summary then content,
+        # matching stored history. Delta text is a fallback for servers that omit those arrays.
+        #
+        # This is also why LIVE CoT can show on a turn whose stored history has none: the deltas
+        # (item/reasoning/summaryTextDelta, buffered above) exist only in the live stream and are
+        # never persisted by Codex when it ran with reasoning summaries off. History can only
+        # replay what was RECORDED, so a turn read back from the thread legitimately has no text.
+        pieces: list[str] = []
+        for field in ("summary", "content"):
+            pieces.extend(reasoning_text_parts(item.get(field)))
+        if pieces:
+            length = sum(map(len, pieces)) + len(pieces) - 1
+            # The reasoning helper displays up to 256 KiB after redaction. Keep a larger but
+            # bounded source budget so slightly larger completed items can be safely truncated.
+            text = "\n".join(pieces) if length <= max_reasoning_item_source_chars else None
+        else:
+            text = buffered if isinstance(buffered, str) and buffered else None
+
+        if text is None and (buffered is None or (pieces and length > max_reasoning_chars)):
+            text = "[Codex reasoning omitted because the item exceeded the safe display limit.]"
+        if text:
+            _emit_reasoning_item(text)
+
+    def _finish_reasoning_buffers(*, interrupted: bool = False) -> str | None:
+        nonlocal reasoning_buffer_chars, emitted_reasoning_items, untracked_reasoning_overflow
+        pending = any(value is None or bool(value) for value in reasoning_buffers.values())
+        notice = None
+        if pending or untracked_reasoning_overflow:
+            if untracked_reasoning_overflow:
+                notice = "[Codex reasoning omitted because its events could not be safely attributed.]"
+            elif any(value is None for value in reasoning_buffers.values()):
+                notice = "[Codex reasoning omitted because it exceeded the safe display limit before completion.]"
+            elif interrupted:
+                notice = "[Codex reasoning omitted because its item was interrupted before completion.]"
+            else:
+                notice = "[Codex reasoning omitted because its item did not complete at the turn boundary.]"
+            _emit_reasoning_item(notice)
+        reasoning_buffers.clear()
+        reasoning_summary_indexes.clear()
+        reasoning_buffer_chars = 0
+        untracked_reasoning_overflow = False
+        emitted_reasoning_items = 0
+        return notice
 
     def agent_cb(attr: str, fail_msg: str, *fail_args: Any, args: tuple = (), kwargs: dict | None = None) -> None:
         _call_guarded(getattr(agent, attr, None), fail_msg, *fail_args, args=args, kwargs=kwargs)
@@ -464,13 +629,23 @@ def make_codex_app_server_event_bridge(agent) -> Callable[[dict], None]:
         if not isinstance(item, dict):
             return
         item_type = item.get("type") or ""
-        if item_type in _CODEX_TOOL_ITEM_TYPES:
+        if item_type == "reasoning":
+            if completed:
+                _fire_reasoning_item_completed(item)
+            else:
+                key = _reasoning_key(item.get("id"))
+                if key in reasoning_buffers or len(reasoning_buffers) < max_reasoning_items:
+                    reasoning_buffers.setdefault(key, "")
+        elif item_type in _CODEX_TOOL_ITEM_TYPES:
             (_fire_tool_completed if completed else _fire_tool_started)(item)
         elif completed and item_type == "agentMessage":
             _fire_agent_message_completed(item)
     handlers: dict[str, Callable[[dict], None]] = {
-        method: functools.partial(_fire_delta, attr=attr) for method, attr in _CODEX_TEXT_DELTA_METHODS
+        method: (_buffer_reasoning_delta if method in _CODEX_REASONING_DELTA_METHODS else
+                 functools.partial(_fire_delta, attr=attr))
+        for method, attr in _CODEX_TEXT_DELTA_METHODS
     }
+    handlers["item/reasoning/summaryPartAdded"] = _buffer_reasoning_summary_part
     handlers["item/started"] = lambda p: _on_item(p, completed=False)
     handlers["item/completed"] = lambda p: _on_item(p, completed=True)
 
@@ -494,6 +669,20 @@ def make_codex_app_server_event_bridge(agent) -> Callable[[dict], None]:
         handler = handlers.get(method)
         if handler is not None:
             handler(params)
+        if method == "turn/completed":
+            # Partial secrets cannot be redacted safely until the full item is available. Surface
+            # a neutral notice, then discard all fragments at every completed-turn boundary.
+            turn = params.get("turn")
+            turn = turn if isinstance(turn, dict) else {}
+            _finish_reasoning_buffers(interrupted=turn.get("status") == "interrupted")
+
+    def finish(*, interrupted: bool = False) -> str | None:
+        """Close bridge state when a turn exits without a terminal app-server notification."""
+        return _finish_reasoning_buffers(interrupted=interrupted)
+
+    # The session uses this hook after its poll loop exits, including timeout, cancellation and
+    # transport failure paths that do not produce ``turn/completed``.
+    on_event.finish = finish  # type: ignore[attr-defined]
     return on_event
 
 
@@ -530,6 +719,7 @@ def _codex_developer_instructions(agent) -> str:
 # API-server restart (or the per-request agents of /api/sessions/{id}/chat) resumes the model-side thread
 # instead of starting an empty one while Hermes' own transcript continues (#100531).
 _CODEX_THREAD_ID_KEY = "codex_thread_id"
+_CODEX_LINKED_THREAD_KEY = "codex_linked_thread"
 _CODEX_THREAD_RESUME_NOTICE = "Codex thread could not be resumed; starting a new one."
 
 
@@ -544,6 +734,16 @@ def _stored_codex_thread_id(agent) -> str | None:
     return thread_id if isinstance(thread_id, str) and thread_id else None
 
 
+def _is_linked_codex_thread(agent) -> bool:
+    db, session_id = getattr(agent, "_session_db", None), getattr(agent, "session_id", None)
+    if db is None or not session_id:
+        return False
+    from agent.agent_init_session import agent_interface
+    store = agent_interface(agent)
+    getter = store.sessions.get_model_config_value if store is not None else db.get_session_model_config_value
+    return getter(session_id, _CODEX_LINKED_THREAD_KEY) is True
+
+
 def _store_codex_thread_id(agent, thread_id: str | None) -> None:
     """Merge (``None`` clears) the binding into the session row; a failed write only logs — the turn is done."""
     db, session_id = getattr(agent, "_session_db", None), getattr(agent, "session_id", None)
@@ -556,14 +756,65 @@ def _store_codex_thread_id(agent, thread_id: str | None) -> None:
                   args=(session_id, {_CODEX_THREAD_ID_KEY: thread_id}))
 
 
+def _sync_linked_codex_model(agent, thread_id: str) -> None:
+    """Publish Codex's effective model before a linked turn, or fail rather than show stale metadata."""
+    model = getattr(agent._codex_session, "effective_model", None)
+    if not isinstance(model, str) or not model.strip():
+        raise RuntimeError("Codex did not report the linked thread's effective model")
+    if not _is_linked_codex_thread(agent) or _stored_codex_thread_id(agent) != thread_id:
+        raise RuntimeError("The linked Codex thread changed while it was being resumed")
+    from agent.agent_init_session import agent_interface
+    db, session_id = agent._session_db, agent.session_id
+    store = agent_interface(agent)
+    # Two writers can own a linked row: the session store's interface handle, or a managed worker's
+    # RuntimeSessionStore, whose owner re-checks the pointer and thread id under its fenced receipt.
+    worker_update = getattr(db, "update_linked_codex_model", None) if store is None else None
+    if store is None and not callable(worker_update):
+        raise RuntimeError("The linked Codex session has no store that can record its model")
+    reader = store.sessions.get if store is not None else db.get_session
+
+    def row_model(row):
+        return row.model if store is not None else row.get("model")
+
+    row = reader(session_id)
+    if row is None:
+        raise RuntimeError("The linked Codex session is no longer available")
+    if row_model(row) != model or store is None:
+        try:
+            if store is not None:
+                store.sessions.update_model(session_id, model)
+            else:
+                worker_update(session_id, model, thread_id)
+            updated = reader(session_id)
+        except Exception as exc:
+            raise RuntimeError("Could not save the linked Codex thread's effective model") from exc
+        if updated is None or row_model(updated) != model:
+            raise RuntimeError("Could not save the linked Codex thread's effective model")
+    if not _is_linked_codex_thread(agent) or _stored_codex_thread_id(agent) != thread_id:
+        raise RuntimeError("The linked Codex thread changed while it was being resumed")
+    previous = getattr(agent, "model", None)
+    agent.model = model
+    if previous != model:
+        agent._emit_diagnostic_status(f"Linked Codex thread is using {model}.")
+
+
 def _start_codex_thread(agent) -> str:
     """``ensure_started`` with the fail-closed resume policy: a stored thread that codex cannot hand back
     (unknown id, rollout locked by a killed app-server, different thread) is dropped from the session row,
     the user is told once on the status rail, and a fresh thread starts on the same client."""
     from agent.transports.codex_app_server_session import CodexThreadResumeError
+    # The session's own linked flag keeps a resume fail-closed even if the row lost its marker meanwhile;
+    # ``is True`` so a stand-in without the property never counts as linked.
+    linked = (getattr(agent._codex_session, "preserves_thread_settings", False) is True
+              or _is_linked_codex_thread(agent))
     try:
-        return agent._codex_session.ensure_started()
+        thread_id = agent._codex_session.ensure_started()
+        if linked:
+            _sync_linked_codex_model(agent, thread_id)
+        return thread_id
     except CodexThreadResumeError as exc:
+        if linked:
+            raise
         logger.warning("%s; starting a new codex thread (session=%s)", exc.message, getattr(agent, "session_id", None))
         _store_codex_thread_id(agent, None)
         agent._emit_diagnostic_status(_CODEX_THREAD_RESUME_NOTICE)
@@ -628,6 +879,18 @@ def _codex_turn_service_tier(agent) -> str | None:
     return CODEX_TIER_WORDS.get(effective_request_overrides(agent).get("service_tier"))
 
 
+def _request_codex_gateway_approval(command: str, description: str, *, allow_permanent: bool = False) -> str:
+    """Forward one Codex approval to the session's existing interactive approval queue."""
+    from agent.redact import redact_approval_display
+    from tools.approval_prompt import request_elicitation_consent
+
+    verdict = request_elicitation_consent(
+        redact_approval_display(command), redact_approval_display(description),
+        surface="codex-approval", title="Approve this Codex action?",
+    )
+    return "once" if verdict == "accept" else "deny"
+
+
 def _ensure_codex_session(agent, messages: list[dict[str, Any]] | None = None) -> None:
     """Lazily spawn one CodexAppServerSession per AIAgent (reused across turns, closed by the _cleanup hook).
     A live session whose thread was started with a different prompt composition (TUI/Desktop ``/personality``
@@ -637,6 +900,7 @@ def _ensure_codex_session(agent, messages: list[dict[str, Any]] | None = None) -
     turn's transcript (current user row last); a thread started from scratch is seeded with the prior turns."""
     developer_instructions = _codex_developer_instructions(agent)
     model_provider = _codex_model_provider(agent)
+    linked = _is_linked_codex_thread(agent)
     if getattr(agent, "_codex_session", None) is not None:
         # Only a session whose recorded composition differs is stale; one attached without a record is kept.
         # The provider is fixed per thread (turn/start can switch the model, not the provider), so an
@@ -645,8 +909,14 @@ def _ensure_codex_session(agent, messages: list[dict[str, Any]] | None = None) -
         if recorded is None or (recorded == developer_instructions
                                 and getattr(agent, "_codex_session_model_provider", None) == model_provider):
             return
+        if linked:
+            raise RuntimeError("Linked Codex thread settings changed; close and reopen the session before continuing")
         _close_codex_session(agent)
-    resume_thread_id = None if getattr(agent, "_codex_session_prompt", None) is not None else _stored_codex_thread_id(agent)
+    resume_thread_id = _stored_codex_thread_id(agent) if linked or getattr(agent, "_codex_session_prompt", None) is None else None
+    if linked and not resume_thread_id:
+        raise RuntimeError("Linked Codex session has no original thread ID")
+    if linked and not getattr(agent, "session_cwd", None):
+        raise RuntimeError("Linked Codex session has no original working directory")
     from agent.runtime_cwd import resolve_agent_cwd
     from agent.transports.codex_app_server_session import CodexAppServerSession, _ServerRequestRouting
     from hermes_cli.codex_runtime_switch import get_configured_codex_binary
@@ -655,16 +925,18 @@ def _ensure_codex_session(agent, messages: list[dict[str, Any]] | None = None) -
     # unattended platforms can have one registered with nobody to answer it, so they get none and fail closed at once.
     approval_callback = None
     with suppress(Exception):
-        from tools.approval_context import _no_user_can_answer
+        from tools.approval_context import _is_gateway_approval_context, _no_user_can_answer
         from tools.terminal_tool import _get_approval_callback
         if not _no_user_can_answer():
             approval_callback = _get_approval_callback()
-    # Gateway/cron have no UI for codex approval requests, so exec/apply_patch fail closed by default. Only an
-    # explicit approval bypass (approvals.mode: off, /yolo, --yolo, HERMES_YOLO_MODE) hands policy to codex's sandbox.
+            if linked and approval_callback is None and _is_gateway_approval_context():
+                approval_callback = _request_codex_gateway_approval
+    # Non-linked gateway/cron requests retain the existing fail-closed default unless an explicit approval
+    # bypass is active. Linked threads always require per-request consent when Codex asks for approval.
     auto_approve_requests = False
     try:
         from tools.approval import is_approval_bypass_active
-        auto_approve_requests = is_approval_bypass_active()
+        auto_approve_requests = not linked and is_approval_bypass_active()
     except Exception:
         logger.debug("codex app-server: approval-bypass lookup failed; keeping fail-closed default", exc_info=True)
     # Bridge codex JSON-RPC notifications (item/started, item/completed, item/agentMessage/delta, ...) into
@@ -691,7 +963,8 @@ def _ensure_codex_session(agent, messages: list[dict[str, Any]] | None = None) -
         on_event=make_codex_app_server_event_bridge(agent),
         developer_instructions=developer_instructions or None,
         model=_codex_wire_model(agent, model_provider), model_provider=model_provider,
-        resume_thread_id=resume_thread_id, history_seed=history_seed,
+        resume_thread_id=resume_thread_id, history_seed=history_seed, preserve_thread_settings=linked,
+        user_input_callback=getattr(agent, "clarify_callback", None) if linked else None,
     )
 
 
@@ -709,8 +982,11 @@ def _redact_projected_assistant_row(message: dict[str, Any]) -> None:
 
 
 def _persist_projected_messages(agent, turn, messages: list[dict[str, Any]]) -> bool:
-    """Splice the projected messages into ``messages`` and flush them to the session DB; True when the
-    rows are durable in the session DB (the codex thread binding may then be published).
+    """Splice projected events into the in-memory turn and flush ordinary Codex sessions to Hermes.
+
+    A linked thread's native Codex rollout is its only transcript authority. Keep the projection in
+    memory for this turn's callbacks and bookkeeping, but do not mirror it into Hermes' ``messages`` table.
+    True means the rows are durable in the session DB (the unlinked thread binding may then be published).
 
     Bypasses conversation_loop's per-step _persist_session(); the flush dedups via _DB_PERSISTED_MARKER so
     only the new codex rows are written. The agent stays the sole persister (agent_persisted=True): a
@@ -730,6 +1006,8 @@ def _persist_projected_messages(agent, turn, messages: list[dict[str, Any]]) -> 
         _redact_projected_assistant_row(projected_message)
         append_message(messages, projected_message)
     if getattr(agent, "_session_db", None) is None:
+        return False
+    if _is_linked_codex_thread(agent):
         return False
     flush_ok = False
     try:
@@ -791,6 +1069,32 @@ def _transform_codex_reply(agent, turn, turn_id: Any) -> dict[str, Any]:
             "pre_transform_response": public_pre_transform(agent, pre_transform)}
 
 
+def _persist_linked_codex_display(agent, turn, reply: dict[str, Any]) -> None:
+    """Retain the exact redacted result and hold decision needed by later linked-history reads."""
+    from agent.agent_init_session import agent_interface
+    from persistence.core.errors import PersistenceError
+    store = agent_interface(agent)
+    session_id = getattr(agent, "session_id", None)
+    if store is None or not isinstance(session_id, str) or not session_id:
+        logger.warning("Linked Codex display persistence is unavailable; history will fail closed")
+        return
+    if not isinstance(turn.thread_id, str) or not isinstance(turn.turn_id, str):
+        logger.warning("Linked Codex turn has no stable ID; its history will remain hidden on reload")
+        return
+    try:
+        from hermes_cli.codex_linked_history import persist_linked_turn_display
+        saved = persist_linked_turn_display(
+            store, session_id=session_id, thread_id=turn.thread_id, turn_id=turn.turn_id,
+            final_text=reply.get("final_response"), held=getattr(agent, "_hold_stream", False) is True,
+            platform=getattr(agent, "platform", "") or "",
+        )
+    except (OSError, RuntimeError, ValueError, PersistenceError):
+        logger.warning("Unable to persist linked Codex display policy; history will fail closed", exc_info=True)
+        return
+    if not saved:
+        logger.warning("Linked Codex display policy did not match its stored thread; history will fail closed")
+
+
 def run_codex_app_server_turn(agent, *, user_message: str, original_user_message: Any, messages: list[dict[str, Any]],
                               effective_task_id: str, should_review_memory: bool = False,
                               turn_id: Any = None) -> dict[str, Any]:
@@ -802,41 +1106,56 @@ def run_codex_app_server_turn(agent, *, user_message: str, original_user_message
         from agent.conversation_compression_checkpoint import _checkpoint_blocked
         raise _checkpoint_blocked("codex_app_server owns the authoritative thread and compacts it "
                                   "without a truthful pre-compaction transcript boundary")
-    _ensure_codex_session(agent, messages)
     try:
+        _ensure_codex_session(agent, messages)
         _start_codex_thread(agent)
-        wire_model = _codex_wire_model(agent, getattr(agent, "_codex_session_model_provider", None))
+        linked = _is_linked_codex_thread(agent)
+        wire_model = None if linked else _codex_wire_model(agent, getattr(agent, "_codex_session_model_provider", None))
         turn = agent._codex_session.run_turn(
             user_input=user_message,
-            model=wire_model, reasoning_effort=_codex_turn_effort(agent, wire_model),
-            service_tier=_codex_turn_service_tier(agent))
+            model=wire_model, reasoning_effort=None if linked else _codex_turn_effort(agent, wire_model),
+            service_tier=None if linked else _codex_turn_service_tier(agent))
+        if linked and turn.thread_id != _stored_codex_thread_id(agent):
+            raise RuntimeError("Codex returned a different thread ID for the linked session")
     except Exception as exc:
         logger.exception("codex app-server turn failed")
         _close_codex_session(agent)
         return _turn_result(
             _consume_user_interrupt(agent), messages, api_calls=0, completed=False, error=str(exc),
-            final_response=f"Codex app-server turn failed: {exc}. Fall back to default runtime with `/codex-runtime auto`.",
+            final_response=(f"Codex app-server turn failed: {exc}." if _is_linked_codex_thread(agent) else
+                            f"Codex app-server turn failed: {exc}. Fall back to default runtime with `/codex-runtime auto`."),
         )
-    interrupt = _consume_user_interrupt(agent, turn.interrupted)
-    # Wedged client (turn deadline blown, OAuth refresh died, subprocess exited): retire it. Post-tool
-    # silence alone no longer retires — it only logs a warning (#112928).
-    if getattr(turn, "should_retire", False):
-        logger.warning("codex app-server session retired (turn error: %s)", turn.error)
-        _close_codex_session(agent)
-    reply = _transform_codex_reply(agent, turn, turn_id)
-    # The binding is published only once the transcript it belongs to is durable, and never for a
-    # retired thread (the next agent would only resume into the same wedge).
-    if _persist_projected_messages(agent, turn, messages) and not getattr(turn, "should_retire", False):
-        _store_codex_thread_id(agent, turn.thread_id)
-    usage_result = _finish_codex_turn(
-        agent, turn, messages, original_user_message=original_user_message, should_review_memory=should_review_memory,
-        final_response=reply["final_response"],
-    )
-    return _turn_result(
-        interrupt, messages, api_calls=1, completed=not turn.interrupted and turn.error is None, error=turn.error,
-        # We flushed the projected rows ourselves (agent_persisted); the gateway must skip its own DB write.
-        agent_persisted=True, codex_thread_id=turn.thread_id, codex_turn_id=turn.turn_id, **reply, **usage_result,
-    )
+    try:
+        interrupt = _consume_user_interrupt(agent, turn.interrupted)
+        # Wedged client (turn deadline blown, OAuth refresh died, subprocess exited): retire it. Post-tool
+        # silence alone no longer retires — it only logs a warning (#112928).
+        if getattr(turn, "should_retire", False):
+            logger.warning("codex app-server session retired (turn error: %s)", turn.error)
+            _close_codex_session(agent)
+        reply = _transform_codex_reply(agent, turn, turn_id)
+        if linked:
+            _persist_linked_codex_display(agent, turn, reply)
+        # The binding is published only once the transcript it belongs to is durable, and never for a
+        # retired thread (the next agent would only resume into the same wedge).
+        if _persist_projected_messages(agent, turn, messages) and not getattr(turn, "should_retire", False) and not linked:
+            _store_codex_thread_id(agent, turn.thread_id)
+        # A linked Codex thread is shared with the native CLI/Desktop. Its app-server process holds
+        # the rollout writer lease; persist the completed projection first, then release the lease
+        # before Hermes runs post-turn memory sync or other potentially slow bookkeeping.
+        if linked:
+            _close_codex_session(agent)
+        usage_result = _finish_codex_turn(
+            agent, turn, messages, original_user_message=original_user_message, should_review_memory=should_review_memory,
+            final_response=reply["final_response"],
+        )
+        return _turn_result(
+            interrupt, messages, api_calls=1, completed=not turn.interrupted and turn.error is None, error=turn.error,
+            # We flushed the projected rows ourselves (agent_persisted); the gateway must skip its own DB write.
+            agent_persisted=True, codex_thread_id=turn.thread_id, codex_turn_id=turn.turn_id, **reply, **usage_result,
+        )
+    finally:
+        if linked:
+            _close_codex_session(agent)
 
 
 def _turn_result(interrupt: tuple[bool, Any], messages: list[dict[str, Any]], *, api_calls: int, completed: bool,

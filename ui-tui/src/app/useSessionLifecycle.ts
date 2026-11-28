@@ -18,6 +18,7 @@ import { type RefObject, useCallback, useEffect, useMemo, useRef } from 'react'
 import { STARTUP_WORKSPACE_CWD } from '../config/env.js'
 import { buildSetupRequiredSections, setupRequiredTitle } from '../content/setup.js'
 import { introMsg, toTranscriptMessages } from '../domain/messages.js'
+import { toLinkedHistoryMessages } from '../domain/linkedHistoryMessages.js'
 import { ZERO } from '../domain/usage.js'
 import { type GatewayClient } from '../gatewayClient.js'
 import { t } from '../i18n/runtime.js'
@@ -29,6 +30,7 @@ import type { Msg, PanelSection } from '../types.js'
 import { noteBackgroundHandoff } from './backgroundSessionNotices.js'
 import { applyConnectionRequest, clearConnectionOperation } from './connectionOperationStore.js'
 import type { ComposerActions, GatewayRpc, StateSetter } from './interfaces.js'
+import { linkedHistoryPage, LinkedHistoryWindow, type HistoryRequest } from './linkedHistory.js'
 import { patchOverlayState } from './overlayStore.js'
 import { scheduleResumeScrollToBottom } from './sessionResumeView.js'
 import { renameCanonicalSession } from './slash/canonicalSessionCommands.js'
@@ -41,6 +43,52 @@ import { describeCredentialWarning } from './userMessages.js'
 export { refreshSessionView, scheduleResumeScrollToBottom } from './sessionResumeView.js'
 
 const usageFrom = (info: null | SessionInfo): Usage => (info?.usage ? { ...ZERO, ...info.usage } : ZERO)
+
+/**
+ * The newest-first native window for a just-attached linked session, plus the
+ * one honest line a failed read prints instead of blocking the attach.
+ *
+ * Both attach paths (`session.resume` and `session.activate`) answer the same
+ * `linked_codex` marker, and Codex being unavailable is a normal state (it may
+ * be running elsewhere, or not at all) — so neither path may turn a failed
+ * native read into a refused resume.
+ */
+const openLinkedWindow = async (
+  request: HistoryRequest,
+  sessionId: string
+): Promise<{ error: string; window: LinkedHistoryWindow }> => {
+  const window = new LinkedHistoryWindow(request, sessionId)
+
+  try {
+    await window.loadInitial(await linkedHistoryPage(request, sessionId))
+  } catch (error) {
+    return {
+      error: t('session.linked.historyUnavailable', error instanceof Error ? error.message : String(error)),
+      window
+    }
+  }
+
+  return { error: '', window }
+}
+
+/**
+ * The rows an attach publishes for one snapshot: the native window for a
+ * linked pointer (plus its one-line read failure), the snapshot's own messages
+ * otherwise, then the live in-flight tail.
+ *
+ * Typed against the two fields it reads, not a whole response shape:
+ * `session.resume` and `session.activate` both answer these but disagree on
+ * `message_count` (optional on activate), and this helper never reads it.
+ */
+const attachedTranscript = (
+  r: Pick<SessionResumeResult, 'inflight' | 'messages'>,
+  opened: null | { error: string; window: LinkedHistoryWindow },
+  isLinked: boolean
+) => [
+  ...(isLinked ? toLinkedHistoryMessages(opened?.window.rows ?? []) : toTranscriptMessages(r.messages)),
+  ...(opened?.error ? [{ role: 'system' as const, text: opened.error }] : []),
+  ...liveSessionInflightMessages(r.inflight)
+]
 
 const statusFromLiveSession = (status?: string, running = false) => {
   if (status === 'waiting') {
@@ -144,6 +192,7 @@ export interface UseSessionLifecycleOptions {
   panel: (title: string, sections: PanelSection[]) => void
   rpc: GatewayRpc
   scrollRef: RefObject<null | ScrollBoxHandle>
+  setLinkedHistoryMode?: (linked: boolean) => void
   setHistoryItems: StateSetter<Msg[]>
   setLastUserMsg: StateSetter<string>
   setSessionStartedAt: StateSetter<number>
@@ -180,6 +229,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     panel,
     rpc,
     scrollRef,
+    setLinkedHistoryMode,
     setHistoryItems,
     setLastUserMsg,
     setSessionStartedAt,
@@ -208,6 +258,11 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
 
   const cancelResumeScrollRef = useRef<null | (() => void)>(null)
   const attachmentFlight = useRef(0)
+  const linkedHistory = useRef<null | { sessionId: string; window: LinkedHistoryWindow; loading: boolean }>(null)
+  // Bumped by every linked-window reset/switch: a page that resolves afterwards is dropped instead
+  // of splicing into a different session's transcript (out-of-order responses never win).
+  const linkedHistoryGeneration = useRef(0)
+  const anchorTimers = useRef(new Set<ReturnType<typeof setTimeout>>())
   const pendingAttachments = useRef(new Set<number>())
   const canonicalSubscriptions = useRef(new Map<string, string>())
   const canonicalDetachFlights = useRef(new Map<string, Promise<void>>())
@@ -383,6 +438,13 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     cancelResumeScrollRef.current?.()
     cancelResumeScrollRef.current = null
     turnController.fullReset()
+    linkedHistoryGeneration.current++
+    for (const timer of anchorTimers.current) {
+      clearTimeout(timer)
+    }
+    anchorTimers.current.clear()
+    linkedHistory.current = null
+    setLinkedHistoryMode?.(false)
     setVoiceRecording(false)
     setVoiceProcessing(false)
     patchUiState({ bgTasks: new Set(), info: null, sid: null, storedSid: null, usage: ZERO })
@@ -393,13 +455,80 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     // Half-prune: new session has new keys, but keep a warm pool in case
     // the user resumes back to the prior session.
     evictInkCaches('half')
-  }, [composerActions, setHistoryItems, setLastUserMsg, setStickyPrompt, setVoiceProcessing, setVoiceRecording])
+  }, [composerActions, setHistoryItems, setLastUserMsg, setLinkedHistoryMode, setStickyPrompt, setVoiceProcessing, setVoiceRecording])
+
+  /** Splice one linked page into the transcript, preserving the visible rows' position.
+   *
+   *  Runs after Ink re-measures. Every async boundary re-checks the generation, the window and the
+   *  scroll handle: a page that resolved after a reset or session switch must not splice into the
+   *  new transcript, and a viewport the user took off the anchor must not be moved under them. */
+  const spliceLinkedPage = useCallback(
+    (active: NonNullable<typeof linkedHistory.current>, generation: number, scroll: ScrollBoxHandle | null, oldHeight: number) => {
+      const current = () => linkedHistoryGeneration.current === generation &&
+        linkedHistory.current === active && getUiState().sid === active.sessionId
+      if (!current()) return
+
+      const messages = toLinkedHistoryMessages(active.window.rows)
+      setHistoryItems(previous =>
+        previous[0]?.kind === 'intro'
+          ? [previous[0], ...messages, ...previous.slice(1).filter(message => !message.linkedHistory)]
+          : [...messages, ...previous.filter(message => !message.linkedHistory)]
+      )
+      // After Ink measures the spliced rows, move the viewport by exactly the height the prepend
+      // added: the currently visible content stays put instead of jumping.
+      const anchor = setTimeout(() => {
+        if (!current() || scrollRef.current !== scroll || !scroll || scroll.isSticky()) return
+        scroll.adjustScrollTop(Math.max(0, scroll.getScrollHeight() - oldHeight))
+      }, 50)
+      anchorTimers.current.add(anchor)
+    },
+    [scrollRef, setHistoryItems]
+  )
+
+  const loadLinkedHistory = useCallback(async (direction: 'older' | 'newer') => {
+    const active = linkedHistory.current
+
+    if (!active || active.loading || getUiState().sid !== active.sessionId) {
+      return
+    }
+    if (direction === 'older' && !active.window.cursor) return
+    if (direction === 'newer' && !active.window.hasNewer) {
+      if (active.window.newerLost) sys(t('session.linked.reopen'))
+      return
+    }
+
+    // One fetch at a time per window, and a response only lands on the scroll position it was
+    // requested from: `generation` is bumped by every reset/session switch, so a page that
+    // resolves after the user left must not splice into the new transcript.
+    const generation = ++linkedHistoryGeneration.current
+    active.loading = true
+    const scroll = scrollRef.current
+    const oldHeight = scroll?.getScrollHeight() ?? 0
+
+    try {
+      if (direction === 'older') await active.window.loadOlder()
+      else await active.window.loadNewer()
+      spliceLinkedPage(active, generation, scroll, oldHeight)
+    } catch (error) {
+      if (linkedHistory.current === active && linkedHistoryGeneration.current === generation) {
+        const reason = error instanceof Error ? error.message : String(error)
+        sys(t(direction === 'older' ? 'session.linked.olderUnavailable' : 'session.linked.newerUnavailable', reason))
+      }
+    } finally {
+      active.loading = false
+    }
+  }, [scrollRef, spliceLinkedPage, sys])
 
   useEffect(
     () => () => {
       attachmentFlight.current++
       cancelResumeScrollRef.current?.()
       cancelResumeScrollRef.current = null
+      linkedHistoryGeneration.current++
+      for (const timer of anchorTimers.current) {
+        clearTimeout(timer)
+      }
+      anchorTimers.current.clear()
     },
     []
   )
@@ -581,19 +710,22 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       clearConnectionOperation()
 
       const pendingDetach = canonicalDetachFlights.current.get(id)
+      // Arm the fence before the attach request; it is released by the chain's `finally`.
       const hold = gw.holdAttach?.(id) ?? null
+      const requestHistory = <T,>(method: string, params: Record<string, unknown>) => gw.request<T>(method, params)
+      const activate = () => {
+        const request = pendingDetach
+          ? pendingDetach.then(() => flight === attachmentFlight.current
+              ? gw.request<SessionActivateResponse>('session.activate', { session_id: id }) : null)
+          : gw.request<SessionActivateResponse>('session.activate', { session_id: id })
+        return request.then(raw => ({ raw }))
+      }
 
-      const request = pendingDetach
-        ? pendingDetach.then(() =>
-            flight === attachmentFlight.current
-              ? gw.request<SessionActivateResponse>('session.activate', { session_id: id })
-              : null
-          )
-        : gw.request<SessionActivateResponse>('session.activate', { session_id: id })
+      const request = activate()
 
       request
-        .then(raw => {
-          const r = asRpcResult<SessionActivateResponse>(raw)
+        .then(async prepared => {
+          const r = asRpcResult<SessionActivateResponse>(prepared?.raw)
 
           if (flight !== attachmentFlight.current) {
             discardStaleAttachment(r)
@@ -614,9 +746,25 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
           const info = r.info ? { ...r.info, stored_session_id: storedSid } : null
           const running = Boolean(r.running || r.status === 'working' || r.status === 'waiting')
 
+          // `session.activate` answers the same linked marker `session.resume` does, so neither
+          // path needs a probe before or after the attach.
+          const isLinked = (r as { linked_codex?: boolean }).linked_codex === true
+          const opened = isLinked ? await openLinkedWindow(requestHistory, id) : null
+
+          if (isLinked && flight !== attachmentFlight.current) {
+            discardStaleAttachment(r)
+            return
+          }
+
+          const linkedWindow = opened?.window ?? null
+
           resetSession()
+          setLinkedHistoryMode?.(isLinked)
+          if (linkedWindow) {
+            linkedHistory.current = { sessionId: r.session_id, window: linkedWindow, loading: false }
+          }
           setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
-          const transcript = [...toTranscriptMessages(r.messages), ...liveSessionInflightMessages(r.inflight)]
+          const transcript = attachedTranscript(r, opened, isLinked)
           setHistoryItems(info ? [introMsg(info), ...transcript] : transcript)
           writeActiveSessionFile(storedSid)
           patchUiState({
@@ -664,6 +812,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       resetSession,
       scrollRef,
       setHistoryItems,
+      setLinkedHistoryMode,
       setSessionStartedAt,
       sys
     ]
@@ -686,7 +835,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       // The legacy transport builds the resumed agent from the profile's config. On the shared gateway
       // the stored session's frozen policy carries its own route, so only a failed resume asks.
       return (gw.isCanonical ? Promise.resolve(null) : rpc<SetupStatusResponse>('setup.status', {}))
-        .then(setup => {
+        .then(async setup => {
           if (flight !== attachmentFlight.current) {
             return
           }
@@ -698,19 +847,25 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
             return
           }
 
-          const pendingDetach = canonicalDetachFlights.current.get(id)
+          // Arm the B2-19 frame fence BEFORE any await: the hold must span the whole attach, or a
+          // fanout frame that beats the reply escapes the fence and is published before the
+          // snapshot resets the transcript.
           const hold = gw.holdAttach?.(id) ?? null
+          const requestHistory = <T,>(method: string, params: Record<string, unknown>) => gw.request<T>(method, params)
+          const resumeParams = { cols: colsRef.current, session_id: id }
+
+          const pendingDetach = canonicalDetachFlights.current.get(id)
 
           const request = pendingDetach
             ? pendingDetach.then(() =>
                 flight === attachmentFlight.current
-                  ? gw.request<SessionResumeResult>('session.resume', { cols: colsRef.current, session_id: id })
+                  ? gw.request<SessionResumeResult>('session.resume', resumeParams)
                   : null
               )
-            : gw.request<SessionResumeResult>('session.resume', { cols: colsRef.current, session_id: id })
+            : gw.request<SessionResumeResult>('session.resume', resumeParams)
 
           return request
-            .then(raw => {
+            .then(async raw => {
               const r = asRpcResult<SessionResumeResult>(raw)
 
               if (flight !== attachmentFlight.current) {
@@ -730,13 +885,29 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
 
               const running = Boolean(r.running || r.status === 'working' || r.status === 'waiting')
 
+              // The canonical owner's snapshot marks a linked pointer (`CanonicalSnapshot.linked_codex`);
+              // the stdio transport never serves a linked row's transcript, so its absent marker is
+              // correct there. One read for both: a linked row's own `messages` were suppressed by
+              // the gateway, so the native window below is its transcript.
+              const isLinked = (r as { linked_codex?: boolean }).linked_codex === true
+              const opened = isLinked ? await openLinkedWindow(requestHistory, id) : null
+
+              if (isLinked && flight !== attachmentFlight.current) {
+                discardStaleAttachment(r)
+                return
+              }
+
               // A successful resume authorizes the requested source → canonical
               // successor mapping; ordinary focus changes never migrate input.
               migratePendingInputs(destination, r.session_id, info?.stored_session_id)
               resetSession()
+              setLinkedHistoryMode?.(isLinked)
+              if (opened) {
+                linkedHistory.current = { sessionId: r.session_id, window: opened.window, loading: false }
+              }
               setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
 
-              const resumed = [...toTranscriptMessages(r.messages), ...liveSessionInflightMessages(r.inflight)]
+              const resumed = attachedTranscript(r, opened, isLinked)
 
               setHistoryItems(info ? [introMsg(info), ...resumed] : resumed)
               writeActiveSessionFile(storedSid)
@@ -805,6 +976,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       rpc,
       scrollRef,
       setHistoryItems,
+      setLinkedHistoryMode,
       setSessionStartedAt,
       sys
     ]
@@ -830,6 +1002,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       closeLiveView,
       closeSession,
       guardBusySessionSwitch,
+      loadLinkedHistory,
       newLiveSession,
       newSession,
       resetSession,
@@ -843,6 +1016,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       closeLiveView,
       closeSession,
       guardBusySessionSwitch,
+      loadLinkedHistory,
       newLiveSession,
       newSession,
       resetSession,

@@ -137,12 +137,27 @@ def model_only(row):
     return isinstance(metadata, dict) and bool(metadata.get(MODEL_ONLY_DISPLAY_METADATA_KEY))
 
 
-async def _resume_transcript(authority, ref, snapshot, history, omit):
+async def _resume_transcript(authority, ref, snapshot, history, omit, *, linked_codex=False,
+                             linked_target=None, linked_thread=None):
     """A resume reply's transcript fields. *omit* (``omit_messages``): no rows and ``messages_omitted``, the
     stored count and the todo plan of the physical target the attach resolved, as the stdio resume answers
     it; the display-row lineage read is skipped (the todo lookup still walks the lineage's todo rows)."""
     # Its home module, not tui_gateway.server: importing the stdio sidecar points sys.stdout at stderr.
     from tui_gateway.tool_progress import _todo_state_from_history
+    if linked_codex:
+        # The native source has no cheap count or todo lookup, and a pointer row's local mirror can
+        # be empty or stale, so it is never a count any client may render. ``None`` says "unknown";
+        # the integer 0 would read as "an empty conversation" beside the linked marker.
+        store = authority_persistence(authority)
+        row = store.sessions.get(linked_target or snapshot.transcript_target or ref.session_id)
+        if row is None:
+            raise AuthorityRefusal('not_found')
+        from gateway.session_linked_codex import linked_history_identity
+        identity = linked_history_identity(authority.profile_id, ref.session_id,
+                                           linked_target or snapshot.transcript_target or ref.session_id,
+                                           linked_thread)
+        return {'messages': [], 'messages_omitted': True, 'message_count': None,
+                'todo_state': None, 'linked_codex': True, 'linked_history_identity': identity}
     if not omit:
         # The newest todo result in the transcript, the snapshot the session's agent hydrates
         # from and its ``todo.updated`` frames carried: a viewer attaching shows the plan now.
@@ -731,9 +746,14 @@ class AuthorityConnection:
             # whose earlier open found it busy (Desktop's warm `session.activate` resumes on one connection).
             from gateway.session_policy_refresh import refresh_resumed_policy
             await refresh_resumed_policy(self.authority, ref, attached=ref.session_id in self.subscriptions)
-        # ``omit_messages``: the client pages the transcript itself (Desktop over REST), so the attach reads no
-        # compression lineage (a whole-lineage read here made every open of a long chat cost seconds).
+        # Linked rows always use their native transcript pager; ordinary attaches honor the caller's omission.
         omit = params.get('omit_messages') is True
+        from gateway.session_local_recovery import transcript_target
+        from gateway.session_linked_codex import linked_thread_id
+        linked_store = authority_persistence(self.authority)
+        linked_target = transcript_target(self.authority, ref)
+        linked_thread = linked_thread_id(linked_store, linked_target)
+        linked_codex = linked_thread is not None
         replay_from = replay_from if ref.session_id == requested else None
         # A client opening the session (not a poll on its attachment, not a reconnect): the open is queued
         # before the attach yields, so no turn another viewer submits meanwhile runs ahead of it.
@@ -742,7 +762,8 @@ class AuthorityConnection:
             from gateway.session_open import open_local
             opening = open_local(self.authority, ref)
         try:
-            snapshot = await self.authority.attach(self.actor, ref, history=not omit, replay_from=replay_from)
+            snapshot = await self.authority.attach(
+                self.actor, ref, history=not (omit or linked_codex), replay_from=replay_from)
             self.subscriptions[ref.session_id] = snapshot.subscription_id
             self.handed_back.discard(ref.session_id)
             self._spawn_notice(ref)
@@ -763,12 +784,26 @@ class AuthorityConnection:
         from gateway.session_connections import pending_connection
         from gateway.session_server_requests import open_requests
         history, display = list(snapshot.history), {}
-        if params.get('display_projection'):
+        # A history-bearing attach intentionally leaves ``transcript_target`` unset; resolve the
+        # physical target once here so a linked row never falls back to its empty local mirror.
+        target = snapshot.transcript_target
+        if target is None:
+            target = linked_target
+        if linked_codex:
+            current_thread = linked_thread_id(linked_store, target)
+            if target != linked_target or current_thread != linked_thread:
+                raise AuthorityRefusal('storage_unavailable', field='session_id',
+                                       detail='linked Codex thread changed during attach')
+            # The local mirror is not authoritative and must not leak into either projection.
+            history = []
+        elif params.get('display_projection'):
             # A micro-compaction merge stays in ``messages`` (an undo target); its originals are what shows.
             display['display_messages'] = display_projection(
                 [row for row in history if not model_only(row)], self.authority.profile_id)
         return {'session_id': ref.session_id, 'stored_session_id': ref.session_id,
-                **await _resume_transcript(self.authority, ref, snapshot, history, omit), **display,
+                **await _resume_transcript(self.authority, ref, snapshot, history, omit,
+                                           linked_codex=linked_codex, linked_target=target,
+                                           linked_thread=linked_thread), **display,
                 'running': snapshot.handle.execution_state == 'running',
                 'authority_epoch': snapshot.handle.authority_epoch,
                 'replay_epoch': snapshot.replay_epoch, 'last_sequence': snapshot.last_sequence,

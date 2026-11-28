@@ -43,6 +43,7 @@ def _execute(frame, monkeypatch, base=object, built=None, result=None, sent=None
 
     class Store:
         def __init__(self, *args): pass
+        def get_session(self, sid): return {'id': sid, 'model_config': '{}'}
         def get_messages_as_conversation(self, sid): return []
         def flush_token_counts(self): pass
         def finish(self): pass

@@ -30,9 +30,9 @@ import { zhUpdateChannel } from './zh_update_channel'
 
 export const zhOverrides = {
   gatewayGroupOpen: {
-    opening: "正在打开群聊…",
-    lookupFailed: "无法在网关上查找此群组，请重试。",
-    missing: "此群聊已不存在。"
+    opening: '正在打开群聊…',
+    lookupFailed: '无法在网关上查找此群组，请重试。',
+    missing: '此群聊已不存在。'
   },
   catalog: zhCatalog,
   externalOpenFailed: {
@@ -46,6 +46,15 @@ export const zhOverrides = {
   intro: introZh,
   connectors: zhConnectorCard,
   sessionImport: {
+    codexThreads: '打开 Codex 对话',
+    codexThreadsHelp: '在 Hermes 中继续同一个 Codex 对话。',
+    codexHandoff: '在此继续之前，请先在其他客户端中关闭此对话。',
+    codexCallbacksWarning:
+      '此关联会话无法恢复原 Codex 客户端提供的客户端定义工具，包括 Hermes 委派回调。对这些工具的调用会被拒绝或安全失败。',
+    codexLink: '打开关联对话',
+    codexLinking: '正在打开对话…',
+    codexLinkError: '无法打开此 Codex 对话。',
+    codexNoThreads: '未找到 Codex 对话',
     title: '从其他应用继续',
     subtitle: '将对话导入 Hermes，接着上次的进度继续。',
     action: '导入会话',
@@ -2541,7 +2550,8 @@ export const zhOverrides = {
     relayLink: {
       title: 'Team Gateway',
       badge: '无需机器人令牌',
-      intro: (platform: string) => `${platform} 通过共享的 Hermes 机器人连接到此智能体。关联你的 ${platform} 账号，然后给机器人发消息即可与智能体对话。`,
+      intro: (platform: string) =>
+        `${platform} 通过共享的 Hermes 机器人连接到此智能体。关联你的 ${platform} 账号，然后给机器人发消息即可与智能体对话。`,
       link: (platform: string) => `关联 ${platform}`,
       linkAnother: (platform: string) => `关联另一个 ${platform} 账号`,
       linkedAccounts: '已关联账号',
@@ -2559,10 +2569,12 @@ export const zhOverrides = {
       refused: (platform: string) => `${platform} 拒绝了关联。请获取新代码后重试。`,
       qrAlt: (platform: string) => `共享 ${platform} 机器人的二维码`,
       managed: '由 Team Gateway 管理',
-      managedNote: (platform: string) => `此实例的消息由 Team Gateway 承载，因此网关每次启动都会关闭 ${platform} 的直连。若要与中继同时使用，请在网关环境中设置 GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true（直连会使实例无法缩容到零，并可能重复投递消息）。`,
+      managedNote: (platform: string) =>
+        `此实例的消息由 Team Gateway 承载，因此网关每次启动都会关闭 ${platform} 的直连。若要与中继同时使用，请在网关环境中设置 GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true（直连会使实例无法缩容到零，并可能重复投递消息）。`,
       managedIntro: '此代理的账号在 Nous Portal 中关联。',
       openPortal: '在 Nous Portal 中关联账号',
-      noNewAccount: (platform: string) => `该代码已失效，且没有出现新账号。如果你的 ${platform} 账号不在列表中，请获取新代码后重试。`
+      noNewAccount: (platform: string) =>
+        `该代码已失效，且没有出现新账号。如果你的 ${platform} 账号不在列表中，请获取新代码后重试。`
     },
     telegramQr: {
       title: '选择连接 Telegram 机器人的方式',
@@ -4184,12 +4196,9 @@ export const zhOverrides = {
     terminalCloseAll: '关闭全部',
     terminalNewOn: '新建终端于…',
     terminalGatewayRemoved: '已移除的网关',
-    terminalGatewayRemovedBody:
-      '此终端所在的网关已被移除，无法重新打开。请关闭此标签页。',
-    terminalGatewayNoShellBody:
-      '此网关不提供 Shell 访问，此终端无法重新打开。请关闭此标签页。',
-    terminalDisconnectedBody:
-      '终端已断开。按 Enter 启动新的 shell；滚动记录会保留。',
+    terminalGatewayRemovedBody: '此终端所在的网关已被移除，无法重新打开。请关闭此标签页。',
+    terminalGatewayNoShellBody: '此网关不提供 Shell 访问，此终端无法重新打开。请关闭此标签页。',
+    terminalDisconnectedBody: '终端已断开。按 Enter 启动新的 shell；滚动记录会保留。',
     addToChat: '添加到对话'
   },
 
@@ -4347,6 +4356,9 @@ export const zhOverrides = {
     thread: {
       loadingSession: '正在加载会话',
       showEarlier: '显示更早的消息',
+      historyChanged: "对话历史已更改。请重新加载以查看更早的消息。",
+      historyLoadFailed: "无法加载更早的消息，请重试。",
+      reloadHistory: "重新加载历史",
       loadingResponse: 'Hermes 正在加载回复',
       loadingLocalModel: model => `正在将 ${model} 载入内存`,
       processingPrompt: '正在处理提示词',
@@ -4557,6 +4569,33 @@ export const zhOverrides = {
       outputAlt: '工具输出',
       rawResponse: '原始响应',
       copyActivity: '复制活动',
+      codexSubagentActivity: {
+        openTrace: '打开子代理轨迹',
+        traceTitle: 'Codex 子代理轨迹',
+        traceDescription: '以只读方式查看此子代理的消息、推理摘要和工具活动。',
+        traceUnavailable: '子代理轨迹不可用',
+        loading: '正在加载轨迹…',
+        loadFailed: '无法加载此轨迹。',
+        retry: '重试',
+        close: '返回对话',
+        backToParent: '返回父级轨迹',
+        empty: '没有返回轨迹条目。',
+        waiting: '正在等待子代理轨迹…',
+        updating: '正在更新实时轨迹…',
+        assistantRole: 'Codex',
+        userRole: '请求',
+        systemRole: '系统',
+        reasoningSummary: '推理摘要',
+        arguments: '参数',
+        result: '结果',
+        unknownKind: '活动',
+        kinds: {
+          started: '已启动',
+          interacted: '运行中',
+          interrupted: '已中断',
+          completed: '已完成'
+        }
+      },
       recoveredOne: '在 1 个失败步骤后已恢复',
       recoveredMany: count => `在 ${count} 个失败步骤后已恢复`,
       failedOne: '1 个步骤失败',

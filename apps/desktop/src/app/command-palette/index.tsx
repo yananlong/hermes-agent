@@ -13,7 +13,12 @@ import {
   HUD_SURFACE,
   HUD_TEXT
 } from '@/app/floating-hud'
-import { SESSION_IMPORT_ROUTE } from '@/app/routes'
+import {
+  SESSION_IMPORT_CLAUDE_ROUTE,
+  SESSION_IMPORT_CODEX_ROUTE,
+  SESSION_IMPORT_MISTRAL_ROUTE,
+  SESSION_IMPORT_ROUTE
+} from '@/app/routes'
 import { leaveIntro } from '@/components/onboarding/first-run/intro'
 import { codiconIcon } from '@/components/ui/codicon'
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
@@ -929,6 +934,27 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
             keywords: ['import', 'claude', 'codex', 'conversation'],
             label: t.sessionImport.action,
             run: go(SESSION_IMPORT_ROUTE)
+          },
+          {
+            icon: MessageCircle,
+            id: 'open-codex-thread',
+            keywords: ['codex', 'thread', 'conversation', 'link', 'native'],
+            label: t.sessionImport.codexThreads,
+            run: go(SESSION_IMPORT_CODEX_ROUTE)
+          },
+          {
+            icon: MessageCircle,
+            id: 'open-claude-session',
+            keywords: ['claude', 'session', 'conversation', 'link', 'native'],
+            label: t.sessionImport.claudeThreads,
+            run: go(SESSION_IMPORT_CLAUDE_ROUTE)
+          },
+          {
+            icon: MessageCircle,
+            id: 'open-mistral-session',
+            keywords: ['mistral', 'vibe', 'session', 'conversation', 'link', 'native'],
+            label: t.sessionImport.mistralThreads,
+            run: go(SESSION_IMPORT_MISTRAL_ROUTE)
           },
           {
             icon: Activity,

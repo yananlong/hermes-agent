@@ -189,6 +189,10 @@ class WorkerSessionVerbs(Protocol):
         """``session.sidecars``: merge ``patch`` (keys within :data:`persistence.workers.vocabulary.SIDECAR_KEYS`, ``None`` deletes) into ``model_config``."""
         ...
 
+    def set_linked_codex_model(self, *, epoch: AuthorityEpoch, execution_id: WorkerExecutionId, session_id: SessionId, generation: ExecutionGeneration, sequence: int, model: str, thread_id: str) -> bool:
+        """``session.linked_codex_model``: validate the assigned pointer and its native thread ID, then update its model. A mismatch or unreadable pointer returns False without changing the row; malformed input is ``invalid_params``."""
+        ...
+
     def set_session_tool_pin(self, *, epoch: AuthorityEpoch, execution_id: WorkerExecutionId, session_id: SessionId, generation: ExecutionGeneration, sequence: int, tool_pin: ToolPin | None) -> None:
         """``session.tools`` with ``{"tool_names"}``: ``None`` clears; a list of 1..256-character names, or a mapping with ``version`` (str) and ``tools`` (list) and an optional ``delegation_backend`` (str of at most 64), encoding to at most 4 MiB."""
         ...

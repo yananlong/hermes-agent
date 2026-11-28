@@ -331,6 +331,33 @@ export interface Translations extends NoticeTranslations {
     >
   }
   sessionImport: {
+    codexThreads: string
+    codexThreadsHelp: string
+    codexHandoff: string
+    codexCallbacksWarning: string
+    codexLink: string
+    codexLinking: string
+    codexLinkError: string
+    codexNoThreads: string
+    claudeThreads: string
+    claudeThreadsHelp: string
+    mistralThreads: string
+    mistralThreadsHelp: string
+    linkedLink: string
+    linkedLinking: string
+    linkedLinkError: string
+    linkedNoThreads: string
+    linkedHandoff: string
+    linkedReadonlyWarning: string
+    hostCapabilityChecking: string
+    hostCapabilityUnknown: string
+    hostCapabilityError: string
+    hostCapabilityAvailable: (label: string) => string
+    hostCapabilityStore: (label: string, host: string) => string
+    hostCapabilityCli: (label: string, host: string) => string
+    hostCapabilityBuild: (label: string) => string
+    hostCapabilityReadOnly: (label: string) => string
+    hostCapabilityWritable: (label: string) => string
     title: string
     subtitle: string
     action: string
@@ -3964,6 +3991,9 @@ export interface Translations extends NoticeTranslations {
     thread: {
       loadingSession: string
       showEarlier: string
+      historyChanged: string
+      historyLoadFailed: string
+      reloadHistory: string
       loadingResponse: string
       loadingLocalModel: (model: string) => string
       processingPrompt: string
@@ -4151,6 +4181,33 @@ export interface Translations extends NoticeTranslations {
       outputAlt: string
       rawResponse: string
       copyActivity: string
+      codexSubagentActivity: {
+        openTrace: string
+        traceTitle: string
+        traceDescription: string
+        traceUnavailable: string
+        loading: string
+        loadFailed: string
+        retry: string
+        close: string
+        backToParent: string
+        empty: string
+        waiting: string
+        updating: string
+        assistantRole: string
+        userRole: string
+        systemRole: string
+        reasoningSummary: string
+        arguments: string
+        result: string
+        unknownKind: string
+        kinds: {
+          started: string
+          interacted: string
+          interrupted: string
+          completed: string
+        }
+      }
       recoveredOne: string
       recoveredMany: (count: number) => string
       failedOne: string

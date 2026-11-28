@@ -187,6 +187,12 @@ def _resolution_failure_reply(exc: Exception, platform: Platform) -> tuple[str, 
         # the shared refusal copy names /new, never a resend.
         from agent.turn_failure_copy import launch_credentials_copy
         return launch_credentials_copy(exc), 'launch_credentials_unavailable', False
+    if isinstance(exc, AuthorityRefusal) and exc.reason == 'unsupported_operation' and exc.field == 'operation':
+        return f"⚠️ {exc.detail}", exc.reason, False
+    if isinstance(exc, AuthorityRefusal) and exc.reason == 'storage_unavailable' and exc.field == 'model_config':
+        # The row's own settings are damaged (session_linked_codex.linked_codex_runtime): credentials
+        # were never in play, and the detail names the way out.
+        return f"⚠️ {exc.detail}", exc.reason, False
     if isinstance(exc, AuthorityRefusal):
         # Session-policy refusals carry a stable reason code (e.g. a CLI launch key revoked by
         # daemon restart): keep it in the reply so clients can act on it, and do not suggest

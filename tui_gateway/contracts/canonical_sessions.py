@@ -9,7 +9,7 @@ from pydantic import RootModel
 from .base import JsonValue, Params, Result
 from .common import CanonicalClientIdentity, ProfileParams, TranscriptMessage
 from .connectors_operation import ConnectionRequestPayload
-from .sessions import OpenRequestEntry, TodoState
+from .sessions import OpenRequestEntry, SessionCompressParams, SessionCompressResult, TodoState
 from .canonical import (AdmissionStatus, CanonicalClientLabel, CanonicalSessionRef, PromptResponseResult,
                         SessionInventoryFields)
 from .registry import canonical_method
@@ -145,11 +145,19 @@ class CanonicalSnapshot(Result):
     session_id: str
     stored_session_id: str
     messages: list[TranscriptMessage]
-    # True when the resume asked ``omit_messages``: ``messages`` is empty and the client pages the transcript.
+    # True when the owner directs the client to page the authoritative linked Codex transcript.
+    linked_codex: bool = False
+    # Opaque binding of the linked native thread this snapshot answered for (profile, session, owner
+    # row, thread): a client holds it across its pages and refuses a page whose binding differs,
+    # so a re-link mid-read can never splice two threads. Absent for an ordinary session.
+    linked_history_identity: str | None = None
+    # True when the resume asked ``omit_messages`` or ``linked_codex``: the client pages the transcript.
     messages_omitted: bool | None = None
     # Present only when ``display_projection`` was asked: the rows as main's TUI rendered them.
     display_messages: list[TranscriptMessage] | None = None
-    message_count: int
+    # A linked native transcript has no cheap count when its history is omitted: ``None``, never a
+    # pointer row's stale local mirror count.
+    message_count: int | None
     running: bool
     authority_epoch: int
     replay_epoch: str
@@ -365,6 +373,9 @@ for _name, _params, _result in (
     ('approval.respond', CanonicalApprovalParams, PromptResponseResult),
 ):
     canonical_method(_name, params=_params, result=_result)
+
+canonical_method('session.compress', params=SessionCompressParams, result=SessionCompressResult,
+                 doc="Manual /compress of an idle session through the owner mutation fence; linked Codex threads use native compaction.")
 
 canonical_method('prompt.steer_queued', params=CanonicalSteerQueuedParams, result=AdmissionStatus,
                  doc="Hand a still-queued admission's text to the running turn's agent as a steer. "

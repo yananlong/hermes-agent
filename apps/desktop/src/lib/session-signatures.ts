@@ -35,7 +35,15 @@ export function sameCronSignature(a: SessionInfo[], b: SessionInfo[]): boolean {
       // frozen copy forever. An idle conversation never moves any of the
       // fields above again, which is exactly when a pin gets toggled (#76919).
       session.pinned === other.pinned &&
-      session.archived === other.archived
+      session.archived === other.archived &&
+      // The linked-foreign capability (Codex / Claude / Mistral pointer rows)
+      // controls which workspace mutation path the statusbar offers and how
+      // the chat treats the row. A row can be unchanged in every visible
+      // field while this capability arrives on a later refresh, so it must
+      // participate in the list signature.
+      session.codex_linked === other.codex_linked &&
+      session.claude_linked === other.claude_linked &&
+      session.mistral_linked === other.mistral_linked
     )
   })
 }

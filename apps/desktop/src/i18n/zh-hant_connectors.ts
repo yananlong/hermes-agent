@@ -2,6 +2,15 @@ import type { TranslationOverrides } from './define-locale'
 
 export const zhHantConnectors = {
   sessionImport: {
+    codexThreads: '開啟 Codex 對話',
+    codexThreadsHelp: '在 Hermes 中繼續同一個 Codex 對話。',
+    codexHandoff: '在此繼續之前，請先在其他用戶端中關閉此對話。',
+    codexCallbacksWarning:
+      '此連結工作階段無法還原原始 Codex 用戶端提供的用戶端定義工具，包括 Hermes 委派回呼。呼叫這些工具時會遭拒或安全失敗。',
+    codexLink: '開啟連結的對話',
+    codexLinking: '正在開啟對話…',
+    codexLinkError: '無法開啟此 Codex 對話。',
+    codexNoThreads: '找不到 Codex 對話',
     title: '從其他應用程式繼續',
     subtitle: '將對話匯入 Hermes，接著上次的進度繼續。',
     action: '匯入工作階段',

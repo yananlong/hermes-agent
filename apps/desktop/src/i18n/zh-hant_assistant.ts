@@ -35,6 +35,9 @@ export const zhHantAssistant = {
     thread: {
       loadingSession: '正在載入工作階段',
       showEarlier: '顯示較早的訊息',
+      historyChanged: "對話記錄已變更。請重新載入以查看較早的訊息。",
+      historyLoadFailed: "無法載入較早的訊息，請重試。",
+      reloadHistory: "重新載入記錄",
       loadingResponse: 'Hermes 正在載入回覆',
       resumeWhenBackgroundDone: count =>
         count === 1 ? '背景工作完成後將自動繼續' : `${count} 個背景工作完成後將自動繼續`,
@@ -369,6 +372,33 @@ export const zhHantAssistant = {
       outputAlt: '工具輸出',
       rawResponse: '原始回應',
       copyActivity: '複製活動',
+      codexSubagentActivity: {
+        openTrace: '開啟子代理追蹤記錄',
+        traceTitle: 'Codex 子代理追蹤記錄',
+        traceDescription: '以唯讀方式查看此子代理的訊息、推理摘要與工具活動。',
+        traceUnavailable: '無法使用子代理追蹤記錄',
+        loading: '正在載入追蹤記錄…',
+        loadFailed: '無法載入此追蹤記錄。',
+        retry: '重試',
+        close: '返回對話',
+        backToParent: '返回上層追蹤記錄',
+        empty: '沒有追蹤記錄項目。',
+        waiting: '正在等待子代理追蹤記錄…',
+        updating: '正在更新即時追蹤記錄…',
+        assistantRole: 'Codex',
+        userRole: '請求',
+        systemRole: '系統',
+        reasoningSummary: '推理摘要',
+        arguments: '引數',
+        result: '結果',
+        unknownKind: '活動',
+        kinds: {
+          started: '已啟動',
+          interacted: '執行中',
+          interrupted: '已中斷',
+          completed: '已完成'
+        }
+      },
       recoveredOne: '在 1 個失敗步驟後已復原',
       recoveredMany: count => `在 ${count} 個失敗步驟後已復原`,
       failedOne: '1 個步驟失敗',

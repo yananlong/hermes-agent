@@ -119,14 +119,15 @@ export function primaryResumeParams(
   storedSessionId: string,
   watchWindow: boolean,
   authoritativeSnapshot: boolean | undefined,
-  sessionProfile: string | undefined
+  sessionProfile: string | undefined,
+  linkedCodex = false
 ): Record<string, unknown> {
   return {
     session_id: storedSessionId,
     cols: 96,
     source: 'desktop',
-    defer_history: authoritativeSnapshot ? false : !watchWindow,
-    ...(authoritativeSnapshot ? { omit_messages: false } : watchWindow ? { lazy: true } : { omit_messages: true }),
+    defer_history: linkedCodex || (authoritativeSnapshot ? false : !watchWindow),
+    ...(linkedCodex ? { omit_messages: true } : authoritativeSnapshot ? { omit_messages: false } : watchWindow ? { lazy: true } : { omit_messages: true }),
     ...(sessionProfile ? { profile: sessionProfile } : {})
   }
 }

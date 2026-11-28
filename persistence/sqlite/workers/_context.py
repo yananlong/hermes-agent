@@ -5,8 +5,10 @@ the ``session.context`` operation it served has no producer and no handler.
 """
 
 import json
+from uuid import UUID
 
 from persistence.core.errors import AuthorityRefusal
+from persistence.gateway.routing import LINKED_POINTER_FLAGS
 from persistence.workers.vocabulary import SIDECAR_KEYS
 
 
@@ -42,6 +44,37 @@ def worker_sidecars(holder, conn, session_id, payload):
     merged = _merge_model_config_json(holder, conn, session_id, payload['patch'], on_missing='raise')
     conn.execute('UPDATE sessions SET model_config=? WHERE id=?', (merged, session_id))
     return {'value': None}
+
+
+def worker_linked_codex_model(holder, conn, session_id, payload):
+    """Synchronize only the assigned Codex pointer whose identity the worker resumed."""
+    if (set(payload) != {'model', 'thread_id'} or not isinstance(payload['model'], str)
+            or not payload['model'].strip() or len(payload['model']) > 4096
+            or not isinstance(payload['thread_id'], str)):
+        raise AuthorityRefusal('invalid_params')
+    try:
+        if str(UUID(payload['thread_id'])) != payload['thread_id']:
+            raise ValueError('noncanonical thread id')
+    except ValueError:
+        raise AuthorityRefusal('invalid_params') from None
+    row = conn.execute('SELECT model, model_config FROM sessions WHERE id=?', (session_id,)).fetchone()
+    try:
+        config = json.loads(row['model_config']) if row and row['model_config'] else {}
+    except (ValueError, TypeError):
+        return {'value': False}
+    if (not isinstance(config, dict) or config.get('codex_linked_thread') is not True
+            or config.get('codex_thread_id') != payload['thread_id']
+            or any(flag in config and type(config[flag]) is not bool for flag in LINKED_POINTER_FLAGS)
+            or any(config.get(flag) is True for flag in LINKED_POINTER_FLAGS if flag != 'codex_linked_thread')):
+        return {'value': False}
+    if row['model'] == payload['model']:
+        return {'value': True}
+    from ..conversation._store.sessions import _merge_model_config_json
+    merged = _merge_model_config_json(holder, conn, session_id,
+                                      {'model': payload['model'], 'browser_model_lock': None}, on_missing='raise')
+    conn.execute('UPDATE sessions SET model=?, model_config=? WHERE id=?',
+                 (payload['model'], merged, session_id))
+    return {'value': True}
 
 
 def worker_tool_names(holder, conn, session_id, payload):

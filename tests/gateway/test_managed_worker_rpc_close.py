@@ -29,6 +29,7 @@ def _execute(tmp_path, monkeypatch, events, *, start_error=None, close_error=Non
 
     class Store:
         def __init__(self, *args): pass
+        def get_session(self, sid): return {'id': sid, 'model_config': '{}'}
         def get_messages_as_conversation(self, sid): return []
         def flush_token_counts(self): pass
         def finish(self): events.append('store.finish')

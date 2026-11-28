@@ -383,6 +383,7 @@ class CLISessionMixin:
             return query_session_listing(
                 self._session_db, source="cli", current_session_id=self.session_id,
                 include_all_sources=False, include_unnamed=True, limit=limit,
+                include_linked_pointers=True,
                 exclude_sources=list(INTERNAL_LISTING_SOURCES))
         except Exception:
             return []
@@ -423,6 +424,25 @@ class CLISessionMixin:
     def show_history(self):
         """Display conversation history."""
         from cli import _cli_visible_print
+        from hermes_cli.gateway_client import GatewayClientError
+        # ``getattr`` for the id: a caller can reach show_history before a session exists (a
+        # mocked CLI in tests, a panel rendered pre-resume), and an AttributeError here would
+        # replace the transcript with a traceback. Reading the loaded-for marker the same way
+        # keeps the pair consistent — both are absent or both are set.
+        session_id = (getattr(self, "_resume_read_id", None)
+                      if getattr(self, "_resume_history_loaded_for", None) == getattr(self, "session_id", None)
+                      else None) or getattr(self, "session_id", None)
+        try:
+            session_db = getattr(self, "_session_db", None)
+            linked_history = getattr(session_db, "linked_history", None) if session_db else None
+            history = linked_history(session_id, refresh=True) if callable(linked_history) else None
+        except GatewayClientError as exc:
+            _cli_visible_print(f"  Linked Codex history is unavailable: {exc}")
+            return
+        if history is not None:
+            from hermes_cli.linked_history.viewer import show_linked_history
+            show_linked_history(history)
+            return
         if not self.conversation_history:
             if not self._show_recent_sessions(reason="history"):
                 _cli_visible_print(t("cli.session.history_empty"))
@@ -691,6 +711,29 @@ class CLISessionMixin:
         self._handle_resume_command(f"/resume {index}")
         return True
 
+    def _consume_pending_link_selection(self, text: str) -> bool:
+        """Resolve a bare numeric reply following a bare ``/link-thread`` listing.
+
+        One-shot like :meth:`_consume_pending_resume_selection`: the pending state is cleared on
+        the first input regardless of outcome, so a stray later number is never hijacked into a
+        link. Returns True if the input was consumed (caller must not treat it as chat).
+        """
+        from cli import _cprint
+        pending = getattr(self, "_pending_link_threads", None)
+        if not pending:
+            return False
+        self._pending_link_threads = None
+        if not isinstance(text, str) or not text.strip().isdigit():
+            return False
+        index = int(text.strip())
+        if not 1 <= index <= len(pending):
+            _cprint("  " + t("cli.commands.link_thread.pick_out_of_range", index=index))
+            _cprint("  " + t("cli.commands.link_thread.pick_hint"))
+            return True
+        row = pending[index - 1]
+        self._handle_link_thread_command(f"/link-thread {row['agent']} {row['id']}")
+        return True
+
     def save_conversation(self, cmd: str = "/save"):
         """Handle ``/save [json|md|html] [filename] [redact]``.
 
@@ -732,10 +775,13 @@ class CLISessionMixin:
         _db = getattr(self, "_session_db", None)
         _sid = getattr(self, "session_id", None)
         if _db and _sid:
-            from persistence.core.errors import ExportTooLarge
+            from persistence.core.errors import ExportTooLarge, LinkedCodexExportUnavailable
             try:
                 session_data = load_save_snapshot(_db, _sid, fmt, persistence=getattr(_db, "persistence", None))
             except ExportTooLarge as e:
+                print(f"(._.) {e}")
+                return
+            except LinkedCodexExportUnavailable as e:
                 print(f"(._.) {e}")
                 return
             except Exception:

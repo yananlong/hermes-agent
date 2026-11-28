@@ -32,6 +32,8 @@ def _make_stub_agent() -> SimpleNamespace:
     """Minimal stand-in for AIAgent that records every callback fire."""
     return SimpleNamespace(
         tool_progress_callback=MagicMock(name="tool_progress_callback"),
+        tool_start_callback=MagicMock(name="tool_start_callback"),
+        tool_complete_callback=MagicMock(name="tool_complete_callback"),
         _fire_stream_delta=MagicMock(name="_fire_stream_delta"),
         _fire_reasoning_delta=MagicMock(name="_fire_reasoning_delta"),
         _emit_interim_assistant_message=MagicMock(
@@ -53,6 +55,11 @@ class TestCodexItemToToolName:
         assert _codex_item_to_tool_name(
             {"type": "dynamicToolCall", "tool": "web_search"}
         ) == "web_search"
+
+    def test_collaboration_tool_name_includes_operation(self):
+        assert _codex_item_to_tool_name(
+            {"type": "collabAgentToolCall", "tool": "sendMessage"}
+        ) == "collab.sendMessage"
 
     def test_hermes_tools_mcp_server_emits_bare_tool_name(self):
         """The hermes-tools MCP server wraps Hermes' own tools for codex;
@@ -89,6 +96,14 @@ class TestCodexItemToArgs:
             "type": "dynamicToolCall", "arguments": ["a", "b"],
         })
         assert args == {"arguments": ["a", "b"]}
+
+    def test_collaboration_args_show_prompt_without_receiver_ids(self):
+        args = _codex_item_to_args({
+            "type": "collabAgentToolCall", "tool": "spawnAgent", "prompt": "Compute 7 + 5.",
+            "receiverThreadIds": ["private-receiver"],
+        })
+        assert args == {"prompt": "Compute 7 + 5."}
+        assert "private-receiver" not in str(args)
 
 class TestCodexItemToPreview:
     def test_command_preview_truncated(self):
@@ -128,6 +143,60 @@ class TestCodexItemCompletionPayload:
         assert "[error]" in result
         assert is_error is True
 
+    def test_collaboration_completion_shows_available_agent_message(self):
+        result, is_error = _codex_item_completion_payload({
+            "type": "collabAgentToolCall", "id": "collab-1", "tool": "spawnAgent",
+            "status": "completed", "prompt": "Compute 7 + 5.",
+            "senderThreadId": "private-sender", "receiverThreadIds": ["private-receiver"],
+            "agentsStates": {"private-receiver": {"status": "completed", "message": "12"}},
+        })
+        assert '"message": "12"' in result
+        assert "private-receiver" not in result and "private-sender" not in result
+        assert is_error is False
+
+    def test_file_change_completion_matches_redacted_stored_diff_projection(self):
+        from agent.transports.codex_event_projector import CodexEventProjector
+
+        secret = "ghp_zyxwvutsrqponm9876"
+        item = {
+            "type": "fileChange", "id": "file-1", "status": "applied",
+            "changes": [{"kind": {"type": "update"}, "path": "/tmp/example.py",
+                         "diff": f"-old\n+new\n+# {secret}"}],
+        }
+
+        live_result, is_error = _codex_item_completion_payload(item)
+        call, stored_result = CodexEventProjector().project(
+            {"method": "item/completed", "params": {"item": item}}
+        ).messages
+
+        assert is_error is False
+        assert live_result == stored_result["content"]
+        assert "update: /tmp/example.py\n-old\n+new" in live_result
+        assert secret not in live_result
+        args = call["tool_calls"][0]["function"]["arguments"]
+        assert secret not in args
+
+    def test_large_file_change_diff_is_bounded_with_marker(self):
+        from agent.transports.codex_event_projector import _MAX_PROJECTED_TOOL_TEXT
+
+        result, _is_error = _codex_item_completion_payload({
+            "type": "fileChange", "status": "applied",
+            "changes": [{"kind": {"type": "update"}, "path": "/tmp/large.py",
+                         "diff": "+" * (_MAX_PROJECTED_TOOL_TEXT + 100)}],
+        })
+        assert len(result) <= _MAX_PROJECTED_TOOL_TEXT
+        assert result.endswith("[truncated by Hermes display limit]")
+
+    def test_large_live_result_is_bounded_with_marker(self):
+        from agent.transports.codex_event_projector import _MAX_PROJECTED_TOOL_TEXT
+
+        result, _is_error = _codex_item_completion_payload({
+            "type": "commandExecution", "exitCode": 0,
+            "aggregatedOutput": "x" * (_MAX_PROJECTED_TOOL_TEXT + 100),
+        })
+        assert len(result) <= _MAX_PROJECTED_TOOL_TEXT
+        assert result.endswith("[truncated by Hermes display limit]")
+
 # ---------- bridge: dispatch contracts ----------
 
 class TestStreamDeltaDispatch:
@@ -145,10 +214,98 @@ class TestStreamDeltaDispatch:
     def test_reasoning_delta_fires_reasoning_callback(self):
         agent = _make_stub_agent()
         bridge = make_codex_app_server_event_bridge(agent)
+        bridge(_item_started({"type": "reasoning", "id": "reason-1"}))
         bridge({"method": "item/reasoning/delta",
-                "params": {"delta": "thinking..."}})
+                "params": {"itemId": "reason-1", "delta": "thinking..."}})
+        agent._fire_reasoning_delta.assert_not_called()
+        bridge(_item_completed({"type": "reasoning", "id": "reason-1", "summary": ["thinking..."], "content": []}))
         agent._fire_reasoning_delta.assert_called_once_with("thinking...")
         agent._fire_stream_delta.assert_not_called()
+
+    @pytest.mark.parametrize("method", ["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"])
+    def test_codex_reasoning_summary_and_text_deltas_reach_reasoning_callback(self, method):
+        agent = _make_stub_agent()
+        bridge = make_codex_app_server_event_bridge(agent)
+        item_id = "reason-2"
+        bridge(_item_started({"type": "reasoning", "id": item_id}))
+        bridge({"method": method, "params": {"itemId": item_id, "delta": "Codex exposed text"}})
+        assert agent._fire_reasoning_delta.call_count == 0
+        field = "summary" if "summary" in method else "content"
+        bridge(_item_completed({"type": "reasoning", "id": item_id, field: ["Codex exposed text"]}))
+        agent._fire_reasoning_delta.assert_called_once_with("Codex exposed text")
+        agent._fire_stream_delta.assert_not_called()
+
+    def test_reasoning_delta_redacts_credential_split_across_chunks(self):
+        agent = _make_stub_agent()
+        bridge = make_codex_app_server_event_bridge(agent)
+        item_id = "reason-secret"
+        bridge(_item_started({"type": "reasoning", "id": item_id}))
+        bridge({"method": "item/reasoning/summaryTextDelta",
+                "params": {"itemId": item_id, "delta": "ghp_"}})
+        bridge({"method": "item/reasoning/summaryTextDelta",
+                "params": {"itemId": item_id, "delta": "abcdefghijk1234"}})
+        agent._fire_reasoning_delta.assert_not_called()
+        bridge(_item_completed({"type": "reasoning", "id": item_id,
+                                "summary": ["ghp_abcdefghijk1234"], "content": [],
+                                "encryptedContent": "must not be displayed"}))
+        shown = agent._fire_reasoning_delta.call_args.args[0]
+        assert "ghp_abcdefghijk1234" not in shown
+        assert "must not be displayed" not in shown
+
+    def test_reasoning_delta_fallback_redacts_full_buffer_when_item_has_no_text_fields(self):
+        agent = _make_stub_agent()
+        bridge = make_codex_app_server_event_bridge(agent)
+        item_id = "reason-fallback"
+        bridge(_item_started({"type": "reasoning", "id": item_id}))
+        bridge({"method": "item/reasoning/summaryTextDelta",
+                "params": {"itemId": item_id, "delta": "ghp_"}})
+        bridge({"method": "item/reasoning/summaryTextDelta",
+                "params": {"itemId": item_id, "delta": "abcdefghijk1234"}})
+        agent._fire_reasoning_delta.assert_not_called()
+        bridge(_item_completed({"type": "reasoning", "id": item_id,
+                                "encryptedContent": "not decoded"}))
+        shown = agent._fire_reasoning_delta.call_args.args[0]
+        assert "ghp_abcdefghijk1234" not in shown
+        assert "not decoded" not in shown
+
+    def test_reasoning_buffer_overflow_discards_content_instead_of_streaming_partial_text(self):
+        from agent.transports.codex_event_projector import _MAX_REASONING_DISPLAY_CHARS
+
+        agent = _make_stub_agent()
+        bridge = make_codex_app_server_event_bridge(agent)
+        item_id = "reason-overflow"
+        bridge(_item_started({"type": "reasoning", "id": item_id}))
+        bridge({"method": "item/reasoning/summaryTextDelta",
+                "params": {"itemId": item_id, "delta": "x" * _MAX_REASONING_DISPLAY_CHARS}})
+        bridge({"method": "item/reasoning/summaryTextDelta",
+                "params": {"itemId": item_id, "delta": "ghp_abcdefghijk1234"}})
+        agent._fire_reasoning_delta.assert_not_called()
+        bridge(_item_completed({"type": "reasoning", "id": item_id}))
+        shown = agent._fire_reasoning_delta.call_args.args[0]
+        assert "ghp_abcdefghijk1234" not in shown
+        assert "omitted" in shown
+
+    def test_distinct_reasoning_items_are_separated_in_live_stream(self):
+        agent = _make_stub_agent()
+        bridge = make_codex_app_server_event_bridge(agent)
+        for item_id, text in (("reason-prefix", "ghp_"), ("reason-suffix", "abcdefghijk1234")):
+            bridge(_item_started({"type": "reasoning", "id": item_id}))
+            bridge({"method": "item/reasoning/summaryTextDelta",
+                    "params": {"itemId": item_id, "delta": text}})
+            bridge(_item_completed({"type": "reasoning", "id": item_id, "summary": [text]}))
+        rendered = "".join(call.args[0] for call in agent._fire_reasoning_delta.call_args_list)
+        assert "ghp_abcdefghijk1234" not in rendered
+        assert rendered == "ghp_\nabcdefghijk1234"
+
+    def test_unkeyed_reasoning_delta_is_dropped_when_multiple_items_are_active(self):
+        agent = _make_stub_agent()
+        bridge = make_codex_app_server_event_bridge(agent)
+        bridge(_item_started({"type": "reasoning", "id": "reason-a"}))
+        bridge(_item_started({"type": "reasoning", "id": "reason-b"}))
+        bridge({"method": "item/reasoning/summaryTextDelta", "params": {"delta": "ambiguous"}})
+        bridge(_item_completed({"type": "reasoning", "id": "reason-a"}))
+        bridge(_item_completed({"type": "reasoning", "id": "reason-b"}))
+        agent._fire_reasoning_delta.assert_not_called()
 
 class TestToolProgressDispatch:
     def test_command_started_fires_tool_started(self):
@@ -214,6 +371,112 @@ class TestToolProgressDispatch:
         assert calls[0].args[1] == "web_search"
         assert calls[0].args[2] == "hermes agent docs"
         assert calls[0].args[3] == {"query": "hermes agent docs"}
+
+    def test_collaboration_item_fires_correlated_start_and_completion(self):
+        agent = _make_stub_agent()
+        bridge = make_codex_app_server_event_bridge(agent)
+        started = {
+            "type": "collabAgentToolCall", "id": "collab-1", "tool": "spawnAgent",
+            "prompt": "Compute 7 + 5.", "receiverThreadIds": ["private-receiver"],
+        }
+        completed = {
+            **started, "status": "completed", "senderThreadId": "private-sender",
+            "agentsStates": {"private-receiver": {"status": "completed", "message": "12"}},
+        }
+        bridge(_item_started(started))
+        bridge(_item_completed(completed))
+        start = agent.tool_start_callback.call_args.args
+        done = agent.tool_complete_callback.call_args.args
+        from agent.codex_runtime import _stable_call_id
+        from agent.transports.codex_event_projector import CodexEventProjector
+        projected = CodexEventProjector().project(_item_completed(completed)).messages[0]["tool_calls"][0]
+        assert start[0] == done[0]
+        assert start[0] == projected["id"] == _stable_call_id(completed, "collab.spawnAgent")
+        assert start[1] == done[1] == "collab.spawnAgent"
+        assert start[2] == done[2] == {"prompt": "Compute 7 + 5."}
+        assert "12" in done[3]
+        assert "private-receiver" not in str(start + done)
+        assert "private-sender" not in str(start + done)
+
+    def test_subagent_activity_live_callbacks_match_persisted_call_and_do_not_claim_a_result(self):
+        from agent.transports.codex_event_projector import CodexEventProjector
+
+        agent = _make_stub_agent()
+        bridge = make_codex_app_server_event_bridge(agent)
+        thread_id = "019e1a94-352b-71e1-b214-e5c67c9ec190"
+        started = {
+            "type": "subAgentActivity", "id": "activity-1", "kind": "started",
+            "agentThreadId": thread_id, "agentPath": "research/repo-helper", "model": "gpt-5.5",
+        }
+        bridge(_item_started(started))
+        bridge(_item_completed(started))
+
+        start_id, name, args = agent.tool_start_callback.call_args.args
+        done_id, done_name, done_args, result = agent.tool_complete_callback.call_args.args
+        projected_call, projected_result = CodexEventProjector().project(
+            _item_completed(started)
+        ).messages
+        assert (name, done_name) == ("codex_subagent_activity", "codex_subagent_activity")
+        assert start_id == done_id == projected_call["tool_calls"][0]["id"]
+        assert args == done_args == {
+            "kind": "started", "agent_path": "research/repo-helper", "model": "gpt-5.5",
+            "agent_thread_id": thread_id,
+        }
+        assert result == projected_result["content"] == ""
+        calls = agent.tool_progress_callback.call_args_list
+        assert [call.args[0] for call in calls] == ["tool.started", "tool.completed"]
+        assert [call.args[1] for call in calls] == [name, name]
+
+    def test_live_native_tool_input_and_output_are_redacted(self):
+        agent = _make_stub_agent()
+        agent.tool_start_callback = MagicMock()
+        agent.tool_complete_callback = MagicMock()
+        bridge = make_codex_app_server_event_bridge(agent)
+        bridge(_item_started({
+            "type": "mcpToolCall", "id": "mcp-secret", "server": "demo", "tool": "lookup",
+            "arguments": {"token": "ghp_abcdefghijk1234"},
+        }))
+        bridge(_item_completed({
+            "type": "mcpToolCall", "id": "mcp-secret", "server": "demo", "tool": "lookup",
+            "arguments": {"token": "ghp_abcdefghijk1234"},
+            "result": {"token": "ghp_zyxwvutsrqponm9876"}, "error": None,
+        }))
+        start = agent.tool_start_callback.call_args.args
+        complete = agent.tool_complete_callback.call_args.args
+        assert "ghp_abcdefghijk1234" not in str(start)
+        assert "ghp_zyxwvutsrqponm9876" not in str(complete)
+
+    def test_live_projection_redacts_every_native_tool_item_type(self):
+        agent = _make_stub_agent()
+        agent.tool_start_callback = MagicMock()
+        agent.tool_complete_callback = MagicMock()
+        bridge = make_codex_app_server_event_bridge(agent)
+        secret_in, secret_out = "ghp_abcdefghijk1234", "ghp_zyxwvutsrqponm9876"
+        items = [
+            {"type": "commandExecution", "id": "c", "command": f"printf {secret_in}", "cwd": "/tmp",
+             "aggregatedOutput": secret_out, "exitCode": 0},
+            {"type": "fileChange", "id": "f", "status": "applied",
+             "changes": [{"path": f"/tmp/{secret_in}", "kind": {"type": "update"}}]},
+            {"type": "mcpToolCall", "id": "m", "server": "demo", "tool": "read",
+             "arguments": {"token": secret_in}, "result": {"token": secret_out}},
+            {"type": "dynamicToolCall", "id": "d", "tool": "lookup",
+             "arguments": {"token": secret_in},
+             "contentItems": [{"type": "text", "text": secret_out}], "success": True},
+            {"type": "collabAgentToolCall", "id": "a", "tool": "sendMessage", "status": "completed",
+             "prompt": secret_in, "agentsStates": {"x": {"status": "completed", "message": secret_out}}},
+            {"type": "subAgentActivity", "id": "sa", "kind": "started",
+             "agentThreadId": "019e1a94-352b-71e1-b214-e5c67c9ec190",
+             "agentPath": secret_in, "model": secret_out},
+            {"type": "webSearch", "id": "w", "query": secret_in},
+        ]
+        for item in items:
+            bridge(_item_started(item))
+            bridge(_item_completed(item))
+        emitted = str((agent.tool_start_callback.call_args_list, agent.tool_complete_callback.call_args_list))
+        assert secret_in not in emitted
+        assert secret_out not in emitted
+        assert agent.tool_start_callback.call_count == len(items)
+        assert agent.tool_complete_callback.call_count == len(items)
 
 class TestAgentMessageInterimDispatch:
     def test_completed_agent_message_emits_interim(self):
@@ -284,7 +547,8 @@ class TestBridgeRobustness:
 ] + [
     {"method": method, "params": {"item": {"id": "i1", "type": kind, "text": "progress"}}}
     for method in ("item/started", "item/completed")
-    for kind in ("agentMessage", "reasoning", "commandExecution", "mcpToolCall", "dynamicToolCall")
+    for kind in ("agentMessage", "reasoning", "commandExecution", "mcpToolCall", "dynamicToolCall",
+                 "collabAgentToolCall", "subAgentActivity")
 ])
 def test_real_progress_keeps_watchdog_alive_but_silence_still_aborts(monkeypatch, note):
     """Display hooks are optional; real progress must reach the watchdog regardless."""
@@ -348,3 +612,36 @@ def test_native_command_secret_is_redacted_in_display_but_not_execution(monkeypa
     assert agent.tool_complete_callback.call_args.args[2]["command"].startswith("echo ")
     assert all(secret not in s for s in shown), shown
     assert item["command"] == "echo " + secret
+
+
+def test_the_session_asks_codex_to_record_reasoning_summaries():
+    """CoT only exists if Codex was told to summarise its reasoning.
+
+    `turn/start` accepts a per-turn `summary` param and even validates the enum, but the turn
+    still records `turn_context.summary == "none"` — verified against the real app-server, where
+    the per-turn param produced reasoning items with `summary: []`. The config override is the
+    route that actually works: with `-c model_reasoning_summary="auto"` a real turn stored
+    `{"summary": ["**Checking consecutive-even factors**"]}`. Losing this line silently returns
+    every linked thread to a CoT-less replay.
+    """
+    from agent.transports.codex_app_server_session import CodexAppServerSession
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def initialize(self, **_kwargs):
+            return None
+
+    session = CodexAppServerSession(cwd="/tmp", client_factory=FakeClient)
+    # ensure_started() constructs the client; the thread call itself may fail against a stub.
+    try:
+        session.ensure_started()
+    except Exception:
+        pass
+
+    args = captured.get("extra_args") or []
+    assert args[:1] == ["-c"], args
+    assert args[1].replace(" ", "") == 'model_reasoning_summary="auto"', args

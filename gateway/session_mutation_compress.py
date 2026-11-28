@@ -40,6 +40,24 @@ async def prepare_compress(authority, live, payload, prepared):
     from utils import is_truthy_value
     request = compress_request(payload)
     snapshot = prepared['snapshot']
+    from agent.linked_foreign_turn import (
+        LINKED_FOREIGN_COMPACTION_OWNED, linked_native_compaction_message)
+    from gateway.session_linked_codex import linked_thread_id
+    from hermes_cli.foreign_linked_store import linked_foreign_kind
+    store = authority_persistence(authority)
+    # The Kind decides, not "is it linked": Codex exposes a native compact Hermes drives (below),
+    # while a linked Claude Code / Mistral Vibe row can only be compacted inside its own CLI. Letting
+    # one fall through to the local summarizer would bill a summary of a transcript Hermes does not
+    # own and split a Hermes session the row never had.
+    kind = linked_foreign_kind(store, snapshot['target'])
+    if kind in LINKED_FOREIGN_COMPACTION_OWNED:
+        raise AuthorityRefusal('unsupported_compress_options', field='session_id',
+                               detail=linked_native_compaction_message(kind))
+    # An unreadable pointer ("foreign") still reaches this wrapper, which refuses it as
+    # storage_unavailable instead of compressing a row it cannot identify.
+    linked_id = linked_thread_id(store, snapshot['target']) if kind is not None else None
+    if linked_id:
+        return await _prepare_linked_codex_compress(authority, live, request, prepared, linked_id)
     policy = restore_policy(snapshot['receipt']['policy'])
     config = policy.config(authority)
     options = config.get('compression') or {}
@@ -48,7 +66,6 @@ async def prepare_compress(authority, live, payload, prepared):
     model, runtime = authority.runner._resolve_session_agent_runtime(source=live.source, session_key=live.route)
     if runtime.get('api_mode') == 'codex_app_server':
         raise AuthorityRefusal('runtime_coordination_required')
-    store = authority_persistence(authority)
     history = [m.as_openai_message() for m in store.messages.read_conversation(snapshot['target'])]
     messages = [m for m in history if m.get('role') in {'user', 'assistant', 'tool'}]
     head, tail = messages, []
@@ -119,6 +136,148 @@ async def prepare_compress(authority, live, payload, prepared):
     # with boundary_reason="compression"), as the agent path does after its own commit.
     return dict(prepared, messages=compressed, summary=summary, post_compaction=hook, engine_owner=owner,
                 in_place=is_truthy_value(options.get('in_place'), default=True))
+
+
+async def _prepare_linked_codex_compress(authority, live, request, prepared, thread_id):
+    """Compact only the app-server thread bound to this linked session, with a durable retry fence."""
+    if request.partial or request.focus_topic:
+        raise AuthorityRefusal('unsupported_compress_options', field='focus',
+                                detail='linked Codex threads support full native compaction only')
+    from gateway.session_linked_codex import read_display_history
+    from agent.conversation_compression_manual import compress_now
+    target = prepared['snapshot']['target']
+    from gateway.session_persistence import authority_persistence
+    store = authority_persistence(authority)
+    row = store.sessions.get(target)
+    model = row.model if row is not None else None
+
+    def read_native_history():
+        return read_display_history(thread_id, session_id=target, model=model,
+                                    profile_home=store.scope.profile_dir, session_db=store,
+                                    platform=row.source if row else "")
+
+    if request.preview:
+        history = await asyncio.to_thread(read_native_history)
+        from agent.model_metadata import estimate_request_tokens_rough
+        from hermes_cli.partial_compress import summarize_compress_preview
+        report = summarize_compress_preview(history, False, request.keep_last, None,
+                                            estimate_request_tokens_rough(history))
+        return {'status': 'preview', 'lines': report['lines'], 'head_count': report['head_count'],
+                'tail_count': report['tail_count'], 'message_count': report['total']}
+
+    identity = prepared.get('_native_codex_compact_identity')
+    if not isinstance(identity, dict):
+        raise AuthorityRefusal('runtime_coordination_required', field='operation',
+                                detail='native Codex compaction requires a durable request identity')
+
+    def validate_agent(agent):
+        from agent.codex_runtime import _is_linked_codex_thread, _stored_codex_thread_id
+        if getattr(agent, 'api_mode', None) != 'codex_app_server':
+            raise AuthorityRefusal('unsupported_operation', field='operation',
+                                    detail='linked Codex history cannot be compressed by this provider')
+        if not _is_linked_codex_thread(agent) or _stored_codex_thread_id(agent) != thread_id:
+            raise AuthorityRefusal('unsupported_operation', field='operation',
+                                    detail='the selected agent is not bound to this linked Codex thread')
+
+    def intent_result(saved):
+        outcome = saved['outcome']
+        return dict(prepared, native_codex_compact=True, native_thread_id=thread_id,
+                    native_compaction_intent=saved['token'], native_compaction_outcome=outcome,
+                    summary=outcome['summary'], before_messages=outcome['before_messages'],
+                    after_messages=outcome['after_messages'], removed=outcome['removed'],
+                    status='compressed')
+
+    def compact_summary():
+        return {
+            'noop': False,
+            'aborted': False,
+            'refused_would_grow': False,
+            'fallback_used': False,
+            'headline': 'Codex compacted the native thread',
+            'token_line': 'Codex confirmed native compaction; Hermes transcript rows were not rewritten.',
+            'note': 'Codex remains the history authority for this thread.',
+        }
+
+    async def run_compaction(agent):
+        validate_agent(agent)
+        saved = await asyncio.to_thread(
+            store.runtime.resume_completed_native_codex_compaction, epoch=authority.epoch,
+            target_session_id=target, thread_id=thread_id, identity=identity,
+            snapshot=prepared['snapshot'])
+        if saved is not None:
+            return intent_result(saved)
+
+        history = await asyncio.to_thread(read_native_history)
+        identity['before_messages'] = len(history)
+        started = await asyncio.to_thread(
+            store.runtime.begin_native_codex_compaction, epoch=authority.epoch, target_session_id=target, thread_id=thread_id,
+            identity=identity, snapshot=prepared['snapshot'])
+        if started['outcome'] is not None:
+            return intent_result(started)
+        token = started['token']
+        try:
+            result = await asyncio.to_thread(compress_now, agent, history, request)
+        except BaseException as exc:
+            # The app-server request may have reached Codex before this exception. Keep the durable
+            # started marker so an exact retry cannot send a second native compact.
+            raise AuthorityRefusal(
+                'runtime_coordination_required', field='operation',
+                detail=('Codex compaction outcome is uncertain; retry is blocked to prevent a duplicate. '
+                        'Verify the native thread, then resolve the pending compact intent.'),
+            ) from exc
+
+        if result.status == 'lock_skipped':
+            # The local compression lock is checked before the Codex compact request is issued.
+            try:
+                await asyncio.to_thread(store.runtime.clear_unsubmitted_native_codex_compaction,
+                                        epoch=authority.epoch, token=token)
+            except Exception as exc:
+                raise AuthorityRefusal(
+                    'runtime_coordination_required', field='operation',
+                    detail=('Codex was not compacted, but the retry fence could not be cleared; '
+                            'resolve the pending compact intent.'),
+                ) from exc
+            return {'status': 'lock_skipped',
+                    'message': 'Codex compaction is unavailable while its native writer is held.'}
+        if result.status != 'compressed':
+            # Only the explicit local lock-skip proves the provider request was never sent. Leave
+            # every other outcome fenced until someone verifies the native history.
+            raise AuthorityRefusal(
+                'runtime_coordination_required', field='operation',
+                detail=('Codex compaction was not confirmed; retry is blocked to prevent a duplicate. '
+                        'Verify the native thread, then resolve the pending compact intent.'),
+            )
+
+        outcome = {'status': 'compressed', 'summary': compact_summary(),
+                   'before_messages': len(history), 'after_messages': len(history), 'removed': 0}
+        try:
+            await asyncio.to_thread(store.runtime.complete_native_codex_compaction,
+                                    epoch=authority.epoch, token=token, outcome=outcome)
+        except Exception as exc:
+            # The started marker remains durable and blocks retries even if this receipt could not
+            # be recorded after Codex reported success.
+            raise AuthorityRefusal(
+                'runtime_coordination_required', field='operation',
+                detail=('Codex confirmed compaction, but Hermes could not persist the result. '
+                        'Retry is blocked; verify the native thread and resolve the pending intent.'),
+            ) from exc
+        from agent.conversation_compression import finalize_context_engine_compression_notification
+        finalize_context_engine_compression_notification(agent, committed=True)
+        return intent_result({'token': token, 'outcome': outcome})
+
+    cached_agent = getattr(authority.runner, '_cached_agent_for', None)
+    resident = cached_agent(live.route) if callable(cached_agent) else None
+    if resident is not None:
+        return await run_compaction(resident)
+
+    from gateway.session_cold_review import cold_review_parent
+    from agent.conversation_compression import finalize_context_engine_compression_notification
+    with cold_review_parent(authority.runner, live.source, live.route, target) as agent:
+        try:
+            return await run_compaction(agent)
+        except BaseException:
+            finalize_context_engine_compression_notification(agent, committed=False)
+            raise
 
 
 def _engine_compress(engine, head, tail, messages, request, memory_context):

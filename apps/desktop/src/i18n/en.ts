@@ -294,6 +294,40 @@ export const en: Translations = {
   },
 
   sessionImport: {
+    codexThreads: 'Open a Codex thread',
+    codexThreadsHelp: 'Continue the same Codex conversation in Hermes.',
+    codexHandoff: 'Close the thread in other clients before continuing here.',
+    codexCallbacksWarning:
+      'This linked session can’t restore client-defined tools supplied by the original Codex client, including Hermes delegation callbacks. Calls to those tools will be declined or fail safely.',
+    codexLink: 'Open linked thread',
+    codexLinking: 'Opening thread…',
+    codexLinkError: 'Could not open this Codex thread.',
+    codexNoThreads: 'No Codex threads found',
+    claudeThreads: 'Open a Claude Code session',
+    claudeThreadsHelp:
+      'Continue the same Claude Code conversation in Hermes — the thread itself stays in Claude Code’s own store.',
+    mistralThreads: 'Open a Mistral Vibe session',
+    mistralThreadsHelp:
+      'Continue the same Mistral Vibe conversation in Hermes — the thread itself stays in Mistral Vibe’s own store.',
+    linkedLink: 'Open linked session',
+    linkedLinking: 'Opening session…',
+    linkedLinkError: 'Could not open this session.',
+    linkedNoThreads: 'No native sessions found',
+    linkedHandoff: 'Close the session in other clients before continuing here.',
+    linkedReadonlyWarning:
+      'This linked session reads its history live from the native tool’s own store. Hermes stores only a pointer and does not write a second transcript, so this view is read-only here.',
+    hostCapabilityChecking: 'Checking what this host can run…',
+    hostCapabilityUnknown:
+      'This gateway predates the host capability check, so linked sessions stay read-only here.',
+    hostCapabilityError: 'Could not check what this host can run.',
+    hostCapabilityAvailable: (label: string) => `${label} is available here`,
+    hostCapabilityStore: (label: string, host: string) => `No readable ${label} session store on ${host}.`,
+    hostCapabilityCli: (label: string, host: string) => `${label} is not installed on ${host}.`,
+    hostCapabilityBuild: (label: string) => `This gateway cannot continue ${label} threads yet.`,
+    hostCapabilityReadOnly: (label: string) =>
+      `Sending is read-only in this build — it cannot append to ${label} threads.`,
+    hostCapabilityWritable: (label: string) =>
+      `New messages are appended to this ${label} thread on the host and are visible to ${label} there.`,
     title: 'Continue from another app',
     subtitle: 'Bring a conversation into Hermes and pick up where you left off.',
     action: 'Import session',
@@ -2044,16 +2078,19 @@ export const en: Translations = {
       browserRealProfile: {
         label: 'Use My Real Browser Profile',
         description:
-          'Copies your default browser\'s logins and cookies into a managed snapshot the agent browses with, and signs the in-app Browser tab in with them too. Your live profile is never opened directly. Applies to new sessions.',
+          "Copies your default browser's logins and cookies into a managed snapshot the agent browses with, and signs the in-app Browser tab in with them too. Your live profile is never opened directly. Applies to new sessions.",
         enabledTitle: 'Real-profile browsing on',
         enabledMessage: 'New sessions will browse with a snapshot of your default browser profile.',
         disabledTitle: 'Real-profile browsing off',
-        disabledMessage: 'The profile snapshot will be deleted and the in-app browser signed out of it; new sessions use a clean browser.',
+        disabledMessage:
+          'The profile snapshot will be deleted and the in-app browser signed out of it; new sessions use a clean browser.',
         failedSave: 'Could not save the real-profile setting',
         reimportSignins: 'Re-import sign-ins',
         signinsImportedTitle: 'In-app browser sign-ins',
-        signinsImported: count => `Signed the in-app browser in with ${count} cookie${count === 1 ? '' : 's'} from your browser profile.`,
-        signinsRemote: 'This backend runs on another machine, so its browser profile is not imported into the in-app browser.',
+        signinsImported: count =>
+          `Signed the in-app browser in with ${count} cookie${count === 1 ? '' : 's'} from your browser profile.`,
+        signinsRemote:
+          'This backend runs on another machine, so its browser profile is not imported into the in-app browser.',
         signinsFailed: 'Could not import sign-ins into the in-app browser',
         prompt: {
           title: 'Stay signed in to your sites',
@@ -2620,7 +2657,8 @@ export const en: Translations = {
     relayLink: {
       title: 'Team Gateway',
       badge: 'No bot token needed',
-      intro: (platform: string) => `${platform} reaches this agent through the shared Hermes bot. Link your ${platform} account to it and message the bot to talk to your agent.`,
+      intro: (platform: string) =>
+        `${platform} reaches this agent through the shared Hermes bot. Link your ${platform} account to it and message the bot to talk to your agent.`,
       link: (platform: string) => `Link ${platform}`,
       linkAnother: (platform: string) => `Link another ${platform} account`,
       linkedAccounts: 'Linked accounts',
@@ -2638,10 +2676,12 @@ export const en: Translations = {
       refused: (platform: string) => `${platform} refused the link. Get a new code and try again.`,
       qrAlt: (platform: string) => `QR code for the shared ${platform} bot`,
       managed: 'Managed by Team Gateway',
-      managedNote: (platform: string) => `Team Gateway carries messaging on this deployment, so the gateway turns the direct ${platform} connection off at every start. To run it alongside the relay, set GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true in the gateway's environment (a direct connection keeps the instance from scaling to zero and can deliver messages twice).`,
+      managedNote: (platform: string) =>
+        `Team Gateway carries messaging on this deployment, so the gateway turns the direct ${platform} connection off at every start. To run it alongside the relay, set GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true in the gateway's environment (a direct connection keeps the instance from scaling to zero and can deliver messages twice).`,
       managedIntro: "This agent's accounts are linked from Nous Portal.",
       openPortal: 'Link accounts in Nous Portal',
-      noNewAccount: (platform: string) => `The code is no longer active and no new account appeared. If your ${platform} account isn't listed, get a new code and try again.`
+      noNewAccount: (platform: string) =>
+        `The code is no longer active and no new account appeared. If your ${platform} account isn't listed, get a new code and try again.`
     },
     telegramQr: {
       title: 'Choose how to connect your Telegram bot',
@@ -4304,6 +4344,7 @@ export const en: Translations = {
     terminal: 'Terminal',
     noFolderSelected: 'No folder selected',
     changeCwdTitle: 'Change working directory',
+    linkedWorkspaceBusy: 'Close this thread in Codex, then retry the workspace change.',
     remotePickerTitle: 'Choose remote folder',
     remotePickerDescription: 'Browse folders on the connected backend.',
     remotePickerSelect: 'Select folder',
@@ -4340,12 +4381,9 @@ export const en: Translations = {
     terminalCloseAll: 'Close all',
     terminalNewOn: 'New terminal on…',
     terminalGatewayRemoved: 'Removed gateway',
-    terminalGatewayRemovedBody:
-      'The gateway this terminal ran on was removed, so it can\'t reopen. Close this tab.',
-    terminalGatewayNoShellBody:
-      'This gateway has no shell access, so this terminal can\'t reopen. Close this tab.',
-    terminalDisconnectedBody:
-      'Terminal disconnected. Press Enter to start a new shell; scrollback is preserved.',
+    terminalGatewayRemovedBody: "The gateway this terminal ran on was removed, so it can't reopen. Close this tab.",
+    terminalGatewayNoShellBody: "This gateway has no shell access, so this terminal can't reopen. Close this tab.",
+    terminalDisconnectedBody: 'Terminal disconnected. Press Enter to start a new shell; scrollback is preserved.',
     terminalDropUploadFailed: name => `Could not upload ${name}`,
     terminalDropTooLargeTitle: 'Too large to upload',
     terminalDropTooLarge: (names, limit) => `Each file can be up to ${limit}. Not uploaded: ${names}`,
@@ -4513,6 +4551,9 @@ export const en: Translations = {
     thread: {
       loadingSession: 'Loading session',
       showEarlier: 'Show earlier messages',
+      historyChanged: "The conversation history changed. Reload it to continue paging.",
+      historyLoadFailed: "Could not load earlier messages. Try again.",
+      reloadHistory: "Reload history",
       loadingResponse: 'Hermes is loading a response',
       loadingLocalModel: model => `Loading ${model} into memory`,
       processingPrompt: 'Processing prompt',
@@ -4662,6 +4703,33 @@ export const en: Translations = {
       outputAlt: 'Tool output',
       rawResponse: 'Raw response',
       copyActivity: 'Copy activity',
+      codexSubagentActivity: {
+        openTrace: 'Open subagent trace',
+        traceTitle: 'Codex subagent trace',
+        traceDescription: 'Read-only messages, reasoning summaries, and tool activity from this subagent.',
+        traceUnavailable: 'Subagent trace unavailable',
+        loading: 'Loading trace…',
+        loadFailed: 'Could not load this trace.',
+        retry: 'Retry',
+        close: 'Return to conversation',
+        backToParent: 'Back to parent trace',
+        empty: 'No trace entries were returned.',
+        waiting: 'Waiting for the subagent trace…',
+        updating: 'Updating live trace…',
+        assistantRole: 'Codex',
+        userRole: 'Prompt',
+        systemRole: 'System',
+        reasoningSummary: 'Reasoning summary',
+        arguments: 'Arguments',
+        result: 'Result',
+        unknownKind: 'Activity',
+        kinds: {
+          started: 'Started',
+          interacted: 'Interacted',
+          interrupted: 'Interrupted',
+          completed: 'Completed'
+        }
+      },
       recoveredOne: 'Recovered after 1 failed step',
       recoveredMany: count => `Recovered after ${count} failed steps`,
       failedOne: '1 step failed',

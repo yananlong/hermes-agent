@@ -6,6 +6,7 @@ export interface RightSidebarTranslations {
   terminal: string
   noFolderSelected: string
   changeCwdTitle: string
+  linkedWorkspaceBusy: string
   remotePickerTitle: string
   remotePickerDescription: string
   remotePickerSelect: string

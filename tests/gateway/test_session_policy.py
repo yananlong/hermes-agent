@@ -358,6 +358,18 @@ def test_null_config_sections_read_as_absent(tmp_path):
 
 
 
+def _ordinary_binding(authority, sid):
+    """Bind *authority* to one ordinary (non-linked) session row, after every launch key is bound
+    (``bind_launch_key`` reads ``persistence.scope`` when it exists): a policy-bound turn reads its
+    binding's current transcript to tell a linked Codex pointer from an ordinary session."""
+    from types import SimpleNamespace
+    row = SimpleNamespace(model='m', model_config={}, model_config_json=None)
+    authority.persistence = SimpleNamespace(
+        bindings=SimpleNamespace(receipt=lambda chat_id: SimpleNamespace(current_target=sid)),
+        sessions=SimpleNamespace(get=lambda session_id: row if session_id == sid else None))
+    return SimpleNamespace(chat_id=sid)
+
+
 def test_frozen_route_keeps_its_endpoint_after_live_config_edit(tmp_path, monkeypatch):
     """R2-M2: the frozen policy's config-derived endpoint is the one its frozen credential
     belongs to; a later ``model.base_url`` edit must not redirect that credential."""
@@ -382,7 +394,8 @@ def test_frozen_route_keeps_its_endpoint_after_live_config_edit(tmp_path, monkey
     write('http://127.0.0.1:2/v1', 'sk-new-endpoint-two')
     monkeypatch.setattr('gateway.session_policy.policy_for_source', lambda runner, source: policy)
     runner = SimpleNamespace(session_authority=authority)
-    _, runtime = GatewayTurnPrepareMixin._resolve_session_agent_runtime(runner, source=SimpleNamespace())
+    source = _ordinary_binding(authority, 'sid')
+    _, runtime = GatewayTurnPrepareMixin._resolve_session_agent_runtime(runner, source=source)
     assert (runtime['base_url'], runtime['api_key']) == ('http://127.0.0.1:1/v1', 'sk-frozen-endpoint-one')
 
 
@@ -406,14 +419,17 @@ def test_frozen_bare_custom_route_keeps_its_endpoint_pool_and_launch_key_wins(tm
         'source': 'pool:custom', 'credential_pool': pool} if base_url.rstrip('/') == url else None)
     authority = SimpleNamespace(instance_id='i', epoch=1, profile_id='p', db=None)
     runner = SimpleNamespace(session_authority=authority)
-    runtimes = []
+    policies = []
     for sid, launch in (('config-keyed', None), ('launch-keyed', 'sk-launch-explicit')):
         private = {}
         params = {'cwd': str(tmp_path), 'model': 'm'} | ({'api_key': launch} if launch else {})
         policy = build_policy(params, load_user_config_effective(home / 'config.yaml'), private_secrets=private)
-        policy = bind_launch_key(authority, sid, policy, launch, config_secrets=private)
+        policies.append(bind_launch_key(authority, sid, policy, launch, config_secrets=private))
+    source = _ordinary_binding(authority, 'sid')
+    runtimes = []
+    for policy in policies:
         monkeypatch.setattr('gateway.session_policy.policy_for_source', lambda runner, source, p=policy: p)
-        runtimes.append(GatewayTurnPrepareMixin._resolve_session_agent_runtime(runner, source=SimpleNamespace())[1])
+        runtimes.append(GatewayTurnPrepareMixin._resolve_session_agent_runtime(runner, source=source)[1])
     assert (runtimes[0]['base_url'], runtimes[0]['credential_pool']) == (url, pool)
     assert (runtimes[1]['api_key'], runtimes[1]['credential_pool']) == ('sk-launch-explicit', None)
 
@@ -446,10 +462,11 @@ def _frozen_fixture_routes(tmp_path, monkeypatch, *launches):
         policies.append(bind_launch_key(authority, f's{n}', policy, None, config_secrets=private))
     write('https://b.fixture.example/v1')
     runner = SimpleNamespace(session_authority=authority)
+    source = _ordinary_binding(authority, 's0')
     runtimes = []
     for policy in policies:
         monkeypatch.setattr('gateway.session_policy.policy_for_source', lambda runner, source, p=policy: p)
-        runtimes.append(GatewayTurnPrepareMixin._resolve_session_agent_runtime(runner, source=SimpleNamespace())[1])
+        runtimes.append(GatewayTurnPrepareMixin._resolve_session_agent_runtime(runner, source=source)[1])
     return runtimes
 
 

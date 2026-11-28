@@ -2,6 +2,13 @@ import { expect, test, vi } from 'vitest'
 
 import { CanonicalDesktopProtocol, slashMutation } from './canonical-protocol'
 
+test('warm activation sends the requested bounded resume on the owning profile', () => {
+  const protocol = new CanonicalDesktopProtocol()
+  const params = protocol.prepare('session.activate', { session_id: 's', profile: 'work', omit_messages: true })
+  expect(protocol.wire('session.activate', params)).toBe('session.resume')
+  expect(params).toMatchObject({ session_id: 's', profile: 'work', omit_messages: true })
+})
+
 test('sibling routes survive every rebuilt control and compression follow-up', async () => {
   const protocol = new CanonicalDesktopProtocol()
   protocol.result('session.resume', { session_id: 's', profile: 'sibling' }, {

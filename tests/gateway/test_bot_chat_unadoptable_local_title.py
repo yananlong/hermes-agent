@@ -8,10 +8,12 @@ failed ``not_found`` on every beat. The door now moves it aside, as it
 does an API or messaging row, and mints the profile's local Bot Chat; adoptable history stays put.
 """
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from persistence.core.errors import AuthorityRefusal
+from persistence_assembly import open_persistence, profile_scope
 
 from tests.fixtures.storage_holder import raw_holder
 from tests.fixtures.storage_read import session_row
@@ -151,6 +153,92 @@ async def test_a_bot_chat_stamped_with_a_forwarded_login_subject_is_never_moved_
     record = await _deliver(headless.authority, 'f')
     assert record['session_id'] == old
     assert db.sessions.get_by_title('Bot Chat').session_id == old and len(_session_ids(db)) == 1
+
+
+_LINKED_FLAGS = [
+    ('codex', 'codex_linked_thread', 'codex_thread_id', 'native-thread'),
+    ('claude', 'claude_linked_thread', 'claude_session_id', '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'),
+    ('mistral', 'mistral_linked_thread', 'mistral_session_id', '2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f'),
+]
+
+
+@pytest.fixture
+def plain_authority(tmp_path):
+    """A store-backed authority stub: these predicates read the row, not the gateway.
+
+    Kept off the ``headless`` fixture on purpose — that one boots a real gateway authority, and the
+    file's per-test cost is dominated by it.
+    """
+    handle = open_persistence(profile_scope(home=tmp_path))
+    try:
+        yield SimpleNamespace(persistence=handle)
+    finally:
+        handle.close()
+
+
+@pytest.mark.parametrize('kind, flag, id_key, native_id', _LINKED_FLAGS,
+                         ids=[row[0] for row in _LINKED_FLAGS])
+def test_a_linked_row_is_never_the_canonical_bot_chat(plain_authority, kind, flag, id_key, native_id):
+    """Every native pointer is excluded, not just Codex's (the four Bot Chat decisions).
+
+    ``bot_chat_row`` (migration), ``_row_follows_profile`` (TUI agent factory), ``bot_chat_tip``
+    (api_server Bot Chat lane), ``_canonical_session_row`` (TUI profiles) and the cron producer's
+    ``_bot_chat_tip`` each asked the Codex-only predicate, so a linked Claude/Mistral row was still
+    adopted as the canonical Bot Chat, followed the member profile's model, and answered as the
+    Bot Chat tip. ``displaceable_bot_chat`` is the delivery's own answer for such a row.
+    """
+    from gateway.platforms.api_server_bot_chat import bot_chat_tip
+    from gateway.session_bot import displaceable_bot_chat
+    from gateway.session_local_migration import bot_chat_row
+    from tools.bot_live_delivery import _bot_chat_tip
+    from tui_gateway.agent_factory import _row_follows_profile
+    from tui_gateway.methods_profiles import _canonical_session_row
+
+    authority = plain_authority
+    db = authority.persistence
+    old = _squatter(db, f'linked_{kind}_bot_title', column=None, value=None, source='desktop')
+    db.sessions.patch_model_config(old, {flag: True, id_key: native_id, 'follow_profile_config': True})
+    seed_messages(db, old, {'role': 'user', 'content': f'native history stays attached to {kind}'})
+    linked = db.sessions.get(old)
+
+    assert bot_chat_row(linked) is False
+    assert _row_follows_profile(linked.as_session_row()) is False
+    assert bot_chat_tip(authority, old) is None
+    assert _canonical_session_row(db, db.scope.profile_dir) is None
+    assert _bot_chat_tip(Path(db.scope.profile_dir).resolve()) is None
+    assert displaceable_bot_chat(authority, linked) == old
+
+
+@pytest.mark.asyncio
+async def test_a_linked_title_is_preserved_and_the_delivery_lands(headless):
+    """The delivery moves the linked row aside instead of renaming over it or refusing for good."""
+    from tests.fixtures.storage_read import transcript_rows
+    from tests.waiting import async_wait_until
+    from tui_gateway.agent_factory import _row_follows_profile
+    from tui_gateway.methods_profiles import _canonical_session_row
+
+    authority = headless.authority
+    db = authority.persistence
+    _kind, flag, id_key, native_id = _LINKED_FLAGS[0]
+    old = _squatter(db, 'linked_codex_bot_title', column=None, value=None, source='desktop')
+    db.sessions.patch_model_config(old, {flag: True, id_key: native_id, 'follow_profile_config': True})
+    seed_messages(db, old, {'role': 'user', 'content': 'native history stays attached to Codex'})
+    linked = db.sessions.get(old)
+    assert _row_follows_profile(linked.as_session_row()) is False
+    assert _canonical_session_row(db, db.scope.profile_dir) is None
+
+    delivery = await _deliver(authority, '7')
+    new = delivery['session_id']
+    assert new != old and str(db.sessions.get(new).chat_id).startswith('local-')
+    assert db.sessions.get_by_title('Bot Chat').session_id == new
+    moved = db.sessions.get(old)
+    assert moved.title == f'Bot Chat (desktop {old})'
+    assert db.sessions.get_model_config_value(old, id_key) == native_id
+    assert [message['content'] for message in transcript_rows(db, old)] == [
+        'native history stays attached to Codex',
+    ]
+    await async_wait_until(lambda: len(headless.executed) == 1, timeout=10, interval=.05)
+    assert [sid for sid, _, _ in headless.executed] == [new]
 
 
 def _lineage(db, root_stamp, tip_stamp, tip_column=None, tip_value=None):

@@ -13,6 +13,7 @@ import { FloatBox } from './appChrome.js'
 import { BillingOverlay } from './billingOverlay.js'
 import { ConnectionSetupOverlay } from './connectionSetupOverlay.js'
 import { ConnectorsOverlay } from './connectorsOverlay.js'
+import { LinkedThreadPicker } from './linkedThreadPicker.js'
 import { SecretPrompt, SudoPrompt, VaultCodePrompt, VaultSaveLoginPrompt, VaultUnlockPrompt } from './maskedPrompt.js'
 import { ModelPicker } from './modelPicker.js'
 import { OverlayHint } from './overlayControls.js'
@@ -400,6 +401,31 @@ export function FloatingOverlays({
             gw={gw}
             maxWidth={width}
             onClose={() => patchOverlayState({ connectors: false })}
+            t={theme}
+          />
+        </FloatBox>
+      )
+    })
+  }
+
+  if (overlay.link) {
+    // `/link <agent>` scopes the picker to that agent's threads; bare `/link` lists all three.
+    const initialAgent = typeof overlay.link === 'object' ? overlay.link.agent : undefined
+
+    widgets.push({
+      id: 'link',
+      render: width => (
+        <FloatBox color={theme.color.border}>
+          <LinkedThreadPicker
+            gw={gw}
+            initialAgent={initialAgent}
+            maxWidth={width}
+            onCancel={() => patchOverlayState({ link: false })}
+            onResume={sessionId => {
+              // resumeById closes the sessions switcher itself; this panel is ours to close.
+              patchOverlayState({ link: false })
+              onResumeSelect(sessionId)
+            }}
             t={theme}
           />
         </FloatBox>

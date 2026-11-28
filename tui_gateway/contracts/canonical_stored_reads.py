@@ -2,7 +2,8 @@
 
 A picker previews a conversation before it opens it: ``session.resume`` would subscribe the caller's
 pane, and ``session.events.since`` replays only what an attached viewer missed. A poller follows a
-conversation, or one of its delegated children (``subagent_id``), from the cursor it holds.
+conversation, one of its delegated children (``subagent_id``), or an authorized native Codex child
+thread (``codex_subagent_thread_id``), from the cursor it holds.
 """
 from typing import Literal
 
@@ -15,7 +16,9 @@ from .registry import canonical_method
 class StoredTranscriptParams(CanonicalSessionParams):
     # A delegated child of ``session_id`` (a ``subagent.list`` row's ``subagent_id``): read its transcript.
     subagent_id: str | None = None
-    # ``next_cursor`` of a previous page of this session (and child) in this order; omitted for the first page.
+    # A native Codex child thread referenced by this session's Codex history; validated on every read.
+    codex_subagent_thread_id: str | None = None
+    # ``next_cursor`` of a previous page of this session or child in this order; omitted for the first page.
     cursor: str | None = None
     limit: int = 100
     # ``latest``: the first page is the newest rows and each next page is older.
@@ -30,6 +33,8 @@ class StoredTranscriptRow(TranscriptMessage):
     the parts written for the model), ``compacted_messages``, ``timestamp`` and the stored ``row_id``."""
 
     row_kind: Literal['message', 'compaction']
+    # Opaque native-row identity for paged Codex history (not a writable Hermes row id).
+    codex_native_row_id: str | None = None
     # How many messages the compaction summarized, when its handoff names it (compaction rows only).
     compacted_messages: int | None = None
     # A row too large for a page alone keeps only its role, kind, time, ids and the head of its text.
@@ -38,6 +43,10 @@ class StoredTranscriptRow(TranscriptMessage):
 
 class StoredTranscriptResult(Result):
     session_id: str
+    # True for a linked Codex pointer. The first latest page can identify the read path before attach.
+    linked_codex: bool = False
+    # Stable opaque binding for a linked native thread, checked across pre- and post-attach reads.
+    linked_history_identity: str | None = None
     # Oldest first in either order.
     rows: list[StoredTranscriptRow]
     # Opaque, bound to this session, child and order. Oldest order: never null while the transcript is
@@ -49,9 +58,9 @@ class StoredTranscriptResult(Result):
     # compaction, a rotation, a rewind, a rewrite or deletion of a covered row or of an earlier segment's row),
     # and in either order when appends took a rotated lineage past ``sessions.max_resume_messages``.
     reset: bool
-    # Only with ``subagent_id``: the child read, whether it was found (a foreign or unknown child is
-    # ``available: false`` with no rows and a null cursor), whether it is still running, and its own
-    # stored session (the newest segment).
+    # Only with a child selector: whether the child read was found (a foreign or unknown child is
+    # ``available: false`` with no rows and a null cursor), whether it is still running, and, for a Hermes
+    # delegated child only, its own stored session (the newest segment).
     subagent_id: str | None = None
     available: bool | None = None
     running: bool | None = None
@@ -73,9 +82,12 @@ canonical_method('session.transcript', params=StoredTranscriptParams, result=Sto
                      "cursor stays valid across later compactions and turns. A rotated lineage past "
                      "`sessions.max_resume_messages` pages only its current segment (a cursor from before it "
                      "crossed, or a latest-order cursor from before a compaction rotated that segment, answers "
-                     "`reset: true`). With `subagent_id`: "
-                     "a delegated child of the session (running: through the parent's roster; finished: "
-                     "through its stored row, when its ancestry reaches this conversation); a foreign or "
-                     "unknown child is `available: false`. Refusals: invalid_params (a cursor issued for "
+                     "`reset: true`). `subagent_id` reads a delegated Hermes child. "
+                     "`codex_subagent_thread_id` reads a Codex child only when its read-only native parent ancestry "
+                     "reaches this authorized session and its immediate parent history references the child; "
+                     "the request never resumes or mutates Codex threads. The two child selectors are mutually exclusive. "
+                     "With `subagent_id`, running children come from the parent's roster and finished children "
+                     "from their stored rows when their ancestry reaches this conversation. A foreign or "
+                     "unknown child selector is `available: false`. Refusals: invalid_params (a cursor issued for "
                      "another session, child or order, or not by this read), not_found, permission_denied, "
                      "profile_mismatch.")

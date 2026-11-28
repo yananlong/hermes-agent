@@ -6,7 +6,7 @@ import { memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { useLocation } from 'react-router'
 
 import type { SubmitTextOptions } from '@/app/session/hooks/use-prompt-actions/utils'
-import { sessionShouldHaveTranscript } from '@/app/session/hooks/use-session-actions/utils'
+import { preserveLocalPendingTurnMessages, sessionShouldHaveTranscript } from '@/app/session/hooks/use-session-actions/utils'
 import { Thread } from '@/components/assistant-ui/thread'
 import { TranscriptWindowProvider } from '@/components/assistant-ui/thread/transcript-window'
 import { Backdrop } from '@/components/Backdrop'
@@ -23,6 +23,7 @@ import { useI18n } from '@/i18n'
 import type { ChatMessage } from '@/lib/chat-messages'
 import { NEW_SESSION_TITLE, sessionTitle } from '@/lib/chat-runtime'
 import { useIncrementalExternalStoreRuntime } from '@/lib/incremental-external-store-runtime'
+import { linkedForeignAgent } from '@/lib/linked-session'
 import { useStoreSelector } from '@/lib/use-session-slice'
 import { cn } from '@/lib/utils'
 import { migrateSessionDraft } from '@/store/composer'
@@ -51,11 +52,14 @@ import {
   shouldMigrateComposerScope
 } from '@/store/session'
 import { $focusedStoredSessionId } from '@/store/session-focus'
+import type { SessionOwnerRoute } from '@/store/session-request-router'
 import { $sessionStates, sessionTileDelegate } from '@/store/session-states'
 import { $transcriptTailBySessionId, transcriptTailState } from '@/store/transcript-tail'
 import { isAuxiliaryWindow, isMainWindow } from '@/store/windows'
 
 import { primaryRouteSelectedSessionId, routeSessionId } from '../routes'
+import { agentDisplayName, continueReason, isLinkedThreadWritable } from '../session-import/capability'
+import { useHostCapability } from '../session-import/use-host-capability'
 import { titlebarHeaderBaseClass, titlebarHeaderShadowClass, titlebarHeaderTitleClass } from '../shell/titlebar'
 
 import { ChatDropOverlay } from './chat-drop-overlay'
@@ -240,6 +244,64 @@ function useMessagesWhileVisible($messages: ReadableAtom<ChatMessage[]>, enabled
 }
 
 /**
+ * Whether "Show earlier" has to reach the network instead of widening the
+ * in-memory window: the current slice is exhausted (or the tail was replaced
+ * under the view), and there is a persisted page left to fetch.
+ */
+function needsOlderPageFetch(state: {
+  runtimeId: string
+  storedId: null | string
+  tailError: string | undefined
+  windowed: boolean | undefined
+  hasOlderPage: boolean
+}): boolean {
+  const exhausted = state.tailError === 'changed' || !state.windowed
+
+  return exhausted && Boolean(state.runtimeId) && Boolean(state.storedId) && state.hasOlderPage
+}
+
+/**
+ * The tail profile for a session, from the owner hint when one resolves.
+ *
+ * A Bot chat opened IN PLACE in the main pane (openStoredBotChat) keeps the
+ * active profile, so the ambient scope carries no owner. Publishing the owner
+ * hint's (connection, profile) as the scope is what lets voice playback speak
+ * with the Bot's own voice; a tile's scope already names its owner and is kept
+ * as is.
+ */
+function useTailProfile(storedId: null | string, connectionId: string, activeProfile: string) {
+  const ownerRoute = storedId
+    ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
+    : undefined
+
+  const ownerConnection = ownerRoute?.connectionId
+  const ownerProfile = ownerRoute?.targetProfile || ownerRoute?.profile
+
+  const tailProfile = useMemo(
+    () => (ownerProfile ? { connectionId: ownerConnection, profile: ownerProfile } : undefined),
+    [ownerConnection, ownerProfile]
+  )
+
+  return { ownerConnection, ownerProfile, tailProfile }
+}
+
+/**
+ * The composer scope for this chat: the session owner's, when the ambient
+ * scope has none of its own.
+ */
+function useOwnedComposerScope(ownerConnection: string | undefined, ownerProfile: string | undefined) {
+  const parentScope = useComposerScope()
+
+  return useMemo(
+    () =>
+      parentScope.profile || !ownerProfile
+        ? parentScope
+        : { ...parentScope, connectionId: ownerConnection || undefined, profile: ownerProfile },
+    [ownerConnection, ownerProfile, parentScope]
+  )
+}
+
+/**
  * Owns the $messages subscription and the assistant-ui external-store runtime.
  *
  * Isolated from ChatView so the per-token delta flush (which replaces the
@@ -265,31 +327,8 @@ export function ChatRuntimeBoundary({
   const activeProfile = useStore($activeGatewayProfile)
   const connectionId = connection?.connectionId || (connection?.mode === 'local' ? 'local' : '')
 
-  const ownerRoute = storedId
-    ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
-    : undefined
-
-  const ownerConnection = ownerRoute?.connectionId
-  const ownerProfile = ownerRoute?.targetProfile || ownerRoute?.profile
-
-  const tailProfile = useMemo(
-    () => (ownerProfile ? { connectionId: ownerConnection, profile: ownerProfile } : undefined),
-    [ownerConnection, ownerProfile]
-  )
-
-  // A Bot chat opened IN PLACE in the main pane (openStoredBotChat) keeps the
-  // active profile, so the ambient scope carries no owner. Publish the session
-  // owner hint's (connection, profile) here so voice playback speaks with the
-  // Bot's own voice; a tile's scope already names its owner and is kept as is.
-  const parentScope = useComposerScope()
-
-  const composerScope = useMemo(
-    () =>
-      parentScope.profile || !ownerProfile
-        ? parentScope
-        : { ...parentScope, connectionId: ownerConnection || undefined, profile: ownerProfile },
-    [ownerConnection, ownerProfile, parentScope]
-  )
+  const { ownerConnection, ownerProfile, tailProfile } = useTailProfile(storedId, connectionId, activeProfile)
+  const composerScope = useOwnedComposerScope(ownerConnection, ownerProfile)
 
   const history = useHistoryWindow({
     scopeKey: JSON.stringify([runtimeId, storedId, tailProfile, connectionId, activeProfile, suppressMessages]),
@@ -357,7 +396,7 @@ export function ChatRuntimeBoundary({
   // appears/retires as tail hydrations and backfill pages record their state.
   const transcriptTailStates = useStore($transcriptTailBySessionId)
   const tailState = storedId && transcriptTailStates ? transcriptTailState(storedId, tailProfile) : undefined
-  const restBackfillAvailable = Boolean(tailState?.possiblyTruncated)
+  const restBackfillAvailable = Boolean(tailState?.possiblyTruncated || tailState?.native?.error)
 
   const expandWindow = useCallback(
     async (beforePrepend?: () => void) => {
@@ -370,10 +409,13 @@ export function ChatRuntimeBoundary({
       // Network latency is not scroll intent. Capture at arrival, immediately
       // before the store prepend, and only grow a window that has a page to show.
       if (
-        !windowStateRef.current.get(runtimeIdRef.current ?? '')?.state.window.windowed &&
-        runtimeId &&
-        storedId &&
-        transcriptBackfillAvailable(storedId, tailProfile)
+        needsOlderPageFetch({
+          runtimeId,
+          storedId,
+          tailError: tailState?.native?.error,
+          windowed: windowStateRef.current.get(runtimeIdRef.current ?? '')?.state.window.windowed,
+          hasOlderPage: transcriptBackfillAvailable(storedId, tailProfile)
+        })
       ) {
         let grew = false
         await backfillOlderTranscriptPage({
@@ -384,21 +426,14 @@ export function ChatRuntimeBoundary({
           // resolves after the user moved on — same pattern as isCurrentResume.
           isCurrent: () => view.$storedId.get() === storedId && view.$runtimeId.get() === runtimeId,
           heldMessages: () => view.$messages.get(),
+          applyResetPage: page => {
+            grew = applyNativeResetPage(page, runtimeId, beforePrepend) || grew
+          },
           applyOlderPage: olderPage => {
-            const current = view.$messages.get()
-
-            if (mergeOlderTranscriptPage(current, olderPage) === current) {
-              return false
-            }
-
-            beforePrepend?.()
-            setWindowPages(pages => pages + 1)
-            sessionTileDelegate()?.updateSession(runtimeId, state => {
-              const merged = mergeOlderTranscriptPage(state.messages, olderPage)
-              grew = merged !== state.messages
-
-              return grew ? { ...state, messages: merged } : state
-            })
+            grew = applyOlderTranscriptPage(
+              olderPage, runtimeId, view.$messages.get(), beforePrepend,
+              () => setWindowPages(pages => pages + 1),
+            ) || grew
           }
         })
 
@@ -412,7 +447,7 @@ export function ChatRuntimeBoundary({
 
       return true
     },
-    [runtimeId, storedId, tailProfile, view, history.page, history.revealOlder]
+    [runtimeId, storedId, tailProfile, tailState?.native?.error, view, history.page, history.revealOlder]
   )
 
   // An open history page carries its own reach: its first prompt is the anchor,
@@ -428,6 +463,7 @@ export function ChatRuntimeBoundary({
   const transcriptWindow = useMemo(
     () => ({
       olderAvailable,
+      historyError: tailState?.native?.error ?? null,
       expandWindow,
       revealRow,
       returnToLatest,
@@ -437,7 +473,7 @@ export function ChatRuntimeBoundary({
       isHistorical,
       newerAvailable
     }),
-    [expandWindow, olderAvailable, revealRow, returnToLatest, historicalMessages, isHistorical, newerAvailable]
+    [expandWindow, olderAvailable, revealRow, returnToLatest, historicalMessages, isHistorical, newerAvailable, tailState?.native?.error]
   )
 
   const runtime = useIncrementalExternalStoreRuntime<ThreadMessage>({
@@ -505,6 +541,52 @@ function ComposerHeartField() {
       }}
     />
   )
+}
+
+/** Replace the store's native tail with a refetched reset page, keeping unsent local turns.
+ *
+ *  A reset means the native thread moved under us, so the previously-paged `codex:` rows are stale
+ *  by definition and are dropped rather than merged. */
+function applyNativeResetPage(
+  page: ChatMessage[],
+  runtimeId: string,
+  beforePrepend?: () => void
+): boolean {
+  beforePrepend?.()
+  sessionTileDelegate()?.updateSession(runtimeId, state => ({
+    ...state,
+    messages: preserveLocalPendingTurnMessages(
+      page,
+      state.messages.filter(message => !message.id.startsWith('codex:'))
+    )
+  }))
+  return true
+}
+
+/** Prepend one older page to the store. Returns false when it added nothing (exhausted or
+ *  overlapping only), so the caller does not leave the list waiting for a commit. */
+function applyOlderTranscriptPage(
+  olderPage: ChatMessage[],
+  runtimeId: string,
+  current: ChatMessage[],
+  beforePrepend: (() => void) | undefined,
+  onGrew: () => void
+): boolean {
+
+  if (mergeOlderTranscriptPage(current, olderPage) === current) {
+    return false
+  }
+
+  beforePrepend?.()
+  onGrew()
+  let grew = false
+  sessionTileDelegate()?.updateSession(runtimeId, state => {
+    const merged = mergeOlderTranscriptPage(state.messages, olderPage)
+    grew = merged !== state.messages
+
+    return grew ? { ...state, messages: merged } : state
+  })
+  return grew
 }
 
 const ChatViewContent = memo(function ChatViewContent({
@@ -602,6 +684,32 @@ const ChatViewContent = memo(function ChatViewContent({
   const selectedSessionId = useStore(view.$storedId)
   const sessions = useStore($sessions)
   const resumeExhaustedSessionId = useStore($resumeExhaustedSessionId)
+
+  // A linked foreign session (Codex / Claude / Mistral pointer row) renders its
+  // transcript read-only: the native tool owns the history, so this surface
+  // hides the composer and shows the linked read-only note instead. Derived
+  // from the loaded rows so a flag that arrives on a later refresh flips the
+  // surface without waiting for a resume.
+  const linkedAgent = useStoreSelector($sessions, rows => {
+    const id = selectedSessionId || activeSessionId
+
+    return linkedForeignAgent(id ? rows.find(session => sessionMatchesStoredId(session, id)) : undefined)
+  })
+
+  // Can a send APPEND to that native thread? Only the CONNECTED gateway knows: it owns the
+  // store and spawns the CLI. `undefined` (no owner yet) and an old gateway's -32601 both read
+  // as unknown, which keeps the read-only note and the hidden composer exactly as before.
+  const linkedCapabilityOwner = useMemo<SessionOwnerRoute | undefined>(() => {
+    const connectionId = composerScope.connectionId
+    const profile = composerScope.profile ?? activeGatewayProfile
+
+    return connectionId && profile ? { connectionId, profile } : undefined
+  }, [composerScope.connectionId, composerScope.profile, activeGatewayProfile])
+  const linkedCapability = useHostCapability(linkedAgent ? linkedCapabilityOwner : undefined)
+  const linkedAppendable = Boolean(
+    linkedAgent && isLinkedThreadWritable(linkedCapability, linkedAgent)
+  )
+  const linkedReadOnlyReason = linkedAgent ? continueReason(linkedCapability, linkedAgent) : 'capability_unknown'
 
   // Durable composer/queue scope (lineage root) so auto-compression tip rotation
   // does not wipe an in-progress draft or orphan /queue entries. For the
@@ -706,6 +814,9 @@ const ChatViewContent = memo(function ChatViewContent({
   const threadLoading = threadLoadingState(loadingSession, busy, awaitingResponse, lastVisibleIsUser)
 
   const showChatBar = useShowChatBar({
+    // Read-only is the FALLBACK: a linked thread keeps its hidden composer until the host says a
+    // send would append to the native thread there.
+    linkedReadOnly: Boolean(linkedAgent) && !linkedAppendable,
     loadingSession,
     resumeExhausted,
     routedSessionId,
@@ -845,6 +956,25 @@ const ChatViewContent = memo(function ChatViewContent({
           {/* A session drag hovering an EDGE hands the visual to the zone
               target; the link overlay shows only for the center region. */}
           <ChatDropOverlay kind={overlayKind} />
+          {/* Linked foreign sessions (Codex / Claude / Mistral) are pointer rows on the
+              serving host. Without a writable-capability answer they render read-only: no
+              composer, just the same note the import picker shows. When the host DOES confirm
+              an append, the composer is real and the note says the turn lands in the native
+              thread there — visible to that tool. */}
+          {linkedAgent && (
+            <div
+              className="border-t border-(--ui-stroke-tertiary) bg-(--ui-bg-quaternary) px-6 py-3 text-xs leading-5 text-(--ui-text-secondary)"
+              data-linked-appendable={linkedAppendable ? 'true' : 'false'}
+              data-linked-reason={linkedReadOnlyReason ?? undefined}
+              role="note"
+            >
+              {linkedAppendable
+                ? t.sessionImport.hostCapabilityWritable(agentDisplayName(linkedAgent))
+                : linkedReadOnlyReason && linkedReadOnlyReason !== 'capability_unknown'
+                  ? t.sessionImport.hostCapabilityReadOnly(agentDisplayName(linkedAgent))
+                  : t.sessionImport.linkedReadonlyWarning}
+            </div>
+          )}
         </div>
         {/* Docked composers overlay their pane; the shared float escapes pane
             clipping through a stable portal host without remounting its editor. */}

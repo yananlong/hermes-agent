@@ -104,6 +104,10 @@ class TestResumeQuietStderr:
         db.get_session.return_value = {"id": "20260524_111111_xyz"}
         db.resolve_resume_session_id.return_value = "20260524_111111_xyz"
         db.get_messages_as_conversation.return_value = []
+        # A bare MagicMock invents `linked_history` and returns a truthy stub, which would make an
+        # ordinary empty session look like a linked Codex pointer. Model a store without the
+        # capability (linked_display_rows treats a non-callable attribute as "not linked").
+        db.linked_history = None
         db._conn = MagicMock()
 
         cli = _make_cli(quiet=True, db=db)

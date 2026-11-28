@@ -46,6 +46,45 @@ export const fmtMsgTimestamp = (createdAt: number | undefined): null | string =>
   return `[${hh}:${mm}]`
 }
 
+/** A linked Codex thread's tool row: already projected by the backend's display policy, so it is
+ *  rendered verbatim rather than re-derived through the local tool-call formatter. */
+function LinkedHistoryToolRow({ theme, text }: { theme: Theme; text: string }) {
+  return (
+    <Box alignSelf="flex-start" borderColor={theme.color.muted} borderStyle="round" marginLeft={3} paddingX={1}>
+      <Text color={theme.color.muted}>{sanitizeAnsiForRender(text)}</Text>
+    </Box>
+  )
+}
+
+/** A completed tool result: a rounded dim box, one truncated line. */
+function ToolRow({ compact, cols, msg, theme, emptyLabel }: {
+  compact?: boolean
+  cols: number
+  msg: Msg
+  theme: Theme
+  emptyLabel: string
+}) {
+  if (msg.linkedHistory) return <LinkedHistoryToolRow theme={theme} text={msg.text} />
+  const maxChars = Math.max(24, cols - 14)
+  const stripped = hasAnsi(msg.text) ? stripAnsi(msg.text) : msg.text
+  const safeAnsi = hasAnsi(msg.text) ? sanitizeAnsiForRender(msg.text) : msg.text
+  const preview = compactPreview(stripped, maxChars) || emptyLabel
+
+  return (
+    <Box alignSelf="flex-start" borderColor={theme.color.muted} borderStyle="round" marginLeft={3} paddingX={1}>
+      {hasAnsi(msg.text) ? (
+        <Text wrap="truncate-end">
+          <Ansi>{safeAnsi}</Ansi>
+        </Text>
+      ) : (
+        <Text color={theme.color.muted} wrap="truncate-end">
+          {preview}
+        </Text>
+      )}
+    </Box>
+  )
+}
+
 export const MessageLine = memo(function MessageLine({
   cols,
   compact,
@@ -129,24 +168,7 @@ export const MessageLine = memo(function MessageLine({
   }
 
   if (msg.role === 'tool') {
-    const maxChars = Math.max(24, cols - 14)
-    const stripped = hasAnsi(msg.text) ? stripAnsi(msg.text) : msg.text
-    const safeAnsi = hasAnsi(msg.text) ? sanitizeAnsiForRender(msg.text) : msg.text
-    const preview = compactPreview(stripped, maxChars) || T.emptyToolResult
-
-    return (
-      <Box alignSelf="flex-start" borderColor={t.color.muted} borderStyle="round" marginLeft={3} paddingX={1}>
-        {hasAnsi(msg.text) ? (
-          <Text wrap="truncate-end">
-            <Ansi>{safeAnsi}</Ansi>
-          </Text>
-        ) : (
-          <Text color={t.color.muted} wrap="truncate-end">
-            {preview}
-          </Text>
-        )}
-      </Box>
-    )
+    return <ToolRow compact={compact} cols={cols} emptyLabel={T.emptyToolResult} msg={msg} theme={t} />
   }
 
   // A tool's image, hung under its trail line at the body indent.

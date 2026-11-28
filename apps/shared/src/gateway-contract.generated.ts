@@ -2527,6 +2527,185 @@ export interface SessionForeignImportResult {
   session_id: string
   already_imported?: boolean
 }
+/** ``probe_version`` opts into a bounded ``--version`` spawn per agent; default stays a stat. */
+export interface SessionForeignStatusParams {
+  profile?: string | null
+  probe_version?: boolean | null
+}
+/** Host capability for every linked agent, profiled like the sibling ``session.foreign.*``. ``host`` is the same display label ``session.foreign.list`` returns (the hostname the gateway serves from), so a remote client can say "not installed on <host>" without inventing one. */
+export interface SessionForeignStatusResult {
+  host: string
+  agents?: ForeignAgentCapability[]
+}
+/** One agent's row of ``session.foreign.status``. */
+export interface ForeignAgentCapability {
+  agent: ForeignAgent
+  label: string
+  store: ForeignStoreCapability
+  cli: ForeignCliCapability
+  continue_status: ForeignContinueCapability
+}
+/** The three native tools a Hermes row can be linked to. */
+export type ForeignAgent = 'codex' | 'claude' | 'mistral'
+/** ``hermes_cli/foreign_host_capability.store_capability`` — evaluated on the serving host. ``available`` = the resolved store directory exists; ``readable`` = this gateway also proved it can enumerate it. No path is ever returned: a client needs the verdict, not the layout. */
+export interface ForeignStoreCapability {
+  available: boolean
+  readable: boolean
+  reason_code?: ForeignCapabilityReason | null
+  reason?: string | null
+}
+/** Why a capability is missing, as a closed set (so a client keys its copy, never a sentence). ``store_missing``: no native store directory on the serving host. ``store_unreadable``: it is there but this gateway cannot enumerate it. ``profile_scope``: the requested profile has no store of its own (a routed profile must configure its ``CODEX_HOME`` / ``CLAUDE_CONFIG_DIR`` / ``VIBE_HOME``). ``cli_missing``: the native CLI does not resolve on the host. ``build_unsupported``: this gateway build has no append path for that agent at all. ``send_read_only``: the build can append, but its send admission still refuses linked rows. */
+export type ForeignCapabilityReason = 'store_missing' | 'store_unreadable' | 'profile_scope' | 'cli_missing' | 'build_unsupported' | 'send_read_only'
+/** The native CLI as it resolves on the serving host. ``command`` is the display token (an absolute configured binary collapses to its basename), ``path`` is ``~``-collapsed, and ``version`` is filled only when the caller asked for the ``--version`` probe — a status surface that runs on mount must stay a stat / ``which``. ``source`` says whether the profile pinned the binary (``config``) or PATH resolved it. */
+export interface ForeignCliCapability {
+  available: boolean
+  command: string
+  path?: string | null
+  version?: string | null
+  source?: 'config' | 'path'
+  reason_code?: ForeignCapabilityReason | null
+  reason?: string | null
+}
+/** Can a turn be APPENDED to this agent's native thread from the serving host? ``supported`` is the build question (the append path ships in this gateway); ``writable`` is the end-to-end verdict a client acts on: supported, the store is readable here, the CLI resolves here, and ``prompt.submit`` admits a send onto a linked row of this agent. When ``writable`` is false, ``reason_code`` names the first failing condition and ``reason`` is the sentence to render. A client must treat an ABSENT method as unknown, never as writable. */
+export interface ForeignContinueCapability {
+  supported: boolean
+  writable: boolean
+  reason_code?: ForeignCapabilityReason | null
+  reason?: string | null
+}
+export interface SessionCodexPageParams {
+  profile?: string | null
+  cursor?: string | null
+  limit?: number | null
+}
+export interface SessionCodexListResult {
+  threads?: CodexThreadRow[]
+  next_cursor?: string | null
+}
+export interface CodexThreadRow {
+  id: string
+  title: string
+  cwd?: string | null
+  updated_at?: number | null
+  preview?: string
+  source?: string | null
+}
+export interface SessionCodexHistoryParams {
+  profile?: string | null
+  cursor?: string | null
+  limit?: number | null
+  session_id: string
+  thread_id: string
+}
+export interface SessionCodexHistoryResult {
+  turns?: CodexDisplayTurn[]
+  next_cursor?: string | null
+}
+/** A safe display projection of one turn, with native item payloads removed. */
+export interface CodexDisplayTurn {
+  id: string
+  status?: string | null
+  rows?: Record<string, unknown>[]
+}
+export interface SessionCodexThreadParams {
+  profile?: string | null
+  thread_id: string
+}
+export interface SessionCodexLinkResult {
+  session_id: string
+  already_linked: boolean
+}
+export interface SessionClaudePageParams {
+  profile?: string | null
+  cursor?: string | null
+  limit?: number | null
+}
+export interface SessionClaudeListResult {
+  threads?: ClaudeThreadRow[]
+  next_cursor?: string | null
+}
+/** ``hermes_cli/claude_linked_threads.list_claude_threads`` row; ``preview`` stays empty by policy. */
+export interface ClaudeThreadRow {
+  id: string
+  title: string
+  cwd?: string | null
+  updated_at?: number | null
+  preview?: string
+  source?: string | null
+}
+export interface SessionClaudeHistoryParams {
+  profile?: string | null
+  cursor?: string | null
+  limit?: number | null
+  session_id: string
+  session_id_native?: string | null
+  thread_id?: string | null
+}
+export interface SessionClaudeHistoryResult {
+  messages?: ClaudeDisplayMessage[]
+  next_cursor?: string | null
+}
+/** A safe display projection of one native Claude row, with payloads redacted. */
+export interface ClaudeDisplayMessage {
+  role: string
+  content: string
+  timestamp?: number | null
+}
+/** ``session_id`` is the Hermes session to link; ``thread_id`` is accepted as its alias. */
+export interface SessionClaudeThreadParams {
+  profile?: string | null
+  session_id?: string | null
+  thread_id?: string | null
+}
+export interface SessionClaudeLinkResult {
+  session_id: string
+  already_linked: boolean
+}
+export interface SessionMistralPageParams {
+  profile?: string | null
+  cursor?: string | null
+  limit?: number | null
+}
+export interface SessionMistralListResult {
+  threads?: MistralThreadRow[]
+  next_cursor?: string | null
+}
+/** ``hermes_cli/mistral_linked_threads.list_mistral_threads`` row; ``preview`` stays empty by policy. */
+export interface MistralThreadRow {
+  id: string
+  title: string
+  cwd?: string | null
+  updated_at?: number | null
+  preview?: string
+  source?: string | null
+}
+export interface SessionMistralHistoryParams {
+  profile?: string | null
+  cursor?: string | null
+  limit?: number | null
+  session_id: string
+  session_id_native?: string | null
+  thread_id?: string | null
+}
+export interface SessionMistralHistoryResult {
+  messages?: MistralDisplayMessage[]
+  next_cursor?: string | null
+}
+/** A safe display projection of one native Vibe row, with payloads redacted. */
+export interface MistralDisplayMessage {
+  role: string
+  content: string
+}
+/** ``session_id`` is the Hermes session to link; ``thread_id`` is accepted as its alias. */
+export interface SessionMistralThreadParams {
+  profile?: string | null
+  session_id?: string | null
+  thread_id?: string | null
+}
+export interface SessionMistralLinkResult {
+  session_id: string
+  already_linked: boolean
+}
 /** ``delegations``: recently failed async delegation tasks for the session (durable store), newest first. */
 export interface SubagentListResult {
   subagents?: SubagentSnapshot[]
@@ -3347,6 +3526,7 @@ export interface SessionResumeParams {
   close_on_disconnect?: boolean
   inline_images?: boolean
 }
+/** The canonical owner's resume snapshot ALSO carries `linked_codex`, but this stdio method never sets it: a linked pointer's native transcript is paged by the canonical ``session.transcript`` read, which is the only transport that serves one. */
 export interface SessionResumeResult {
   session_id: string
   message_count: number
@@ -5279,9 +5459,11 @@ export interface CanonicalSnapshot {
   session_id: string
   stored_session_id: string
   messages: TranscriptMessage[]
+  linked_codex?: boolean
+  linked_history_identity?: string | null
   messages_omitted?: boolean | null
   display_messages?: TranscriptMessage[] | null
-  message_count: number
+  message_count: number | null
   running: boolean
   authority_epoch: number
   replay_epoch: string
@@ -5645,6 +5827,7 @@ export interface StoredTranscriptParams {
   profile?: string | null
   session_id: string
   subagent_id?: string | null
+  codex_subagent_thread_id?: string | null
   cursor?: string | null
   limit?: number
   order?: 'oldest' | 'latest'
@@ -5652,6 +5835,8 @@ export interface StoredTranscriptParams {
 }
 export interface StoredTranscriptResult {
   session_id: string
+  linked_codex?: boolean
+  linked_history_identity?: string | null
   rows: StoredTranscriptRow[]
   next_cursor: string | null
   reset: boolean
@@ -5676,6 +5861,7 @@ export interface StoredTranscriptRow {
   labels?: ToolLabel[] | null
   reasoning?: string | null
   row_kind: 'message' | 'compaction'
+  codex_native_row_id?: string | null
   compacted_messages?: number | null
   truncated?: boolean | null
   [key: string]: unknown
@@ -6774,8 +6960,20 @@ export interface RpcMethods {
   'session.branch_stored': { params: SessionBranchStoredParams; result: SessionBranchStoredResult }
   /** session.branch of the whole history without echoing the copied transcript back. */
   'session.branch_whole': { params: SessionBranchWholeParams; result: SessionBranchWholeResult }
+  /** Read a safe display page for a Claude Code session linked to this session. */
+  'session.claude.history': { params: SessionClaudeHistoryParams; result: SessionClaudeHistoryResult }
+  /** Link this profile to an existing native Claude Code session without copying it. */
+  'session.claude.link': { params: SessionClaudeThreadParams; result: SessionClaudeLinkResult }
+  /** List native Claude Code sessions without importing or resuming them. */
+  'session.claude.list': { params: SessionClaudePageParams; result: SessionClaudeListResult }
   /** Tear down a live session (its stored row stays resumable). */
   'session.close': { params: SessionCloseParams; result: SessionCloseResult }
+  /** Read a safe display page for a Codex thread linked to this session. */
+  'session.codex.history': { params: SessionCodexHistoryParams; result: SessionCodexHistoryResult }
+  /** Link this profile to an existing native Codex thread without copying it. */
+  'session.codex.link': { params: SessionCodexThreadParams; result: SessionCodexLinkResult }
+  /** List native Codex threads without importing or resuming them. */
+  'session.codex.list': { params: SessionCodexPageParams; result: SessionCodexListResult }
   /** Manual /compress of an idle session, optionally focused on a topic. */
   'session.compress': { params: SessionCompressParams; result: SessionCompressResult }
   /** Cursor-style split of the context window by category. */
@@ -6800,12 +6998,20 @@ export interface RpcMethods {
   'session.foreign.list': { params: SessionForeignListParams; result: SessionForeignListResult }
   /** Preview a foreign session's tail before importing it. */
   'session.foreign.preview': { params: SessionForeignIdParams; result: SessionForeignPreviewResult }
+  /** Per-agent host capability on the serving backend: native store, CLI and writable-continue. */
+  'session.foreign.status': { params: SessionForeignStatusParams; result: SessionForeignStatusResult }
   /** The durable display transcript (ancestors included, row ids attached). */
   'session.history': { params: SessionHistoryParams; result: SessionHistoryResult }
   /** Stop the running turn (and streaming TTS); retires the crash-recovery marker. */
   'session.interrupt': { params: SessionInterruptParams; result: SessionInterruptResult }
   /** Human-facing stored sessions, most recent first (sub-agent / kanban sources denied). */
   'session.list': { params: SessionListParams; result: SessionListResult }
+  /** Read a safe display page for a Mistral Vibe session linked to this session. */
+  'session.mistral.history': { params: SessionMistralHistoryParams; result: SessionMistralHistoryResult }
+  /** Link this profile to an existing native Mistral Vibe session without copying it. */
+  'session.mistral.link': { params: SessionMistralThreadParams; result: SessionMistralLinkResult }
+  /** List native Mistral Vibe sessions without importing or resuming them. */
+  'session.mistral.list': { params: SessionMistralPageParams; result: SessionMistralListResult }
   /** Most recent human-facing session; errors fold into a null session_id. */
   'session.most_recent': { params: SessionMostRecentParams; result: SessionMostRecentResult }
   /** Redirect the active turn (queued for the next turn while the agent is still building). */
@@ -7124,7 +7330,13 @@ export const RPC_METHODS = [
   'session.branch',
   'session.branch_stored',
   'session.branch_whole',
+  'session.claude.history',
+  'session.claude.link',
+  'session.claude.list',
   'session.close',
+  'session.codex.history',
+  'session.codex.link',
+  'session.codex.list',
   'session.compress',
   'session.context_breakdown',
   'session.control',
@@ -7137,9 +7349,13 @@ export const RPC_METHODS = [
   'session.foreign.import',
   'session.foreign.list',
   'session.foreign.preview',
+  'session.foreign.status',
   'session.history',
   'session.interrupt',
   'session.list',
+  'session.mistral.history',
+  'session.mistral.link',
+  'session.mistral.list',
   'session.most_recent',
   'session.redirect',
   'session.resume',
@@ -7270,6 +7486,8 @@ export interface CanonicalRpcMethods {
   'session.account_usage': { params: SessionAccountUsageParams; result: SessionAccountUsage }
   /** The classic CLI's /goal, /subgoal, /loop, /heartbeat manager calls (state writes, the goal judge, quality gates), run by the owner on the session's row. */
   'session.automation': { params: SessionAutomationParams; result: SessionAutomationResult }
+  /** Manual /compress of an idle session through the owner mutation fence; linked Codex threads use native compaction. */
+  'session.compress': { params: SessionCompressParams; result: SessionCompressResult }
   'session.create': { params: CanonicalCreateParams; result: CanonicalSnapshot }
   /** Drop this connection's subscription; a stale subscription id answers detached=false. end_reason (snake_case): the viewer is closing the conversation; the last viewer leaving an idle local session ends its row with that reason. */
   'session.detach': { params: SessionDetachParams; result: SessionDetachResult }
@@ -7289,7 +7507,7 @@ export interface CanonicalRpcMethods {
   /** The session.usage dict on demand: what main's classic CLI read off its agent. */
   'session.stats': { params: SessionStatsParams; result: SessionStats }
   'session.steer': { params: CanonicalCorrectionParams; result: CanonicalCorrectionResult }
-  /** One page of a stored conversation's display rows across its compression lineage (live rows and rows a compaction archived, each logical message once, and each compaction handoff as a `row_kind: 'compaction'` row at its position), from the oldest or the newest. Never attaches the caller. A page holds at most `limit` (1-500) rows, compaction rows included, plus up to 64 tool results of the call at its edge, and at most 2 MiB of JSON, cut between tool groups (a single larger row keeps only its role, kind, time, ids and the head of its text, and carries `truncated`). Oldest order: read on until a page is empty, then poll with the same `next_cursor` for the rows written since; `reset: true` means the rows the cursor covered changed shape, so the reply starts again from the first page. Latest order: read on until `next_cursor` is null; its cursor stays valid across later compactions and turns. A rotated lineage past `sessions.max_resume_messages` pages only its current segment (a cursor from before it crossed, or a latest-order cursor from before a compaction rotated that segment, answers `reset: true`). With `subagent_id`: a delegated child of the session (running: through the parent's roster; finished: through its stored row, when its ancestry reaches this conversation); a foreign or unknown child is `available: false`. Refusals: invalid_params (a cursor issued for another session, child or order, or not by this read), not_found, permission_denied, profile_mismatch. */
+  /** One page of a stored conversation's display rows across its compression lineage (live rows and rows a compaction archived, each logical message once, and each compaction handoff as a `row_kind: 'compaction'` row at its position), from the oldest or the newest. Never attaches the caller. A page holds at most `limit` (1-500) rows, compaction rows included, plus up to 64 tool results of the call at its edge, and at most 2 MiB of JSON, cut between tool groups (a single larger row keeps only its role, kind, time, ids and the head of its text, and carries `truncated`). Oldest order: read on until a page is empty, then poll with the same `next_cursor` for the rows written since; `reset: true` means the rows the cursor covered changed shape, so the reply starts again from the first page. Latest order: read on until `next_cursor` is null; its cursor stays valid across later compactions and turns. A rotated lineage past `sessions.max_resume_messages` pages only its current segment (a cursor from before it crossed, or a latest-order cursor from before a compaction rotated that segment, answers `reset: true`). `subagent_id` reads a delegated Hermes child. `codex_subagent_thread_id` reads a Codex child only when its read-only native parent ancestry reaches this authorized session and its immediate parent history references the child; the request never resumes or mutates Codex threads. The two child selectors are mutually exclusive. With `subagent_id`, running children come from the parent's roster and finished children from their stored rows when their ancestry reaches this conversation. A foreign or unknown child selector is `available: false`. Refusals: invalid_params (a cursor issued for another session, child or order, or not by this read), not_found, permission_denied, profile_mismatch. */
   'session.transcript': { params: StoredTranscriptParams; result: StoredTranscriptResult }
   /** Ink ``!cmd`` / ``{!cmd}`` on the shared owner: one safe command for a local session, in its frozen launch cwd (``gateway/session_shell.py``). */
   'shell.exec': { params: CanonicalShellExecParams; result: ShellExecResult }
@@ -7338,6 +7556,7 @@ export const CANONICAL_RPC_METHODS = [
   'runtime.describe',
   'session.account_usage',
   'session.automation',
+  'session.compress',
   'session.create',
   'session.detach',
   'session.events.since',

@@ -321,6 +321,20 @@ function useTitlebarControlsVars(controlsPos: { left: number; top: number }): CS
   } as CSSProperties
 }
 
+function useCwdRuntimeInfoUpdater(
+  updateSessionState: ReturnType<typeof useSessionStateCache>['updateSessionState']
+) {
+  return useCallback(
+    (sessionId: string, { branch, cwd }: { branch?: string; cwd?: string }, storedSessionId?: string) =>
+      updateSessionState(
+        sessionId,
+        state => ({ ...state, branch: branch ?? state.branch, cwd: cwd ?? state.cwd }),
+        storedSessionId
+      ),
+    [updateSessionState]
+  )
+}
+
 export function ContribWiring({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const location = useLocation()
@@ -445,11 +459,8 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
   const { changeSessionCwd, refreshProjectBranch } = useCwdActions({
     activeSessionIdRef,
-    onSessionRuntimeInfo: useCallback(
-      (sessionId: string, { branch, cwd }: { branch?: string; cwd?: string }) =>
-        updateSessionState(sessionId, state => ({ ...state, branch: branch ?? state.branch, cwd: cwd ?? state.cwd })),
-      [updateSessionState]
-    ),
+    onSessionRuntimeInfo: useCwdRuntimeInfoUpdater(updateSessionState),
+    refreshSessions,
     requestGateway
   })
 

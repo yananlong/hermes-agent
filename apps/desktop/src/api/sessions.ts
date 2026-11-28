@@ -388,6 +388,40 @@ export async function listSidebarSessions(req: SidebarSessionsRequest): Promise<
 
 const runSessionMutation = createSessionMutationClient()
 
+type SessionMutationGatewayRequest = <T>(method: string, params?: Record<string, unknown>) => Promise<T>
+
+/** Move a stored linked Codex session without resuming it on the renderer's socket first.
+ * The mutation-snapshot endpoint supplies fresh CAS fences; the canonical owner then takes
+ * Codex's native writer lock and either commits the same thread's cwd or returns a typed busy
+ * refusal. There is deliberately no legacy/unfenced fallback for this cold-session path. */
+export function moveStoredLinkedSessionWorkspace<T>(
+  sessionId: string,
+  cwd: string,
+  requestGateway: SessionMutationGatewayRequest,
+  owner?: ProfileScope
+): Promise<T> {
+  const ownerScope = owner ?? getApiRequestProfile()
+  const sessionScope = sessionScoped(ownerScope)
+  const scope = { ...connectionScoped(), ...sessionScope }
+  const query = scope.profile ? `?profile=${encodeURIComponent(scope.profile)}` : ''
+  const path = `/api/sessions/${encodeURIComponent(sessionId)}`
+  const key = JSON.stringify([scope, sessionId, { operation: 'workspace', cwd }])
+
+  return runSessionMutation(
+    key,
+    () => hermesApi<SessionMutationSnapshot>({ ...scope, path: `${path}/mutation-snapshot${query}` }),
+    identity => requestGateway<T>('session.mutate', {
+      session_id: sessionId,
+      request_id: identity.request_id,
+      expected_revision: identity.expected_revision,
+      expected_generation: identity.expected_generation,
+      operation: 'workspace',
+      ...(sessionScope.profile ? { profile: sessionScope.profile } : {}),
+      payload: { cwd }
+    })
+  )
+}
+
 class MissingMutationSnapshotRoute extends Error {}
 
 /** Run one fenced session edit. The fencing protocol is a backend capability: an older
@@ -464,7 +498,7 @@ export function searchSessions(query: string, profile?: null | string): Promise<
 // the given `profile`). The backend resolves exact ids and unique prefixes and
 // 404s when the id isn't on that profile — so a cheap by-id lookup replaces the
 // cross-profile list scan when locating an unknown id's owner.
-export function getSession(id: string, profile?: ProfileScope): Promise<SessionInfo> {
+export function getSession(id: string, profile?: ProfileScope, options: { passive?: boolean } = {}): Promise<SessionInfo> {
   // Pin the read to the session's OWNER connection (#125372): the ambient dial
   // 404s on the wrong backend whenever two connections expose a same-named
   // profile.
@@ -473,7 +507,8 @@ export function getSession(id: string, profile?: ProfileScope): Promise<SessionI
 
   return hermesApi<SessionInfo>({
     ...scope,
-    path: `/api/sessions/${encodeURIComponent(id)}${suffix}`
+    path: `/api/sessions/${encodeURIComponent(id)}${suffix}`,
+    ...(options.passive ? { passive: true } : {})
   })
 }
 
@@ -530,7 +565,7 @@ export function getSessionMessages(
  */
 export const LATEST_SESSION_MESSAGES_LIMIT = 120
 
-export function getLatestSessionMessages(
+export async function getLatestSessionMessages(
   id: string,
   profile?: ProfileScope,
   options: { passive?: boolean } = {}
@@ -543,6 +578,24 @@ export function getLatestSessionMessages(
   // Only the lookup key is normalized — backfill replays `route` verbatim.
   const ambientConnectionId = route.connectionId || ambientOwnerConnectionId()
   const ambientProfile = getApiRequestProfile() || 'default'
+
+  // Resolve the owner before picking a history transport: the REST linked
+  // history endpoint uses shifting offsets, which are unsafe across appends.
+  // Capture the route first so a later foreground switch cannot move this read.
+  const detail = await getSession(id, route, options)
+  if (detail?.codex_linked) {
+    const owner = {
+      connectionId: ambientConnectionId ?? null,
+      profile: route.profile || detail.profile || ambientProfile
+    }
+    const { readNativeTranscriptPage } = await import('./native-session-history')
+    const page = await readNativeTranscriptPage(detail.id || id, owner, undefined, options.passive)
+    recordTranscriptTail(id, page, owner, owner)
+    if (page.session_id !== id) {
+      recordTranscriptTail(page.session_id, page, owner, owner)
+    }
+    return page
+  }
 
   // includeCompacted: durable display history must include rows preserved by
   // in-place compaction (active=0, compacted=1); without them the transcript

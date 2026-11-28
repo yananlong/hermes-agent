@@ -138,6 +138,20 @@ def _source_matches(row: Mapping[str, Any], sources: Sequence[str], local_create
     return row["source"] in sources
 
 
+def _is_linked_pointer(config: Mapping[str, Any]) -> bool:
+    """A foreign-transcript pointer row (Codex, Claude, Mistral): its transcript lives in another tool."""
+    return any(config.get(flag) is True for flag in ("codex_linked_thread", "claude_linked_thread", "mistral_linked_thread"))
+
+
+def _source_matches_or_linked(
+    row: Mapping[str, Any], sources: Sequence[str], local_created_sources: Optional[Sequence[str]],
+    include_linked_pointers: bool,
+) -> bool:
+    """``_source_matches`` widened by the pointer markers when ``include_linked_pointers`` is set."""
+    return _source_matches(row, sources, local_created_sources) or (
+        include_linked_pointers and _is_linked_pointer(row["model_config"]))
+
+
 def _window(rows: list[Any], window: SessionWindow) -> list[Any]:
     if window.limit is None:
         return rows[window.offset :]
@@ -195,7 +209,9 @@ class SessionListingMixin:
         """The store's shared listing and count filters over a :class:`SessionQuery` or :class:`SessionCountQuery`."""
         if exclude_children and not self._admitted_child(table, row, query.include_subagents):
             return False
-        if query.sources and not _source_matches(row, query.sources, query.local_created_sources):
+        if query.sources and not _source_matches_or_linked(
+                row, query.sources, query.local_created_sources,
+                getattr(query, "include_linked_pointers", False)):
             return False
         session_key = getattr(query, "session_key", None)
         if session_key and row["session_key"] != session_key:
@@ -443,6 +459,7 @@ class SessionListingMixin:
         workspace_key: Optional[str] = None,
         local_created_sources: Optional[Sequence[str]] = None,
         skip_launch_stubs: bool = False,
+        include_linked_pointers: bool = False,
         window: SessionWindow = SessionWindow(limit=20),
     ) -> tuple[SessionRecencyEntry, ...]:
         scope = self._backend.scope
@@ -453,7 +470,7 @@ class SessionListingMixin:
             for sid, row in self._table(scope).items()
             # A launch stub has neither messages nor an admission.
             if not (skip_launch_stubs and self._counter(scope, sid) == 0 and sid not in admitted)
-            and (not sources or _source_matches(row, sources, local_created_sources))
+            and (not sources or _source_matches_or_linked(row, sources, local_created_sources, include_linked_pointers))
             and (not workspace_key or _in_workspace(row, workspace_key))
         ]
         return tuple(

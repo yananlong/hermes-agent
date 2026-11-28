@@ -4,6 +4,7 @@ import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 import type { NavigateFunction } from 'react-router'
 
 import { NO_PROJECT_ID } from '@/app/chat/sidebar/projects/workspace-groups'
+import { LinkedHistoryChangedError } from '@/api/native-session-history'
 import {
   extendRefreshPageToOverlap,
   graftRefreshedTailOntoBackfill,
@@ -179,6 +180,12 @@ import {
   recoveredTurnFields,
   rereadPageAfterResumeBarrier
 } from './resume-barrier-reread'
+import { linkedResumeEntry } from './linked-resume-entry'
+import { lostTranscriptLatch } from './resume-lost-latch'
+import { readWarmCache } from './warm-cache'
+import { preferredResumeMessages } from './resume-preferred-messages'
+import { projectResumedPrompts } from './resume-prompt-projection'
+import { prefetchAgainstAttach } from './resume-prefetch'
 import { clearResumeLatches, clearResumeToasts, notifyResumeFailed, type ResumeAttemptOptions } from './resume-latches'
 import {
   ambientResumeConnectionId,
@@ -1204,7 +1211,7 @@ export function useSessionActions({
         }
       }
 
-      const resumeStartMessages = resumedSameSelectedSession ? $messages.get() : []
+      let resumeStartMessages = resumedSameSelectedSession ? $messages.get() : []
 
       // Paint the click before the profile-resolve / gateway-swap awaits below,
       // so there's zero dead air: highlight the row instantly (the sidebar reads
@@ -1234,33 +1241,9 @@ export function useSessionActions({
 
       clearResumeLatches(storedSessionId)
 
-      // A warm cache entry is only trustworthy when it still BELONGS to the
-      // session being resumed. A pooled profile backend that gets idle-reaped
-      // and respawned (pruneSecondaryGateways) re-mints runtime ids, so a
-      // recycled id can resolve to a live-but-DIFFERENT session's cache entry.
-      // The session.activate 404 guard below only catches a fully-DEAD id — a
-      // recycled-live id 200s, so an unchecked hit paints the wrong transcript
-      // under the current route (the "open chat A, chat B loads" bug). On a
-      // mismatch the mapping is cross-wired: purge both sides and report a miss
-      // so the caller falls through to a full resume that rebinds a correct id.
-      const takeWarmCache = (): { runtimeId: string; state: ClientSessionState } | null => {
-        const runtimeId = runtimeIdByStoredSessionIdRef.current.get(storedSessionId)
-        const state = runtimeId ? sessionStateByRuntimeIdRef.current.get(runtimeId) : undefined
-
-        if (!runtimeId || !state) {
-          return null
-        }
-
-        if (state.storedSessionId !== storedSessionId) {
-          runtimeIdByStoredSessionIdRef.current.delete(storedSessionId)
-          sessionStateByRuntimeIdRef.current.delete(runtimeId)
-          dropSessionState(runtimeId)
-
-          return null
-        }
-
-        return { runtimeId, state }
-      }
+      // Belongs-to validation and cross-wire purge live in warm-cache.ts.
+      const takeWarmCache = () =>
+        readWarmCache(storedSessionId, { runtimeIdByStoredSessionIdRef, sessionStateByRuntimeIdRef })
 
       // The selection moved above, but a warm runtime is only (re)bound after
       // the awaits below. Until then the foreground may stay on a runtime only
@@ -1271,19 +1254,27 @@ export function useSessionActions({
       // this session's route, and a re-entrant resume of this target would
       // snapshot it as this session's local pending turn (resumeStartMessages).
       const warmAtEntry = takeWarmCache()
-      const foregroundIsTarget = warmAtEntry !== null && warmAtEntry.runtimeId === activeSessionIdRef.current
+      const linkedEntry = linkedResumeEntry({
+        activeRuntimeId: activeSessionIdRef.current,
+        cachedNative: Boolean(warmAtEntry?.state.messages.some(message => message.id.startsWith('codex:'))),
+        listed: ownerLookupSessionRows().find(session => sessionMatchesStoredId(session, storedSessionId)),
+        resumedSameSelectedSession,
+        warmAtEntry
+      })
+      let linkedForResume = linkedEntry.mayBeLinked
 
-      if (!foregroundIsTarget) {
+      // History load is not turn-busy, and a stale transcript must not stand in
+      // for the thread being opened: release the previous session's lock and
+      // clear a chat that is not this session's own warm runtime.
+      if (linkedEntry.detachPrevious) {
         setActiveSessionId(null)
         activeSessionIdRef.current = null
-        // History load is not turn-busy. Drop the previous session's leftover
-        // lock so focusing this session cannot inherit another chat's run.
         busyRef.current = false
         setBusy(false)
+      }
 
-        if (!resumedSameSelectedSession) {
-          setMessages([])
-        }
+      if (linkedEntry.clearMessages) {
+        setMessages([])
       }
 
       // Swap the single live gateway to this session's profile before any
@@ -1304,37 +1295,27 @@ export function useSessionActions({
 
       const provisional = provisionalTranscriptPaint(
         storedSessionId,
-        () => isCurrentResume() && !resumedSameSelectedSession && !takeWarmCache()
+        () => isCurrentResume() && !resumedSameSelectedSession && !linkedForResume && !takeWarmCache()
       )
-
-      const listedStored = ownerLookupSessionRows().find(session => sessionMatchesStoredId(session, storedSessionId))
-
-      if (ownerRoute || listedStored?.profile) {
-        provisional.paint(transcriptRestScope(ownerRoute, listedStored, ambientConnectionId))
-      }
-
-      // An unbound warm target whose transcript is already persisted-display
-      // authority paints now, display-only, instead of waiting out the awaits
-      // below; the fast path re-proves it against the resolved owner before
-      // binding. An unproven warm cache can be a compressed runtime tail, so it
-      // keeps the loader (#73646).
-      if (warmAtEntry && !foregroundIsTarget && listedStored) {
-        const entryProvenance = createPersistedDisplayTranscriptProvenance({
-          lineageRootId: listedStored._lineage_root_id ?? null,
-          scope: transcriptRestScope(ownerRoute, listedStored, ambientConnectionId),
-          storedSessionId
-        })
-
-        if (hasPersistedDisplayTranscriptProvenance(warmAtEntry.state, entryProvenance)) {
-          setMessages(warmAtEntry.state.messages)
-        }
-      }
 
       const storedForProfile = await resolveStoredSession(storedSessionId, ownerRoute)
       const sessionProfile = storedForProfile?.profile
 
       if (!isCurrentResume()) {
         return
+      }
+
+      // The resolved row is authoritative: when it exists its own `codex_linked`
+      // decides, and the list snapshot only fills in for an unresolved id.
+      linkedForResume =
+        linkedEntry.cachedNative ||
+        Boolean(storedForProfile?.codex_linked || (!storedForProfile && linkedEntry.listedLinked))
+
+      if (linkedForResume) {
+        resumeStartMessages = []
+        setActiveSessionId(null)
+        activeSessionIdRef.current = null
+        setMessages([])
       }
 
       const { resolvedConnectionId, sessionOwner } = resolveResumeOwner(
@@ -1374,7 +1355,7 @@ export function useSessionActions({
       // purges a cross-wired mapping before we trust the fast-path.
       const warmHit = takeWarmCache()
 
-      if (warmHit && !options?.authoritativeSnapshot) {
+      if (warmHit && !options?.authoritativeSnapshot && !linkedForResume) {
         const cachedRuntimeId = warmHit.runtimeId
         const cachedState = warmHit.state
 
@@ -1972,6 +1953,7 @@ export function useSessionActions({
 
       try {
         const watchWindow = isWatchWindow()
+        const linkedCodex = Boolean(stored?.codex_linked || storedForProfile?.codex_linked)
 
         let localSnapshot = resumedSameSelectedSession
           ? preserveLocalPendingTurnMessages(viewMessagesForReconcile(), resumeStartMessages)
@@ -1988,7 +1970,7 @@ export function useSessionActions({
         // transcript as soon as it lands; the RPC binds the runtime id.
         // Watch windows skip the prefetch — lazy resume attaches the live mirror.
         const prefetchPromise =
-          watchWindow || options?.authoritativeSnapshot
+          !linkedCodex && (watchWindow || options?.authoritativeSnapshot)
             ? null
             : getLatestSessionMessages(storedSessionId, sessionRestScope)
 
@@ -2001,9 +1983,9 @@ export function useSessionActions({
           () =>
             requestForSession<SessionResumeResult>(
               'session.resume',
-              primaryResumeParams(storedSessionId, watchWindow, options?.authoritativeSnapshot, sessionProfile)
+              primaryResumeParams(storedSessionId, watchWindow, options?.authoritativeSnapshot, sessionProfile, linkedCodex)
             ),
-          { requiresMessages: options?.authoritativeSnapshot, scope: sessionOwner }
+          { requiresMessages: options?.authoritativeSnapshot && !linkedCodex, scope: sessionOwner }
         ).then(resumed => {
           resumeRuntimeBaselineMessages =
             sessionStateByRuntimeIdRef.current.get(resumed.session_id)?.messages ?? resumeRuntimeBaselineMessages
@@ -2015,23 +1997,26 @@ export function useSessionActions({
         // keeps it from surfacing as unhandled while the prefetch settles.
         resumePromise.catch(() => undefined)
 
-        let prefetchedResult: SessionMessagesResponse | null = null
+        // The prefetch and the attach settle together in resume-prefetch.ts:
+        // only the attach establishes a linked pointer's native identity, so the
+        // read stays provisional until then (becoming linked, being retargeted,
+        // and a redialed socket's replay barrier are all decided there).
+        const settled = await prefetchAgainstAttach({
+          linkedCodex,
+          prefetch: prefetchPromise,
+          readAgain: () => getLatestSessionMessages(storedSessionId, sessionRestScope),
+          replayBarrier: () => (viewRuntimeId ? pendingSessionReplay(viewRuntimeId) : undefined),
+          resume: resumePromise
+        })
 
-        try {
-          if (prefetchPromise) {
-            prefetchedResult = await prefetchPromise
-          }
-        } catch {
-          // Non-fatal: gateway resume below can still hydrate the session.
-        }
+        const attached = settled.attached
+        let prefetchedResult = settled.page
 
-        // The socket can drop and redial while REST is in flight. Painting now
-        // would let the new socket's replay append the same turn again; a lost
-        // socket (false) drops this read and the resume below binds without it.
-        const viewReplayAtReturn = viewRuntimeId ? pendingSessionReplay(viewRuntimeId) : undefined
-
-        if (prefetchedResult && viewReplayAtReturn && !(await viewReplayAtReturn)) {
-          prefetchedResult = null
+        if (settled.becameLinked) {
+          linkedForResume = true
+          resumeStartMessages = []
+          localSnapshot = []
+          setMessages([])
         }
 
         // A completed read still warms its exact durable scope after navigation.
@@ -2092,63 +2077,19 @@ export function useSessionActions({
 
         const hasLiveProjection = Boolean(resumed.inflight || resumed.queued)
 
-        const preferredMessages = (() => {
-          // A reply the live stream settled during the RPC is newer than this snapshot (resume-reconcile.ts).
-          if (
-            (options?.authoritativeSnapshot && resumed.messages.length === 0 && !hasLiveProjection) ||
-            liveTurnSettledDuringResume(resumed, resumeStartedAt, resumedSameSelectedSession)
-          ) {
-            return currentMessages
-          }
-
-          if (prefetchApplied && prefetchMatchesResumedSession) {
-            if (hasLiveProjection && prefetchedTranscriptMessages) {
-              const runtimeMessages = toChatMessages(resumed.messages)
-              const previousMessages = removeRepresentedLocalLiveProjection(currentMessages, resumed)
-
-              // Omitted-messages resumes stay safe here: `resumed.messages`
-              // is empty, so `runtimeMessages` has no anchor and the dedupe
-              // helper returns the projection unchanged, while the REST
-              // prefetch below remains the authoritative transcript — the
-              // same "graft, don't rebuild" outcome the pre-restructure
-              // messages_omitted branch produced.
-              const liveProjection = dedupeInflightUserAgainstTranscript(
-                prefetchedTranscriptMessages,
-                runtimeMessages,
-                resumed
-              )
-
-              const resumedMessages = reconcileAuthoritativeChatMessages(
-                prefetchedTranscriptMessages,
-                previousMessages,
-                liveProjection,
-                prefetchedResult?.messages
-              )
-
-              const withConcurrentChanges = overlayConcurrentMessageChanges(
-                resumedMessages,
-                localSnapshot,
-                currentMessages
-              )
-
-              return chatMessageArraysEquivalent(currentMessages, withConcurrentChanges)
-                ? currentMessages
-                : withConcurrentChanges
-            }
-
-            if (!hasLiveProjection) {
-              return localSnapshot
-            }
-          }
-
-          const previousMessages = resumedSameSelectedSession
-            ? preserveLocalPendingTurnMessages(currentMessages, resumeStartMessages)
-            : currentMessages
-
-          const resumedMessages = reconcileAuthoritativeMessages(resumed.messages, previousMessages, resumed)
-
-          return chatMessageArraysEquivalent(currentMessages, resumedMessages) ? currentMessages : resumedMessages
-        })()
+        const preferredMessages = preferredResumeMessages({
+          authoritativeSnapshot: options?.authoritativeSnapshot,
+          currentMessages,
+          hasLiveProjection,
+          localSnapshot,
+          prefetchApplies: prefetchApplied && prefetchMatchesResumedSession,
+          prefetchedMessages: prefetchedTranscriptMessages,
+          prefetchedResult,
+          resumed,
+          resumeStartedAt,
+          resumeStartMessages,
+          resumedSameSelectedSession
+        })
 
         const currentRuntimeMessages =
           sessionStateByRuntimeIdRef.current.get(resumed.session_id)?.messages ?? resumeRuntimeBaselineMessages
@@ -2212,21 +2153,21 @@ export function useSessionActions({
         // stored size (`message_count`, filled from state.db even when
         // `messages_omitted`), so treat it — and a non-empty REST page — as the
         // other rungs of the same ladder.
-        const saidToHaveTranscript =
-          sessionShouldHaveTranscript(stored) ||
-          (resumed.message_count || 0) > 0 ||
-          Boolean(prefetchedResult?.messages.length)
-
-        if (saidToHaveTranscript && preferredMessages.length === 0) {
-          // Roll back a provisional cached-tail paint and drop its entry: the
-          // latched attempt painted no history from any source, so the
-          // display-only cache must not survive to mask the retry (or the next
-          // wake) as a transcript that loaded.
+        // A thread the backend says has history but which published nothing is
+        // latched as failed, not left as a blank chat (see resume-lost-latch.ts).
+        if (
+          lostTranscriptLatch({
+            pageHasRows: Boolean(prefetchedResult?.messages.length),
+            publishedRows: preferredMessages.length,
+            resumed,
+            stored
+          })
+        ) {
           if (cachedTailPaint !== null && $messages.get() === cachedTailPaint) {
-            setMessages([])
             dropTranscriptTail(storedSessionId, sessionRestScope)
           }
 
+          setMessages([])
           setActiveSessionId(null)
           activeSessionIdRef.current = null
           setResumeFailedSessionId(storedSessionId)
@@ -2242,44 +2183,31 @@ export function useSessionActions({
         // the row, or a topology change made the owner resolvable again).
         clearStoredTranscriptReadOnly(storedSessionId)
         const pendingApproval = restorePendingApproval(resumed, resumed.session_id)
-        const pendingClarifyState = restorePendingClarifyFromSnapshot(resumed, resumed.session_id, resumeStartedAt)
-        const pendingClarify = pendingClarifyState.request
 
-        const pendingConnection = restorePendingConnectionFromSnapshot(
+        // The attach dropped every previous session's controls; the snapshot's
+        // still-pending prompts are the only way they come back (see
+        // resume-prompt-projection.ts for the precedence between them).
+        const prompts = projectResumedPrompts({
+          liveClarifyRequestId: $clarifyRequests.get()[resumed.session_id]?.requestId,
+          messages: messagesForView,
           resumed,
-          resumed.session_id,
+          resumedRunning,
           resumeStartedAt
-        ).request
-
-        const clarifyAuthoritativelyAbsent =
-          pendingClarifyState.authoritativeAbsent && !$clarifyRequests.get()[resumed.session_id]
+        })
+        const {
+          clarifyAuthoritativelyAbsent,
+          clearedClarifyProjection,
+          pendingClarify,
+          pendingClarifyProjection,
+          pendingClarifyState,
+          pendingConnection,
+          pendingConnectionProjection,
+          visibleMessages: visibleMessagesForView
+        } = prompts
 
         const runtimeInfo = applyRuntimeInfo(resumed.info, { owner: sessionOwner })
 
         patchSessionWorkspace(storedSessionId, runtimeInfo?.cwd)
-
-        const pendingClarifyProjection = pendingClarify
-          ? restorePendingClarifyToolCall(messagesForView, pendingClarifyToolPayload(pendingClarify))
-          : null
-
-        const clearedClarifyProjection = clarifyAuthoritativelyAbsent
-          ? settlePendingClarifyToolCall(
-              messagesForView,
-              pendingClarifyState.cleared ? pendingClarifyToolPayload(pendingClarifyState.cleared) : {},
-              resumedRunning
-            )
-          : null
-
-        const pendingConnectionProjection = projectPendingConnection(
-          pendingClarifyProjection?.messages ?? clearedClarifyProjection?.messages ?? messagesForView,
-          pendingConnection
-        )
-
-        const visibleMessagesForView =
-          pendingConnectionProjection?.messages ??
-          pendingClarifyProjection?.messages ??
-          clearedClarifyProjection?.messages ??
-          messagesForView
 
         // The eagerly painted REST page is persisted-display authority: stamp
         // its provenance so the next warm switch to this session paints it
@@ -2351,6 +2279,13 @@ export function useSessionActions({
         )
       } catch (err) {
         if (!isCurrentResume()) {
+          return
+        }
+
+        if (err instanceof LinkedHistoryChangedError) {
+          setMessages(viewMessagesForReconcile().filter(message => !message.id.startsWith('codex:')))
+          setResumeFailedSessionId(storedSessionId)
+          notifyResumeFailed(err, copy.resumeFailed, storedSessionId, options)
           return
         }
 

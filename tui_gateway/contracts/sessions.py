@@ -195,6 +195,9 @@ class SessionResumeParams(SessionParams):
 
 
 class SessionResumeResult(LiveSessionSnapshot):
+    """The canonical owner's resume snapshot ALSO carries `linked_codex`, but this stdio method
+    never sets it: a linked pointer's native transcript is paged by the canonical
+    ``session.transcript`` read, which is the only transport that serves one."""
     pass
 
 

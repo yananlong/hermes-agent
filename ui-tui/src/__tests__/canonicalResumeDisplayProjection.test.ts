@@ -11,7 +11,7 @@ it('asks the owner for the display projection on every rendering resume', () => 
   expect(canonicalRequest('session.resume', { session_id: 's', cols: 80 }).params).toEqual({ session_id: 's', display_projection: true })
   expect(canonicalRequest('session.activate', { session_id: 's' })).toEqual({ method: 'session.resume', params: { session_id: 's', display_projection: true } })
   // A metadata-only activation never asked for rows.
-  expect(canonicalRequest('session.activate', { session_id: 's', omit_messages: true }).params).toEqual({ session_id: 's' })
+  expect(canonicalRequest('session.activate', { session_id: 's', omit_messages: true }).params).toEqual({ session_id: 's', omit_messages: true })
 })
 
 it('renders display_messages and keeps the stored rows for rewind targeting', () => {

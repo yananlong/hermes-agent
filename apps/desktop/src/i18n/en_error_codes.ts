@@ -113,6 +113,10 @@ export const enErrorCodes: ThreadCopy['errorCodes'] = {
     title: 'This chat is read-only',
     body: 'It is stored history Hermes can show but not continue, so your message was not run. Start a new chat to send it.'
   },
+  linked_session_read_only: {
+    title: 'This linked thread is read-only here',
+    body: 'Hermes can show this conversation but cannot add to it on this host yet, so your message was not sent. Continue it in the app that owns it.'
+  },
   workspace_unavailable: {
     title: "This chat's folder is gone",
     body: 'The folder this chat works in was moved or deleted, so your message was not run. Recreate the folder, or use Move to project to give the chat another one, then retry.'

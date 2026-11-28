@@ -46,3 +46,24 @@ def stand_in_interface(session_db):
 def agent_interface(agent):
     """The agent's storage interface handle for its own store (:func:`writer_interface`), or None."""
     return writer_interface(getattr(agent, "persistence", None), getattr(agent, "_session_db", None))
+
+
+def init_linked_codex_client(agent, session_db, persistence, session_id) -> bool:
+    """A linked thread authenticates in Codex, so its agent needs no HTTP client or API key."""
+    if agent.api_mode != "codex_app_server" or not session_id:
+        return False
+    store = writer_interface(persistence, session_db) or session_db
+    if store is None:
+        return False
+    from hermes_cli.foreign_linked_store import LinkedConfigUnreadable, row_model_config
+    try:
+        linked = row_model_config(store, session_id).get("codex_linked_thread") is True
+    except LinkedConfigUnreadable:
+        # Not provably linked: build the ordinary client and let the turn's pointer guard refuse
+        # the row (agent/linked_foreign_turn.py), so a damaged session stays resumable and readable.
+        return False
+    if not linked:
+        return False
+    agent.client, agent._client_kwargs, agent.api_key = None, {}, ""
+    agent._anthropic_client, agent._is_anthropic_oauth = None, False
+    return True

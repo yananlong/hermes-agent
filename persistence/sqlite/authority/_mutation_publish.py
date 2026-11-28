@@ -32,6 +32,18 @@ def _profile_from_session_key(session_key):
 
 def compress_in_transaction(holder, conn, session_id, payload, prepared):
     snapshot = validate_prepared(holder, conn, session_id, prepared)
+    if prepared.get('native_codex_compact') is True:
+        from ._native_codex_compaction import _consume_native_codex_compaction_intent
+        _consume_native_codex_compaction_intent(conn, prepared, snapshot['target'])
+        # Codex committed its own compact operation during preparation. The owner transaction
+        # records the fenced local receipt and advances the runtime generation without rewriting
+        # the empty/stale Hermes transcript mirror.
+        conn.execute('UPDATE sessions SET runtime_generation=runtime_generation+1 WHERE id=?', (session_id,))
+        generation = conn.execute('SELECT runtime_generation FROM sessions WHERE id=?', (session_id,)).fetchone()[0]
+        return {session_id}, {'execution_generation': generation, 'status': 'compressed',
+                              'native_codex_compact': True, 'native_thread_id': prepared['native_thread_id'],
+                              'summary': prepared.get('summary'), 'before_messages': prepared.get('before_messages', 0),
+                              'after_messages': prepared.get('after_messages', 0), 'removed': 0}
     policy = snapshot['receipt']['policy']
     target = snapshot['target']
     from ..workers._compression import archive_on_connection, publish_on_connection

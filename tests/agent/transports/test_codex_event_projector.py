@@ -11,6 +11,8 @@ import pytest
 
 from agent.transports.codex_event_projector import (
     CodexEventProjector,
+    _MAX_REASONING_DISPLAY_CHARS,
+    _bounded_reasoning_text,
     _deterministic_call_id,
     _format_tool_args,
 )
@@ -89,6 +91,7 @@ class TestCommandExecutionProjection:
         args = json.loads(tc["function"]["arguments"])
         assert "echo hello" in args["command"]
         assert args["cwd"] == "/tmp"
+        assert assistant["display_metadata"]["codex_native"] is True
 
     def test_second_message_is_tool_result_correlating_by_id(self) -> None:
         p = CodexEventProjector()
@@ -97,6 +100,7 @@ class TestCommandExecutionProjection:
         assert tool["role"] == "tool"
         assert tool["tool_call_id"] == assistant["tool_calls"][0]["id"]
         assert "hello" in tool["content"]
+        assert tool["display_metadata"]["codex_native"] is True
 
 
 
@@ -133,6 +137,67 @@ def test_successful_marker_ending_output_survives_persisted_replay(tmp_path):
     replay_tool = next(m for m in canonicalize_replay_history(raw) if m["role"] == "tool")
     assert replay_tool.get("effect_disposition") is None
     assert json.loads(replay_tool["content"]) == {"exit_code": 0, "output": output}
+
+
+def test_native_reasoning_and_tool_results_survive_session_db_reload_and_history_projection(tmp_path):
+    from types import SimpleNamespace
+
+    from agent.codex_runtime import _persist_projected_messages
+    from agent.session_persistence import SessionPersistenceMixin
+    from persistence_assembly import open_persistence, profile_scope
+    from tests.fixtures.storage_seed import seed_session
+    from tui_gateway import server
+
+    projector = CodexEventProjector()
+    projected = projector.project({"method": "item/completed", "params": {"item": {
+        "type": "reasoning", "id": "reason-tool", "summary": ["Check the native result."],
+    }}}).messages
+    projected.extend(projector.project({"method": "item/completed", "params": {"item": {
+        "type": "commandExecution", "id": "command-1", "command": "pwd", "cwd": "/tmp",
+        "aggregatedOutput": "/tmp", "exitCode": 0,
+    }}}).messages)
+    projected.extend(projector.project({"method": "item/completed", "params": {"item": {
+        "type": "fileChange", "id": "file-change-1", "status": "applied",
+        "changes": [{"kind": {"type": "update"}, "path": "/tmp/example.py", "diff": "-old\n+new"}],
+    }}}).messages)
+    projected.extend(projector.project({"method": "item/completed", "params": {"item": {
+        "type": "reasoning", "id": "reason-final", "summary": ["The turn ended before another message."],
+    }}}).messages)
+    projected.extend(projector.project({"method": "turn/completed", "params": {}}).messages)
+
+    store = SessionPersistenceMixin()
+    store._session_db = store.persistence = open_persistence(profile_scope(home=tmp_path))
+    store.session_id = "codex-display"
+    seed_session(store.persistence, store.session_id, "cli")
+    store._session_db_created = True
+    store._last_flushed_db_idx = 0
+    turn = SimpleNamespace(projected_messages=projected, submitted_user_text=None)
+    try:
+        assert _persist_projected_messages(store, turn, [{"role": "user", "content": "Run pwd."}])
+        resume = store.persistence.messages.read_resume_conversations(store.session_id)
+        restored = [row.as_openai_message() for row in resume.display]
+    finally:
+        store._session_db.close()
+
+    messages = server._history_to_messages(restored)
+    native_call = next(message for message in messages if message.get("tool_calls"))
+    native_result = next(message for message in messages if message.get("role") == "tool")
+    native_patch_call = next(message for message in messages if any(
+        call["function"]["name"] == "apply_patch" for call in message.get("tool_calls", [])
+    ))
+    native_patch_result = next(message for message in messages
+                               if message.get("role") == "tool" and message.get("name") == "apply_patch")
+    interrupted_reasoning = next(message for message in messages if message.get("reasoning") ==
+                                 "The turn ended before another message.")
+
+    assert native_call["reasoning"] == "Check the native result."
+    assert native_call["tool_calls"][0]["function"]["name"] == "exec_command"
+    assert native_result["content"] == '{"exit_code": 0, "output": "/tmp"}'
+    patch_args = json.loads(next(call for call in native_patch_call["tool_calls"]
+                                 if call["function"]["name"] == "apply_patch")["function"]["arguments"])
+    assert patch_args["changes"][0]["diff"] == "-old\n+new"
+    assert "update: /tmp/example.py\n-old\n+new" in native_patch_result["content"]
+    assert interrupted_reasoning["text"] == ""
 
 
 @pytest.mark.parametrize("exit_fields", [{"exitCode": 130}, {}])
@@ -192,16 +257,91 @@ class TestAgentMessageProjection:
         assert "reasoning" in first
         assert "reasoning" not in second
 
+    def test_only_codex_exposed_reasoning_text_is_projected(self) -> None:
+        p = CodexEventProjector()
+        p.project({"method": "item/completed", "params": {"item": {
+            "type": "reasoning", "id": "r1", "summary": ["summary"],
+            "content": ["visible content", {"not": "text"}],
+            "encryptedContent": "must never be decoded or displayed",
+        }}})
+        message = p.project({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "id": "a1", "text": "answer",
+        }}}).messages[0]
+        assert message["reasoning"] == "summary\nvisible content"
+        assert "must never" not in message["reasoning"]
+
+    def test_typed_reasoning_summary_and_content_parts_are_projected(self) -> None:
+        """Codex documents these arrays as typed parts, not strings (``ReasoningItemReasoningSummary``)."""
+        p = CodexEventProjector()
+        p.project({"method": "item/completed", "params": {"item": {
+            "type": "reasoning", "id": "r1",
+            "summary": [{"type": "summary_text", "text": "checked the recipient"}],
+            "content": [{"type": "reasoning_text", "text": "the address is a fixture"},
+                        {"type": "text", "text": "so sending is safe"}],
+        }}})
+        message = p.project({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "id": "a1", "text": "answer",
+        }}}).messages[0]
+        assert message["reasoning"] == ("checked the recipient\n"
+                                        "the address is a fixture\nso sending is safe")
+
+    def test_encrypted_only_reasoning_yields_no_text_and_is_never_decoded(self, monkeypatch) -> None:
+        """An item carrying only ``encrypted_content`` is not displayable: it is skipped, not decoded."""
+        p = CodexEventProjector()
+        p.project({"method": "item/completed", "params": {"item": {
+            "type": "reasoning", "id": "r1", "summary": [], "content": [],
+            "encrypted_content": "gAAAAA-opaque-carrier",
+        }}})
+        message = p.project({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "id": "a1", "text": "answer",
+        }}}).messages[0]
+        assert "reasoning" not in message
+
+    def test_reasoning_parts_that_are_neither_strings_nor_text_dicts_are_skipped(self) -> None:
+        p = CodexEventProjector()
+        p.project({"method": "item/completed", "params": {"item": {
+            "type": "reasoning", "id": "r1",
+            "summary": [None, 7, {"type": "summary_text"}, {"type": "summary_text", "text": ""},
+                        {"type": "summary_text", "text": "only this"}],
+            "content": "not a list",
+        }}})
+        message = p.project({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "id": "a1", "text": "answer",
+        }}}).messages[0]
+        assert message["reasoning"] == "only this"
+
+    def test_reasoning_without_a_following_item_flushes_at_turn_boundary(self) -> None:
+        p = CodexEventProjector()
+        p.project({"method": "item/completed", "params": {"item": {
+            "type": "reasoning", "id": "r1", "summary": ["I was interrupted while checking the result."],
+        }}})
+
+        ended = p.project({"method": "turn/completed", "params": {"turn": {"status": "interrupted"}}})
+        next_turn = p.project({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "id": "a2", "text": "A later answer.",
+        }}})
+
+        assert ended.messages == [{"role": "assistant", "content": None,
+                                   "reasoning": "I was interrupted while checking the result."}]
+        assert next_turn.messages == [{"role": "assistant", "content": "A later answer."}]
+
+
+def test_reasoning_display_uses_a_separate_larger_bounded_redaction_path():
+    projected = _bounded_reasoning_text("x" * (_MAX_REASONING_DISPLAY_CHARS + 20))
+
+    assert len(projected) == _MAX_REASONING_DISPLAY_CHARS
+    assert projected.endswith("[truncated by Hermes reasoning display limit]")
+
 
 class TestFileChangeProjection:
-    def test_file_change_summary_no_inlined_content(self) -> None:
+    def test_file_change_projects_available_diffs_into_call_and_result(self) -> None:
         item = {
             "type": "fileChange",
             "id": "fc1",
             "status": "applied",
             "changes": [
-                {"kind": {"type": "add"}, "path": "/tmp/new.py"},
-                {"kind": {"type": "update"}, "path": "/tmp/old.py"},
+                {"kind": {"type": "add"}, "path": "/tmp/new.py", "diff": "+print('new')"},
+                {"kind": {"type": "update"}, "path": "/tmp/old.py", "diff": "-old\n+new"},
             ],
         }
         p = CodexEventProjector()
@@ -213,7 +353,10 @@ class TestFileChangeProjection:
         args = json.loads(tc["function"]["arguments"])
         assert len(args["changes"]) == 2
         assert all("kind" in c and "path" in c for c in args["changes"])
+        assert args["changes"][0]["diff"] == "+print('new')"
+        assert args["changes"][1]["diff"] == "-old\n+new"
         assert "applied" in msgs[1]["content"]
+        assert "update: /tmp/old.py\n-old\n+new" in msgs[1]["content"]
 
 
 class TestMcpToolCallProjection:
@@ -245,6 +388,21 @@ class TestMcpToolCallProjection:
             {"method": "item/completed", "params": {"item": item}}
         ).messages
         assert "error" in msgs[1]["content"]
+
+    def test_native_tool_result_is_marked_for_display_adapter_and_secrets_are_redacted(self) -> None:
+        item = {
+            "type": "mcpToolCall", "id": "m-secret", "server": "demo", "tool": "lookup",
+            "arguments": {"query": "ghp_abcdefghijk1234"},
+            "result": {"text": "ghp_zyxwvutsrqponm9876"},
+        }
+        assistant, tool = CodexEventProjector().project(
+            {"method": "item/completed", "params": {"item": item}}
+        ).messages
+        assert assistant["codex_native"] is True
+        assert tool["codex_native"] is True
+        assert tool["tool_name"] == assistant["tool_calls"][0]["function"]["name"]
+        assert "ghp_abcdefghijk1234" not in assistant["tool_calls"][0]["function"]["arguments"]
+        assert "ghp_zyxwvutsrqponm9876" not in tool["content"]
 
 
 class TestWebSearchProjection:
@@ -293,6 +451,168 @@ class TestUserAndOpaqueProjection:
         assert "plan" in msgs[0]["content"].lower()
         assert "tool_calls" not in msgs[0]
 
+    def test_opaque_item_hides_encrypted_payload_and_private_thread_ids(self) -> None:
+        item = {
+            "type": "futureReasoningCarrier", "id": "i1", "threadId": "private-thread",
+            "encryptedContent": "opaque-ciphertext",
+            "summary": "Codex-visible short summary",
+        }
+        msg = CodexEventProjector().project(
+            {"method": "item/completed", "params": {"item": item}}
+        ).messages[0]
+        assert "Codex-visible short summary" in msg["content"]
+        assert "private-thread" not in msg["content"]
+        assert "opaque-ciphertext" not in msg["content"]
+
+    def test_opaque_item_also_consumes_pending_reasoning(self) -> None:
+        projector = CodexEventProjector()
+        projector.project({"method": "item/completed", "params": {"item": {
+            "type": "reasoning", "id": "reason-opaque", "summary": ["Still readable."],
+        }}})
+        [message] = projector.project({"method": "item/completed", "params": {"item": {
+            "type": "futureItem", "id": "future-1",
+        }}}).messages
+        assert message["reasoning"] == "Still readable."
+
+
+class TestCollaborationProjection:
+    def test_collaboration_projects_only_available_prompt_and_agent_messages(self) -> None:
+        item = {
+            "type": "collabAgentToolCall", "id": "collab-1", "tool": "spawnAgent",
+            "status": "completed", "prompt": "Compute 7 + 5.",
+            "senderThreadId": "sender-private", "receiverThreadIds": ["receiver-private"],
+            "agentsStates": {"receiver-private": {"status": "completed", "message": "12"}},
+        }
+        assistant, tool = CodexEventProjector().project(
+            {"method": "item/completed", "params": {"item": item}}
+        ).messages
+        call = assistant["tool_calls"][0]
+        assert call["function"]["name"] == "collab.spawnAgent"
+        assert json.loads(call["function"]["arguments"]) == {"prompt": "Compute 7 + 5."}
+        assert tool["tool_name"] == "collab.spawnAgent"
+        assert tool["codex_native"] is True
+        assert "12" in tool["content"]
+        assert "sender-private" not in json.dumps([assistant, tool])
+        assert "receiver-private" not in json.dumps([assistant, tool])
+
+    def test_collaboration_without_details_says_codex_did_not_supply_them(self) -> None:
+        item = {
+            "type": "collabAgentToolCall", "id": "wait-1", "tool": "wait",
+            "status": "completed", "receiverThreadIds": [], "senderThreadId": "private",
+            "agentsStates": {},
+        }
+        assistant, tool = CodexEventProjector().project(
+            {"method": "item/completed", "params": {"item": item}}
+        ).messages
+        assert json.loads(assistant["tool_calls"][0]["function"]["arguments"]) == {}
+        assert "did not provide" in tool["content"]
+        assert "private" not in json.dumps([assistant, tool])
+
+
+class TestSubagentActivityProjection:
+    def test_activity_is_a_clickable_native_tool_call_without_a_fake_result(self) -> None:
+        item = {
+            "type": "subAgentActivity", "id": "activity-1", "kind": "started",
+            "agentThreadId": "019e1a94-352b-71e1-b214-e5c67c9ec190",
+            "agentPath": "research/repo-helper", "model": "gpt-5.5", "reasoningEffort": "high",
+        }
+        assistant, tool = CodexEventProjector().project(
+            {"method": "item/completed", "params": {"item": item}}
+        ).messages
+        call = assistant["tool_calls"][0]
+        assert call["id"] == "codex_subagent_activity_activity-1"
+        assert call["function"]["name"] == "codex_subagent_activity"
+        assert json.loads(call["function"]["arguments"]) == {
+            "kind": "started", "agent_path": "research/repo-helper", "model": "gpt-5.5",
+            "reasoning_effort": "high", "agent_thread_id": item["agentThreadId"],
+        }
+        assert tool["role"] == "tool" and tool["tool_call_id"] == call["id"]
+        assert tool["tool_name"] == "codex_subagent_activity" and tool["content"] == ""
+        assert assistant["display_metadata"]["codex_native"] is True
+        assert tool["display_metadata"]["codex_native"] is True
+
+    def test_activity_sanitizes_local_paths_and_redacts_fields(self) -> None:
+        item = {
+            "type": "subAgentActivity", "id": "activity-2", "kind": "interacted",
+            "agentThreadId": "019e1a94-352b-71e1-b214-e5c67c9ec190",
+            "agentPath": "/Users/private/.codex/agents/research.toml", "model": "ghp_abcdefghijk1234",
+        }
+        assistant, _tool = CodexEventProjector().project(
+            {"method": "item/completed", "params": {"item": item}}
+        ).messages
+        args = json.loads(assistant["tool_calls"][0]["function"]["arguments"])
+        assert args["kind"] == "interacted"
+        assert args["model"] != item["model"]
+        assert "ghp_abcdefghijk1234" not in json.dumps(assistant)
+        assert args["agent_thread_id"] == item["agentThreadId"]
+        assert "agent_path" not in args
+        assert "/Users/private" not in json.dumps(assistant)
+
+    def test_activity_keeps_pending_reasoning_on_the_assistant_call(self) -> None:
+        projector = CodexEventProjector()
+        projector.project({"method": "item/completed", "params": {"item": {
+            "type": "reasoning", "id": "reason-1", "summary": ["Native reasoning."],
+        }}})
+        assistant, _tool = projector.project({"method": "item/completed", "params": {"item": {
+            "type": "subAgentActivity", "id": "activity-3", "kind": "completed",
+            "agentThreadId": "019e1a94-352b-71e1-b214-e5c67c9ec190",
+        }}}).messages
+        assert assistant["reasoning"] == "Native reasoning."
+        assert json.loads(assistant["tool_calls"][0]["function"]["arguments"]) == {
+            "kind": "completed", "agent_thread_id": "019e1a94-352b-71e1-b214-e5c67c9ec190",
+        }
+
+    def test_unexpected_large_metadata_cannot_truncate_the_trace_pointer(self) -> None:
+        item = {
+            "type": "subAgentActivity", "id": "activity-4", "kind": "started",
+            "agentThreadId": "019e1a94-352b-71e1-b214-e5c67c9ec190",
+            "model": "m" * 70_000, "reasoningEffort": "r" * 200,
+        }
+        assistant, _tool = CodexEventProjector().project(
+            {"method": "item/completed", "params": {"item": item}}
+        ).messages
+        args = json.loads(assistant["tool_calls"][0]["function"]["arguments"])
+        assert args == {
+            "kind": "started", "agent_thread_id": item["agentThreadId"],
+        }
+
+
+@pytest.mark.parametrize("item", [
+    {"type": "commandExecution", "id": "c", "command": "printf ghp_abcdefghijk1234", "cwd": "/tmp",
+     "aggregatedOutput": "ghp_zyxwvutsrqponm9876", "exitCode": 0},
+    {"type": "fileChange", "id": "f", "status": "applied",
+     "changes": [{"path": "/tmp/ghp_abcdefghijk1234", "kind": {"type": "update"},
+                  "diff": "-ghp_zyxwvutsrqponm9876"}]},
+    {"type": "mcpToolCall", "id": "m", "server": "demo", "tool": "read",
+     "arguments": {"token": "ghp_abcdefghijk1234"}, "result": {"token": "ghp_zyxwvutsrqponm9876"}},
+    {"type": "dynamicToolCall", "id": "d", "tool": "lookup",
+     "arguments": {"token": "ghp_abcdefghijk1234"},
+     "contentItems": [{"type": "text", "text": "ghp_zyxwvutsrqponm9876"}], "success": True},
+    {"type": "collabAgentToolCall", "id": "a", "tool": "sendMessage", "status": "completed",
+     "prompt": "ghp_abcdefghijk1234", "agentsStates": {"x": {"status": "completed", "message": "ghp_zyxwvutsrqponm9876"}}},
+    {"type": "subAgentActivity", "id": "sa", "kind": "started",
+     "agentThreadId": "019e1a94-352b-71e1-b214-e5c67c9ec190", "agentPath": "ghp_abcdefghijk1234",
+     "model": "ghp_zyxwvutsrqponm9876"},
+    {"type": "webSearch", "id": "w", "query": "ghp_abcdefghijk1234"},
+])
+def test_every_native_tool_projection_redacts_credential_like_input_and_output(item):
+    projected = CodexEventProjector().project(
+        {"method": "item/completed", "params": {"item": item}}
+    ).messages
+    serialized = json.dumps(projected, ensure_ascii=False)
+    assert "ghp_abcdefghijk1234" not in serialized
+    assert "ghp_zyxwvutsrqponm9876" not in serialized
+
+
+def test_tool_args_and_results_have_explicit_display_bounds():
+    from agent.transports.codex_event_projector import _MAX_PROJECTED_TOOL_TEXT, _bounded_tool_text
+
+    args = json.loads(_format_tool_args({"payload": "x" * (_MAX_PROJECTED_TOOL_TEXT + 100)}))
+    assert args["_truncated"] is True
+    result = _bounded_tool_text("x" * (_MAX_PROJECTED_TOOL_TEXT + 100))
+    assert len(result) <= _MAX_PROJECTED_TOOL_TEXT
+    assert result.endswith("[truncated by Hermes display limit]")
+
 
 class TestHelpers:
     def test_deterministic_call_id_stable(self) -> None:
@@ -330,6 +650,10 @@ class TestRoleAlternationInvariant:
             {"type": "dynamicToolCall", "id": "d1", "tool": "x",
              "arguments": {}, "status": "completed",
              "contentItems": [], "success": True},
+            {"type": "collabAgentToolCall", "id": "ca1", "tool": "wait",
+             "prompt": None, "agentsStates": {}, "status": "completed"},
+            {"type": "subAgentActivity", "id": "activity-1", "kind": "started",
+             "agentThreadId": "019e1a94-352b-71e1-b214-e5c67c9ec190"},
             {"type": "webSearch", "id": "w1", "query": "x"},
         ],
     )

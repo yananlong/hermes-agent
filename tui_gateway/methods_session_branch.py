@@ -106,6 +106,11 @@ def _branch_live(rid, params: dict, session: dict, *, omit_messages: bool = Fals
         if db is None:
             return _db_unavailable_error(rid, code=5008)
         old_key = session["session_key"]
+        # A pointer row has no local transcript to copy: branching it would create the second
+        # Hermes-owned conversation the link exists to prevent (all three agents).
+        from hermes_cli.foreign_linked_store import linked_foreign_kind, linked_foreign_label
+        if kind := linked_foreign_kind(db, old_key):
+            return _err(rid, 4008, f"Branching a linked {linked_foreign_label(kind)} thread is not supported")
         history = _branch_source_history(db, session, old_key)
         if not history:
             return _err(rid, 4008, "nothing to branch — send a message first")

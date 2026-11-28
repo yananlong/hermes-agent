@@ -104,17 +104,24 @@ def _where_sql(clauses: list[str], lead: str = "") -> str:
     return f"{lead}WHERE {' AND '.join(clauses)}" if clauses else ""
 
 
+def _foreign_link():
+    from persistence.sqlite.conversation._store import foreign_link
+    return foreign_link
+
+
 def _session_filter_where(
     *, exclude_children: bool = False, source: str | None = None, sources: list[str] | None = None,
     session_key: str | None = None, exclude_sources: list[str] | None = None, cwd_prefix: str | None = None,
     min_message_count: int = 0, archived_only: bool = False, include_archived: bool = False,
     include_subagents: bool = False, local_created_sources: Sequence[str] | None = None,
-    workspace_key: str | None = None,
+    workspace_key: str | None = None, include_linked_pointers: bool = False,
 ) -> tuple[list[str], list[Any]]:
     """Shared ``sessions s`` WHERE builder so counts line up with listed rows. ``exclude_children``
     hides sub-agent runs and compression continuations but keeps branch/reset children
     (``_LISTABLE_CHILD_SQL``); ``include_subagents`` re-admits the sub-agent runs only
-    (``sessions.show_subagents``). Clause order is part of the SQL text contract."""
+    (``sessions.show_subagents``). ``include_linked_pointers`` admits foreign-transcript pointer
+    rows regardless of which surface created them (they carry no local transcript). Clause order is
+    part of the SQL text contract."""
     where: list[str] = []
     params: list[Any] = []
     if exclude_children and include_subagents:
@@ -131,13 +138,23 @@ def _session_filter_where(
     # created before the marker existed.
     include_sources = [source] if source else list(sources or [])
     source_clause, source_params = _source_match_clause(include_sources, local_created_sources)
+    if include_linked_pointers and source_clause:
+        # A linked pointer row's transcript lives in another tool; the surface that linked it
+        # stamped its own ``source``, so a list scoped to THIS surface would otherwise hide a
+        # session it can resume. Widened by the pointer markers only — never by another
+        # surface's ordinary rows.
+        from persistence.sqlite.conversation._store.foreign_link import linked_pointer_sql
+
+        source_clause = f"({source_clause} OR {linked_pointer_sql()})"
     for clause, values in (
         (source_clause, source_params),
         ("s.session_key = ?", [session_key] if session_key else []),
         (f"s.source NOT IN ({_session_ids_placeholders(exclude_sources or ())})", exclude_sources or []),
         (_cwd_prefix_clause(cwd_prefix) if cwd_prefix else ("", [])),
         (_workspace_key_clause(workspace_key) if workspace_key else ("", [])),
-        ("s.message_count >= ?", [min_message_count] if min_message_count > 0 else []),
+        # Include an empty pointer in the sidebar because the transcript is in the native
+        # tool (Codex/Claude/Mistral).
+        _foreign_link().linked_foreign_message_count_filter(min_message_count),
     ):
         if values:
             where.append(clause)
@@ -676,7 +693,9 @@ def update_session_model(
     model with the provider that serves it (#79536). ``base_url``/``api_mode`` are always
     replaced then (``None`` deletes): the previous provider's endpoint must not survive a switch,
     or resume sends the new provider's model to the old host. Callers without provider knowledge
-    leave the stored route untouched.
+    leave the stored route untouched — except on a linked foreign pointer row, whose top-level
+    ``api_mode`` is the binding naming which runtime owns the transcript: it is never overwritten
+    by a per-model switch route.
     """
     # Flush first: a still-queued pre-switch delta applied after this UPDATE would trip the
     # first_accounted_route overwrite and resurrect the old route.
@@ -684,6 +703,8 @@ def update_session_model(
     patch: dict[str, Any] = {"browser_model_lock": None}
     if model:
         patch["model"] = model
+    if provider and _row_is_linked_pointer(holder, session_id):
+        provider = None  # the binding route keeps the pointer's own api_mode/provider untouched
     if provider:
         route = {"provider": provider, "base_url": base_url or None, "api_mode": api_mode or None}
         # The nested route names its model: the first accounted call may later rewrite the model
@@ -693,6 +714,17 @@ def update_session_model(
         session_id, patch, "UPDATE sessions SET model = ?, model_config = ? WHERE id = ?",
         lambda merged: (model, merged, session_id),
     )
+
+
+def _row_is_linked_pointer(holder: StoreHolder, session_id: str) -> bool:
+    """Whether the row marks a linked foreign pointer (its top-level api_mode is a binding)."""
+    with holder._read_ctx() as conn:
+        row = conn.execute("SELECT model_config FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    if row is None:
+        return False
+    config = _parse_model_config(row[0])
+    return any(config.get(flag) is True for flag in (
+        "codex_linked_thread", "claude_linked_thread", "mistral_linked_thread"))
 
 
 def _write_model_config_patch(
@@ -1271,20 +1303,22 @@ def list_sessions_rich(
     id_query: str | None = None, search_query: str | None = None, compact_rows: bool = False,
     include_pinned: bool = False, session_key: str | None = None, include_hidden: bool = False,
     include_subagents: bool = False, local_created_sources: Sequence[str] | None = None,
-    workspace_key: str | None = None,
+    workspace_key: str | None = None, include_linked_pointers: bool = False,
 ) -> list[dict[str, Any]]:
     """List sessions with preview and ``last_active`` in one query. ``order_by_last_active`` sorts
     by the chain TIP via a recursive CTE (the only path honouring ``id_query`` / ``search_query``);
     ``include_pinned`` back-fills pins the page missed, still obeying the other
     filters except archived: a pin is an explicit keep, so a pinned row stamped
     archived must still return. ``local_created_sources`` restricts ``source='local'``
-    rows to those surfaces before LIMIT/OFFSET. ``workspace_key``: the ``hermes -c`` folder rule."""
+    rows to those surfaces before LIMIT/OFFSET. ``workspace_key``: the ``hermes -c`` folder rule.
+    ``include_linked_pointers`` admits foreign-transcript pointer rows whatever surface created them."""
     holder.flush_for_read()  # rows carry token/cost totals
     where_clauses, params = _session_filter_where(
         exclude_children=not include_children, source=source, sources=sources, session_key=session_key,
         exclude_sources=exclude_sources, cwd_prefix=cwd_prefix, min_message_count=min_message_count,
         archived_only=archived_only, include_archived=include_archived, include_subagents=include_subagents,
         local_created_sources=local_created_sources, workspace_key=workspace_key,
+        include_linked_pointers=include_linked_pointers,
     )
     # The archived-only view is the recovery surface for rows that dropped out of every
     # default list: a session that is archived AND hidden (Bot Mode marks its sessions
@@ -1509,17 +1543,22 @@ def delegate_descendant_ids(holder: StoreHolder, session_id: str) -> list[str]:
 def search_sessions(
     holder: StoreHolder, source: str | Sequence[str] | None = None, limit: int = 20, offset: int = 0,
     workspace_key: str | None = None, local_created_sources: Sequence[str] | None = None,
-    skip_launch_stubs: bool = False,
+    skip_launch_stubs: bool = False, include_linked_pointers: bool = False,
 ) -> list[dict[str, Any]]:
     """Sessions MRU-first with a computed ``last_active``; ``workspace_key`` scopes to one workspace
     so ``hermes -c``/``--resume`` picks its last session. ``source`` may be one label or several.
-    ``local_created_sources`` restricts ``source='local'`` rows before LIMIT/OFFSET, and
-    ``skip_launch_stubs`` drops empty launch stubs (launch_stub_filter_sql) before it too."""
+    ``local_created_sources`` restricts ``source='local'`` rows before LIMIT/OFFSET,
+    ``skip_launch_stubs`` drops empty launch stubs (launch_stub_filter_sql) before it too, and
+    ``include_linked_pointers`` admits foreign-transcript pointer rows whatever surface created them."""
     where_clauses = [launch_stub_filter_sql(holder)] if skip_launch_stubs else []
     params: list = []
     if source:
         sources = [source] if isinstance(source, str) else list(source)
         clause, bound = _source_match_clause(sources, local_created_sources)
+        if include_linked_pointers:
+            from persistence.sqlite.conversation._store.foreign_link import linked_pointer_sql
+
+            clause = f"({clause} OR {linked_pointer_sql()})"
         where_clauses.append(clause)
         params.extend(bound)
     if workspace_key:
@@ -1540,14 +1579,14 @@ def session_count(
     holder: StoreHolder, source: str | None = None, sources: list[str] | None = None, cwd_prefix: str | None = None,
     min_message_count: int = 0, include_archived: bool = False, archived_only: bool = False,
     exclude_children: bool = False, exclude_sources: list[str] | None = None, include_subagents: bool = False,
-    local_created_sources: Sequence[str] | None = None,
+    local_created_sources: Sequence[str] | None = None, include_linked_pointers: bool = False,
 ) -> int:
     """Count sessions with list_sessions_rich's filters so a paired "load more" total matches."""
     where_clauses, params = _session_filter_where(
         exclude_children=exclude_children, source=source, sources=sources,
         exclude_sources=exclude_sources, cwd_prefix=cwd_prefix, min_message_count=min_message_count,
         archived_only=archived_only, include_archived=include_archived, include_subagents=include_subagents,
-        local_created_sources=local_created_sources,
+        local_created_sources=local_created_sources, include_linked_pointers=include_linked_pointers,
     )
     if exclude_children:
         from persistence.sqlite.conversation._store.local import exclude_superseded_segments

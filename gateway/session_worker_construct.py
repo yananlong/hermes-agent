@@ -205,7 +205,16 @@ def worker_route(policy, construct):
 
     A primary AuthError walks the chain the agent will actually get: the owner's per-turn
     ``construct_v1`` chain (an ordinary session's refreshed profile fallbacks) when it was sent,
-    the frozen snapshot's otherwise (older owner)."""
+    the frozen snapshot's otherwise (older owner).
+
+    A linked Codex pointer instead gets its whole native route (provider, app-server api_mode, no
+    key or endpoint) plus its original ``cwd``: Codex authenticates the thread, and the policy's HTTP
+    route never runs it."""
+    from gateway.session_linked_codex import linked_codex_runtime, linked_session_cwd
+    if construct.get('session_db') is not None and construct.get('session_id'):
+        linked = linked_codex_runtime(construct['session_db'], construct['session_id'])
+        if linked is not None:
+            return {**linked, 'cwd': linked_session_cwd(construct['session_db'], construct['session_id'])}
     frozen, model = policy.effective()
     if 'fallback_model' in construct:
         frozen = {**frozen, 'fallback_providers': construct['fallback_model'] or [], 'fallback_model': None}

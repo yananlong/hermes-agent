@@ -6,7 +6,7 @@ branch/compress/model still require their own prepared runtime publication.
 """
 import asyncio
 import logging
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from functools import partial
 
 from gateway.session_messaging_picks import CHAT_PICKS, is_chat_pick
@@ -119,16 +119,52 @@ async def _owned_mutation(authority, actor, ref, params):
         _authorize_control(authority, actor, ref, params)
     owner = _owner_ref(authority, ref, params)
     live = authority.sessions.get(owner.session_id)
+    linked_compress = False
+    linked_workspace = False
+    if params.get('operation') in {'compress', 'workspace'}:
+        from gateway.session_linked_codex import linked_thread_id
+        linked = bool(linked_thread_id(authority_persistence(authority), owner.session_id))
+        linked_compress = linked and params.get('operation') == 'compress'
+        linked_workspace = linked and params.get('operation') == 'workspace'
+    if live is None and (linked_compress or linked_workspace):
+        # A stored Codex pointer may be controlled before its first turn. Existing local-policy
+        # sessions are restored here; an unopened legacy link remains cold and takes the
+        # dedicated row-only workspace path below.
+        _authorize_control(authority, actor, ref, params, owner)
+        live = authority.sessions.get(owner.session_id)
+    if live is None and linked_workspace:
+        # An exact retry is authorized by its receipt, so _authorize_control deliberately
+        # does not mount it. Restore the owner before publishing the replayed policy.
+        store = authority_persistence(authority)
+        if (store.bindings.binding_marks(owner.session_id).policy
+                and store.runtime.has_mutation_receipt(actor.subject, ref.session_id, params['request_id'])):
+            from gateway.session_local_recovery import restore_local_session
+            restore_local_session(authority, owner.session_id)
+            live = authority.sessions.get(owner.session_id)
     if live is None:
         return await _mutate_session(authority, actor, ref, params, owner=owner)
     # Prepared policy/route publication is inseparable from its durable commit
     # for admission and claim: neither may observe a half-published policy.
-    if params.get('operation') == 'compress':
+    if linked_workspace:
+        # Changing a native thread is an external write: no claim or mutation may race it.
+        async with live.claim_gate, live.mutation_lock:
+            result = await _mutate_session(authority, actor, ref, params,
+                                           commit_lock=nullcontext(), owner=owner)
+    elif params.get('operation') == 'compress':
         # The summarization (an LLM call) runs outside the session gate, so a submit or metadata
         # edit is not parked behind it; the commit is revision/generation-fenced against anything
         # that lands meanwhile. Claims wait on ``claim_gate``, so no turn runs under it.
-        async with live.claim_gate:
-            result = await _mutate_session(authority, actor, ref, params, commit_lock=live.mutation_lock, owner=owner)
+        if linked_compress:
+            # The native Codex compact is an external write. Serialize the entire operation against
+            # owner mutations and FIFO claims, so a revision/generation change cannot arrive after
+            # Codex has already compacted its authoritative history.
+            async with live.claim_gate, live.mutation_lock:
+                result = await _mutate_session(authority, actor, ref, params,
+                                               commit_lock=nullcontext(), owner=owner)
+        else:
+            async with live.claim_gate:
+                result = await _mutate_session(authority, actor, ref, params,
+                                               commit_lock=live.mutation_lock, owner=owner)
     else:
         async with live.mutation_lock:
             try:
@@ -163,6 +199,7 @@ async def _mutate_session(authority, actor, ref, params, *, commit_lock=None, ow
         imported_ids = _authorize_import(authority, actor, ref, params)
     else:
         cold_history = _authorize_control(authority, actor, ref, params, owner)
+        _guard_linked_mutation(authority, ref.session_id, operation)
     if operation == 'branch' and 'session:create' not in actor.capabilities:
         raise AuthorityRefusal('permission_denied')
     authority._require_admission_open()
@@ -179,8 +216,53 @@ async def _mutate_session(authority, actor, ref, params, *, commit_lock=None, ow
         writer = HistoryActor(actor.profile_id, actor.subject, login_label(actor.subject),
                               'session:create' in actor.capabilities)
         history = ImportControl(writer, imported_ids) if operation == 'import' else ClaimHistory(writer)
+    if operation == 'workspace' and live is None:
+        from gateway.session_linked_codex import linked_thread_id
+        store = authority_persistence(authority)
+        if linked_thread_id(store, ref.session_id) and not store.bindings.binding_marks(ref.session_id).policy:
+            if not cold_history and not store.runtime.has_mutation_receipt(actor.subject, ref.session_id,
+                                                                          params['request_id']):
+                raise AuthorityRefusal('runtime_coordination_required')
+            from gateway.session_mutation_cold_linked_workspace import commit_unopened_linked_workspace
+            from persistence.authority.runtime import ColdLinkedWorkspaceRequest
+            cold = ColdLinkedWorkspaceRequest(
+                principal_id=actor.subject, session_id=ref.session_id, request_id=params['request_id'],
+                cwd=params['payload']['cwd'], expected_revision=params['expected_revision'],
+                expected_generation=params.get('expected_generation'))
+            return await asyncio.to_thread(commit_unopened_linked_workspace, authority, cold, history)
+
     return await write_mutation(authority, ref, params, editor_servers, principal_id=actor.subject, history=history,
                                 commit_lock=commit_lock)
+
+
+def _guard_linked_mutation(authority, session_id, operation):
+    """Keep local session edits from forking or changing a native tool's thread state.
+
+    Covers ALL THREE linked agents through the shared foreign-flag helper, not just Codex: the row
+    is a pointer, so branching/rewinding/resetting it would write a second Hermes-owned transcript
+    beside the native one (a fork) and model/reasoning/editor-policy edits would claim settings the
+    native tool owns. ``workspace`` is the one exception, and only for Codex: its cwd is carried by
+    the native thread, which ``gateway/session_linked_codex.py`` can re-home in place. Claude Code
+    and Vibe keep their working directory in their own transcript/meta store, so a Hermes-side move
+    would only make the row lie about where the next turn runs.
+    """
+    restricted = {'branch', 'rewind', 'reset', 'model', 'reasoning',
+                  'editor_mcp', 'edit_policy'}
+    if operation not in restricted and operation != 'workspace':
+        return
+    from hermes_cli.foreign_linked_store import linked_foreign_kind, linked_foreign_label
+    kind = linked_foreign_kind(authority_persistence(authority), session_id)
+    if not kind:
+        return
+    label = linked_foreign_label(kind)
+    if operation == 'workspace':
+        if kind == 'codex':
+            return
+        raise AuthorityRefusal(
+            'unsupported_operation', field='workspace',
+            detail=f'this linked thread’s working directory belongs to {label}')
+    raise AuthorityRefusal('unsupported_operation', field='operation',
+                           detail=f'change this linked thread’s history or settings in {label}')
 
 
 def _runtime_owns_authority(authority) -> bool:
@@ -228,10 +310,15 @@ async def write_mutation(authority, ref, params, editor_servers, *, principal_id
                   expected_generation=params.get('expected_generation'),
                   command=parse_mutation(operation, params['payload']))
 
+    linked_workspace = False
+    if operation == 'workspace':
+        from gateway.session_linked_codex import linked_thread_id
+        linked_workspace = linked_thread_id(store, ref.session_id) is not None
+
     async def prepare_only():
         # Its own BEGIN IMMEDIATE, so off the loop like the commit below.
         snapshot = await asyncio.to_thread(store.runtime.prepare_mutation, authority.epoch, **fields,
-                                           live_guard=live_guard())
+                                           live_guard=live_guard(), require_idle_target=linked_workspace)
         if isinstance(snapshot, MutationOutcome):
             return snapshot.result  # an exact retry: its stored receipt
         return {'snapshot': {'receipt': snapshot.receipt, 'target': snapshot.target,
@@ -245,6 +332,23 @@ async def write_mutation(authority, ref, params, editor_servers, *, principal_id
     if operation in {*_POLICY, 'compress'}:
         prepared = await prepare_only()
         if 'snapshot' in prepared:
+            if operation == 'compress':
+                from gateway.session_linked_codex import linked_thread_id
+                if linked_thread_id(store, prepared['snapshot']['target']):
+                    from persistence.authority.runtime import mutation_receipt_key
+                    request_key, request_digest = mutation_receipt_key(
+                        principal_id, ref.session_id, params['request_id'], operation=operation,
+                        payload=params['payload'], expected_revision=params['expected_revision'],
+                        expected_generation=params.get('expected_generation'))
+                    prepared['_native_codex_compact_identity'] = {
+                        'request_key': request_key,
+                        'request_digest': request_digest,
+                        'request_session_id': ref.session_id,
+                        'principal_id': principal_id,
+                        'request_id': params['request_id'],
+                        'expected_revision': params['expected_revision'],
+                        'expected_generation': params.get('expected_generation'),
+                    }
             from gateway.session_mutation_model import prepare_model
             from gateway.session_mutation_compress import prepare_compress
             from gateway.session_mutation_policy import PREPARE
@@ -252,7 +356,8 @@ async def write_mutation(authority, ref, params, editor_servers, *, principal_id
             prepare = {'model': prepare_model, 'compress': prepare_compress, **PREPARE,
                        'editor_mcp': partial(prepare_editor_mcp, servers=editor_servers)}[operation]
             prepared = await prepare(authority, live, params['payload'], prepared)
-            if prepared.get('status') in {'preview', 'noop', 'confirmation_required'}:
+            if prepared.get('status') in {'preview', 'noop', 'confirmation_required', 'lock_skipped',
+                                          'nothing_to_do'}:
                 # ``--preview`` and a compress that removes nothing are read-only reports, and a
                 # guarded model target awaits the user's confirmation: no receipt, no publication,
                 # no eviction.
@@ -270,18 +375,22 @@ async def write_mutation(authority, ref, params, editor_servers, *, principal_id
             # state.db or a contended writer lock never stalls other clients (main 1769024ca3b).
             guard = live_guard()
 
-            def commit():
+            def commit(values=prepared):
                 from gateway.session_ingress_media import native_inputs_root
                 from session_retention import emit_session_deleted
                 outcome = store.runtime.mutate(
                     authority.epoch, **fields, live_guard=guard, history=history,
-                    prepared=None if prepared is None else PreparedMutation(
-                        LocalSnapshot(**prepared['snapshot']), {k: v for k, v in prepared.items() if k != 'snapshot'}),
+                    prepared=None if values is None else PreparedMutation(
+                        LocalSnapshot(**values['snapshot']), {k: v for k, v in values.items() if k != 'snapshot'}),
                     media_root=str(native_inputs_root()) if operation == 'delete' else None, owner=owner_rule())
                 if outcome.gone is not None:
                     emit_session_deleted(store.scope.profile_dir, outcome.gone.session_ids, reason=outcome.gone.reason,
                                          primary=ref.session_id)
                 return outcome
+            if linked_workspace:
+                from gateway.session_mutation_linked_workspace import commit_linked_workspace
+                commit = partial(commit_linked_workspace, store, ref.session_id, fields['request_id'],
+                                 principal_id, prepared, commit)
             if operation == 'delete':
                 from gateway.session_onboarding import ending_run_on_delete
                 commit = partial(ending_run_on_delete, store, ref.session_id, commit, persistence=store)
@@ -320,8 +429,19 @@ async def _project_result(authority, ref, live, params, result, editor_servers, 
         current.runtime_generation == result.get('execution_generation', params.get('expected_generation')))
     if operation == 'compress' and applied and owns_projection and live is not None:
         # Before the boundary evicts the agent whose compressor holds the running count.
-        from gateway.session_usage import note_compression
-        note_compression(authority, ref, live)
+        if result.get('native_codex_compact') is True:
+            from gateway.session_usage import carried_compression_count
+            agent = None
+            with suppress(AttributeError, KeyError):
+                agent = authority.agent(ref)
+            count = getattr(getattr(agent, 'context_compressor', None), 'compression_count', 0)
+            live.compression_count = max(
+                    (getattr(live, 'compression_count', 0)
+                     if isinstance(getattr(live, 'compression_count', 0), int) else 0) + 1,
+                carried_compression_count(live, agent), count if isinstance(count, int) else 0)
+        else:
+            from gateway.session_usage import note_compression
+            note_compression(authority, ref, live)
     elif operation == 'reset' and applied and live is not None:
         live.compression_count = 0  # a fresh conversation, as main's /new builds a fresh agent
     if editor_servers is not None and (operation == 'branch' or owns_projection):

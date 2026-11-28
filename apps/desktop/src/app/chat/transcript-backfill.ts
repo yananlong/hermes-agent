@@ -22,9 +22,12 @@ import {
 } from '@/app/chat/transcript-receipt-turns'
 import { transcriptRowIds } from '@/app/session/hooks/use-session-actions/pending-turn-identity'
 import { getOlderSessionMessages, getSessionMessages, type ProfileScope } from '@/hermes'
+import { readNativeTranscriptPage, type NativeHistoryOwner } from '@/api/native-session-history'
 import { type ChatMessage, chatMessageText, toChatMessages } from '@/lib/chat-messages'
 import {
   recordTranscriptBackfillPage,
+  resetNativeTranscriptTail,
+  setNativeHistoryError,
   tailStateFromPage,
   type TranscriptProfileScope,
   type TranscriptTailState,
@@ -81,7 +84,8 @@ export function transcriptBackfillAvailable(
   storedSessionId: null | string | undefined,
   profile?: TranscriptProfileScope
 ): boolean {
-  return Boolean(transcriptTailState(storedSessionId, profile)?.possiblyTruncated)
+  const tail = transcriptTailState(storedSessionId, profile)
+  return Boolean(tail?.possiblyTruncated || tail?.native?.error)
 }
 
 /**
@@ -429,6 +433,16 @@ export function graftRefreshedTailOntoBackfill(refreshedTail: ChatMessage[], pre
     return refreshedTail
   }
 
+  // Native ids are opaque and stable; unlike SQLite row ids they cannot be
+  // ordered numerically. A shared row identifies the chronological splice.
+  if (refreshedTail.some(message => message.id.startsWith('codex:'))) {
+    const freshIds = new Set(refreshedTail.map(message => message.id))
+    const anchor = previous.findIndex(message => freshIds.has(message.id))
+    return anchor < 0
+      ? refreshedTail
+      : [...previous.slice(0, anchor).filter(message => !freshIds.has(message.id)), ...refreshedTail]
+  }
+
   // The first rendered message can be a page-local tool fold whose id is not
   // durable. Anchor on the first shared persisted row anywhere in the page.
   const refreshedRowIds = durableRowIds(refreshedTail)
@@ -493,16 +507,25 @@ const REFRESH_OVERLAP_PAGE_LIMIT = 4
 export function olderPageReader(
   storedSessionId: string,
   scope: ProfileScope,
-  page: null | Pick<SessionMessagesResponse, 'messages' | 'pagination'> | undefined
+  page: null | Pick<SessionMessagesResponse, 'messages' | 'pagination' | 'native_history' | 'profile'> | undefined
 ): () => Promise<ChatMessage[]> {
   let state = page ? tailStateFromPage(page) : undefined
+  const nativeOwner: NativeHistoryOwner = {
+    connectionId: typeof scope === 'object' && scope ? scope.connectionId ?? null : null,
+    profile: (typeof scope === 'string' ? scope : scope?.profile) || page?.profile || 'default'
+  }
 
   return async () => {
     if (!state?.possiblyTruncated) {
       return []
     }
 
-    const older = await getOlderSessionMessages(storedSessionId, scope, state.nextOffset)
+    const older = state.native?.cursor
+      ? await readNativeTranscriptPage(storedSessionId, nativeOwner, state.native.cursor)
+      : await getOlderSessionMessages(storedSessionId, scope, state.nextOffset)
+    if (older.native_history && (older.native_history.reset || older.native_history.identity !== page?.native_history?.identity)) {
+      throw new Error('Native history changed')
+    }
     state = tailStateFromPage(older)
 
     return toChatMessages(older.messages)
@@ -586,6 +609,8 @@ export interface BackfillRequest {
    *  draft atom) and must merge via `mergeOlderTranscriptPage`. Return false
    *  when the page added nothing, so the backfill reads the next one. */
   applyOlderPage: (olderPage: ChatMessage[]) => boolean | void
+  /** Replace stale native history after the user chooses to reload it. */
+  applyResetPage?: (page: ChatMessage[]) => void
   /** The transcript the store holds now. Without it a click reads one page. */
   heldMessages?: () => ChatMessage[]
 }
@@ -600,6 +625,53 @@ const inflightByStoredSessionId = new Map<string, Promise<boolean>>()
 /** Test-only: drop in-flight guards between cases. */
 export function _resetTranscriptBackfillForTests(): void {
   inflightByStoredSessionId.clear()
+}
+
+/** Read one older page for the tail's mode: the native thread when bound, else the REST pager.
+ *
+ *  A native tail must carry its owner (connection + profile) to page at all — the gateway serves a
+ *  linked transcript per profile, so a tail without one is a bug, not a fallback to REST. */
+async function fetchOlderPage(storedSessionId: string, tail: TranscriptTailState) {
+  const owner = tail.profile
+  if (!tail.native) return getOlderSessionMessages(storedSessionId, tail.profile, tail.nextOffset)
+  if (!tail.native.cursor || !owner || typeof owner !== 'object' || !owner.profile) {
+    throw new Error('Missing native history owner or cursor')
+  }
+  return readNativeTranscriptPage(
+    storedSessionId,
+    { connectionId: owner.connectionId ?? null, profile: owner.profile },
+    tail.native.cursor
+  )
+}
+
+/**
+ * Whether a just-fetched page still belongs to the tail it was read against.
+ *
+ * A native page carries the identity of the snapshot it was cut from; a
+ * `reset` or a different identity means rewind/compaction replaced the
+ * transcript while this page was in flight, so grafting it would splice two
+ * snapshots.
+ */
+function pageLeftItsSnapshot(page: SessionMessagesResponse, tail: TranscriptTailState): boolean {
+  const native = page.native_history
+
+  return Boolean(native) && (Boolean(native?.reset) || native?.identity !== tail.native?.identity)
+}
+
+/**
+ * Whether the walk is done: it either added rows, has nothing to page against,
+ * read a page the backend repeated, reached the top, or spent its page budget.
+ */
+function walkSettled(
+  state: { added: boolean; held: number; repeated: boolean; tail: TranscriptTailState; heldPages: number }
+): boolean {
+  return (
+    state.added ||
+    !state.held ||
+    state.repeated ||
+    !state.tail.possiblyTruncated ||
+    state.heldPages >= MAX_HELD_PAGES
+  )
 }
 
 /**
@@ -625,9 +697,11 @@ async function walkToOlderRows(
     let page
 
     try {
-      page = await getOlderSessionMessages(storedSessionId, tail.profile, tail.nextOffset)
+      page = await fetchOlderPage(storedSessionId, tail)
     } catch {
-      // Non-fatal: the action stays available and the next click retries.
+      if (tail.native && request.isCurrent() && transcriptTailState(storedSessionId, profile) === tail) {
+        setNativeHistoryError(storedSessionId, profile, 'unavailable')
+      }
       return undefined
     }
 
@@ -653,6 +727,11 @@ async function walkToOlderRows(
       continue
     }
 
+    if (pageLeftItsSnapshot(page, tail)) {
+      setNativeHistoryError(storedSessionId, profile, 'changed')
+      return undefined
+    }
+
     const held = request.heldMessages?.() ?? []
 
     // A response without pagination metadata is a legacy backend that ignored
@@ -660,15 +739,16 @@ async function walkToOlderRows(
     // prepends whatever prefix the store is missing, and the recorded state
     // marks the session fully loaded so the REST action retires.
     recordTranscriptBackfillPage(storedSessionId, page, profile)
-    const olderRows = unhideOpeningUserRows(page.messages)
+    const olderRows = tail.native ? page.messages : unhideOpeningUserRows(page.messages)
     const added = request.applyOlderPage(toChatMessages(olderRows)) !== false
     // The same rows as the page before is a backend repeating itself.
-    const pageRows = page.messages.map(row => row.row_id ?? row.id).join(',')
+    const pageRows = page.messages.map(row => row.codex_native_row_id ?? row.row_id ?? row.id).join(',')
     const repeated = pageRows === previousPage
     previousPage = pageRows
     tail = transcriptTailState(storedSessionId, profile) ?? tail
+    heldPages += 1
 
-    if (added || !held.length || repeated || !tail.possiblyTruncated || (heldPages += 1) >= MAX_HELD_PAGES) {
+    if (walkSettled({ added, held: held.length, repeated, tail, heldPages })) {
       return { olderRows, tail }
     }
   }
@@ -692,6 +772,22 @@ export function backfillOlderTranscriptPage(request: BackfillRequest): Promise<b
   }
 
   const run = (async () => {
+    const existing = transcriptTailState(storedSessionId, profile)
+    if (existing?.native?.error === 'changed') {
+      const owner = existing.profile
+      if (!request.applyResetPage || !owner || typeof owner !== 'object' || !owner.profile) return false
+      try {
+        const page = await readNativeTranscriptPage(storedSessionId, {
+          connectionId: owner.connectionId ?? null, profile: owner.profile
+        })
+        if (!request.isCurrent() || transcriptTailState(storedSessionId, profile) !== existing) return false
+        request.applyResetPage(toChatMessages(page.messages))
+        resetNativeTranscriptTail(storedSessionId, page, profile)
+        return true
+      } catch {
+        return false
+      }
+    }
     const walked = await walkToOlderRows(request)
 
     if (!walked) {
@@ -709,7 +805,7 @@ export function backfillOlderTranscriptPage(request: BackfillRequest): Promise<b
     // page that already landed.
     const openingTurnLoaded = olderRows.some(message => message.role === 'user' && message.display_kind !== 'hidden')
 
-    if (!openingTurnLoaded && !transcriptTailState(storedSessionId, profile)?.possiblyTruncated) {
+    if (!tail.native && !openingTurnLoaded && !transcriptTailState(storedSessionId, profile)?.possiblyTruncated) {
       try {
         const origin = await getSessionMessages(storedSessionId, tail.profile, {
           includeCompacted: true,
