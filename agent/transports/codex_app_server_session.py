@@ -524,6 +524,18 @@ class CodexAppServerSession:
                     params["effort"] = reasoning_effort
                 if service_tier != self._service_tier_sent:
                     params["serviceTier"] = service_tier
+                # Always ask for a reasoning SUMMARY, the same way the Responses transport does
+                # (agent/transports/codex.py sends ``{"summary": "auto"}``). Without it the
+                # app-server records reasoning items whose ``summary``/``content`` are empty, so
+                # Hermes persists thinking with no text and a linked thread replays as if Codex
+                # never thought at all (#46527 is the same loss on the Responses path).
+                #
+                # Sent even when ``effort`` is None — the LINKED case. A linked thread must not
+                # override Codex's own model/effort (agent/codex_runtime.py passes
+                # reasoning_effort=None there), but `summary` asks Codex to RECORD reasoning text
+                # rather than to reason differently, so it does not change the turn's behaviour;
+                # it only stops the history from replaying as if no thinking happened.
+                params["summary"] = "auto"
                 ts = self._request_for(result, "turn/start", params, "turn/start")
                 if ts is not None:
                     self._service_tier_sent = service_tier
